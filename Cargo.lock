@@ -3,5 +3,5 @@
 version = 3
 
 [[package]]
-name = "rustgausslobatto"
+name = "gg-lobatto"
 version = "0.1.0"
