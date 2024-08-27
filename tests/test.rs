@@ -95,10 +95,10 @@ mod tests {
 
     #[bench]
     fn test_efficiency_hc_interpolation_simd(b: &mut test::Bencher) {
-        let in_simd = f64x2::from_array([1.0, 2.0]);
-        let out_simd = f64x2::from_array([0.0, 0.0]);
-        let v_in = vec![in_simd; 16];
-        let mut v_out = vec![out_simd; 16];
+        //let in_simd = f64x8::from_array([1.0, 2.0, 1.0, 2.0, 1.0, 2.0, 1.0, 2.0]);
+        //let out_simd = f64x8::from_array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+        let v_in = vec![1.0; 16 * 8];
+        let mut v_out = vec![0.0; 16 * 8];
 
         b.iter(|| {
             dx_q33_q33_simd(&v_in, &mut v_out);
@@ -146,6 +146,16 @@ mod tests {
 
         b.iter(|| {
             dx_q333_q333(&v_in, &mut v_out);
+        });
+    }
+
+    #[bench]
+    fn test_efficiency_hc_interpolation_3d_simd(b: &mut test::Bencher) {
+        let v_in = vec![1.0; 64 * 8];
+        let mut v_out = vec![0.0; 64 * 8];
+
+        b.iter(|| {
+            dx_q333_q333_simd(&v_in, &mut v_out);
         });
     }
 }
