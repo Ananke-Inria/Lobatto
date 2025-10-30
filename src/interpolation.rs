@@ -1,9 +1,8 @@
 use crate::quadrature::*;
 
-// 1D Interpolation at 'p' of the ith basis function. The lagrangian basis are built upon
-// the list of points given by 'pos'. The index i should be between 0 and n-1.
-// if two values are identical in the list of points the behavior is undertemined
-
+/// 1D Interpolation at 'p' of the ith basis function. The lagrangian basis are built upon
+/// the list of points given by 'pos'. The index i should be between 0 and n-1.
+/// if two values are identical in the list of points the behavior is undetermined
 pub fn lagrangian_interpolation(pos: &Vec<f64>, p: f64, i: usize) -> f64 {
     let mut s = 1.0;
 
@@ -44,8 +43,11 @@ pub fn lagrangian_derivative_interpolation(pos: &Vec<f64>, p: f64, i: usize) -> 
     s / d
 }
 
+// Operator that can interpolate a function or its derivative represented on a Lagrangian basis on Gauss or Gauss-Lobatto points
+// on another Lagrangian basis on Gauss or Gauss-Lobatto points
+// Note: at the moment only functions represented on the same set of points are implemented
 #[derive(Debug)]
-pub struct GaussLobattoElement {
+pub struct Interpolator {
     pub dim: Vec<usize>,
     pub weights: Vec<Vec<f64>>,
     pub points: Vec<Vec<f64>>,
@@ -57,7 +59,7 @@ pub struct GaussLobattoElement {
     pub iterator_dim_init: Vec<Vec<usize>>,
 }
 
-impl GaussLobattoElement {
+impl Interpolator {
     fn get_multi_index(n_points_acc: &Vec<usize>, mut i: usize) -> Vec<usize> {
         let n = n_points_acc.len();
 
