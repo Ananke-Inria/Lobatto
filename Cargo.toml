@@ -3,10 +3,16 @@ name = "gg-lobatto"
 version = "1.0.0"
 edition = "2021"
 
+[[bench]]
+name = "interpolation_bench"
+harness = false
+
 [dependencies]
 rustfft = "6.3.0"
- 
+nalgebra = "0.34.1"
+
+[dev-dependencies]
+criterion = "0.3"
 
 [build]
-rustflags = ["-C opt-level=3", "target-cpu=native"]
- 
+rustflags = ["-C opt-level=3", "-C", "target-cpu=native"]

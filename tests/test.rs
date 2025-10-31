@@ -1,83 +1,82 @@
-#![feature(test)]
+use gg_lobatto::hc_interpolation::*;
+use gg_lobatto::hofft::*;
+use gg_lobatto::interpolation::*;
+use gg_lobatto::quadrature::*;
 
-#[cfg(test)]
-mod tests {
-    extern crate test;
+#[test]
+fn it_works() {
+    let (points, weights) = gauss(4);
 
-    use gg_lobatto::hc_interpolation::*;
-    use gg_lobatto::interpolation::*;
-    use gg_lobatto::quadrature::*;
+    println!("Points: {:?}", points);
+    println!("Weights: {:?}", weights);
 
-    #[test]
-    fn it_works() {
-        let (points, weights) = gauss(4);
+    let sum: f64 = weights.iter().sum();
 
-        println!("Points: {:?}", points);
-        println!("Weights: {:?}", weights);
+    println!("The sum is {:?}", sum);
 
-        let sum: f64 = weights.iter().sum();
+    let (points, weights) = gauss_lobatto(5);
 
-        println!("The sum is {:?}", sum);
+    println!("Points: {:?}", points);
+    println!("Weights: {:?}", weights);
 
-        let (points, weights) = gauss_lobatto(5);
+    let sum: f64 = weights.iter().sum();
 
-        println!("Points: {:?}", points);
-        println!("Weights: {:?}", weights);
+    println!("The sum is {:?}", sum);
 
-        let sum: f64 = weights.iter().sum();
+    let (points, weights) = gauss_lobatto(6);
 
-        println!("The sum is {:?}", sum);
+    println!("Points: {:?}", points);
+    println!("Weights: {:?}", weights);
 
-        let (points, weights) = gauss_lobatto(6);
+    let sum: f64 = weights.iter().sum();
 
-        println!("Points: {:?}", points);
-        println!("Weights: {:?}", weights);
+    println!("The sum is {:?}", sum);
 
-        let sum: f64 = weights.iter().sum();
+    let (points, weights) = gauss_lobatto(10);
 
-        println!("The sum is {:?}", sum);
+    println!("Points: {:?}", points);
+    println!("Weights: {:?}", weights);
 
-        let (points, weights) = gauss_lobatto(10);
+    let sum: f64 = weights.iter().sum();
 
-        println!("Points: {:?}", points);
-        println!("Weights: {:?}", weights);
+    println!("The sum is {:?}", sum);
+}
 
-        let sum: f64 = weights.iter().sum();
+#[test]
+fn test_gle() {
+    let gle = Interpolator::new(vec![4, 4]);
 
-        println!("The sum is {:?}", sum);
-    }
+    println!("gle: {:?}", gle);
 
-    #[test]
-    fn test_gle() {
-        let gle = Interpolator::new(vec![4, 4]);
+    let v_in: Vec<f64> = vec![
+        1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 3.3, 2.5, 7.8, 9.5, 1.2, 3.5, 4.6, 4.9, 12.0, 15.0,
+    ];
 
-        println!("gle: {:?}", gle);
+    let mut v_out: Vec<f64> = vec![
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    ];
 
-        let v_in: Vec<f64> = vec![
-            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 3.3, 2.5, 7.8, 9.5, 1.2, 3.5, 4.6, 4.9, 12.0, 15.0,
-        ];
+    gle.derivative_interpolation(0, &v_in, &mut v_out);
 
-        let mut v_out: Vec<f64> = vec![
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        ];
+    println!("{:?}", v_out);
+}
 
-        gle.derivative_interpolation(0, &v_in, &mut v_out);
+#[test]
+fn test_hc_interpolation() {
+    let v_in: Vec<f64> = vec![
+        1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 3.3, 2.5, 7.8, 9.5, 1.2, 3.5, 4.6, 4.9, 12.0, 15.0,
+    ];
 
-        println!("{:?}", v_out);
-    }
+    let mut v_out: Vec<f64> = vec![
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    ];
 
-    #[test]
-    fn test_hc_interpolation() {
-        let v_in: Vec<f64> = vec![
-            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 3.3, 2.5, 7.8, 9.5, 1.2, 3.5, 4.6, 4.9, 12.0, 15.0,
-        ];
+    dx_q33_q33(&v_in, &mut v_out);
 
-        let mut v_out: Vec<f64> = vec![
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        ];
+    println!("{:?}", v_out);
+}
 
-        dx_q33_q33(&v_in, &mut v_out);
-
-        println!("{:?}", v_out);
-    }
+#[test]
+fn symbols() {
+    let symbol = symbol_1d_lo(1.0, 0.1, 1.0, 0);
 }
