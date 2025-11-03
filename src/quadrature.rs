@@ -48,7 +48,7 @@ pub fn gauss_lobatto(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     // Exact expressions for order 1, 2, 3
     match n_quad_points {
         2 => {
-            return (vec![0.0, 1.0], vec![0.5, 0.5]);
+            return (vec![-1.0, 1.0], vec![1.0, 1.0]);
         }
         3 => {
             return (vec![-1.0, 0.0, 1.0], vec![1.0 / 3.0, 4.0 / 3.0, 1.0 / 3.0]);
