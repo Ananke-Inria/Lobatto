@@ -1,51 +1,43 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 
 use gg_lobatto::hc_interpolation::*;
 use gg_lobatto::interpolation::*;
-use gg_lobatto::quadrature::*;
 
-fn bench_gauss_lobatto(c: &mut Criterion) {
-    c.bench_function("gauss_lobatto", |b| b.iter(|| gauss_lobatto(5)));
+fn bench_hc_interpolation(c: &mut Criterion) {
+    let v_in = vec![1.0; 16];
+    let mut v_out = vec![0.0; 16];
+
+    c.bench_function("hc_interpolation", |b| {
+        b.iter(|| {
+            dx_q33_q33(&v_in, &mut v_out);
+        })
+    });
 }
 
-// fn test_efficiency_hc_interpolation(b: &mut test::Bencher) {
-//     let v_in = vec![1.0; 16];
-//     let mut v_out = vec![0.0; 16];
+fn bench_gle_interpolation(c: &mut Criterion) {
+    let v_in: Vec<f64> = vec![1.0; 16];
+    let mut v_out: Vec<f64> = vec![0.0; 16];
 
-//     b.iter(|| {
-//         dx_q33_q33(&v_in, &mut v_out);
-//     });
-// }
+    let gle = Interpolator::new(vec![4, 4]);
 
-// fn test_efficiency_gle(b: &mut test::Bencher) {
-//     let v_in: Vec<f64> = vec![1.0; 16];
-//     let mut v_out: Vec<f64> = vec![0.0; 16];
-
-//     let gle = Interpolator::new(vec![4, 4]);
-
-//     b.iter(|| {
-//         gle.derivative_interpolation(0, &v_in, &mut v_out);
-//     });
-// }
-
-// fn test_efficiency_gle_3d(b: &mut test::Bencher) {
-//     let v_in: Vec<f64> = vec![1.0; 64];
-//     let mut v_out: Vec<f64> = vec![0.0; 64];
-
-//     let gle = Interpolator::new(vec![4, 4, 4]);
-
-//     b.iter(|| {
-//         gle.derivative_interpolation(0, &v_in, &mut v_out);
-//     });
-// }
+    c.bench_function("gle_interpolation", |b| {
+        b.iter(|| {
+            gle.derivative_interpolation(0, &v_in, &mut v_out);
+        })
+    });
+}
 
 fn bench_hc_interpolation_3d(c: &mut Criterion) {
-    let v_in: Vec<f64> = vec![1.0; 64];
-    let mut v_out: Vec<f64> = vec![0.0; 64];
+    let v_in = vec![1.0; 64 * 8];
+    let mut v_out = vec![0.0; 64 * 8];
 
     c.bench_function("hc_interpolation_3d", |b| {
         b.iter(|| {
-            dx_q333_q333(&v_in, &mut v_out);
+            for i in 0..8 {
+                let start = 64 * i;
+                let end = start + 64;
+                dx_q333_q333(&v_in[start..end], &mut v_out[start..end]);
+            }
         })
     });
 }
@@ -97,7 +89,8 @@ fn bench_hc_interpolation_1d_vec(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_gauss_lobatto,
+    bench_hc_interpolation,
+    bench_gle_interpolation,
     bench_hc_interpolation_1d,
     bench_hc_interpolation_1d_vec,
     bench_hc_interpolation_3d,

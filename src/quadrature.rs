@@ -1,4 +1,4 @@
-// Algorithm based on the article
+// Algorithms based on the article
 //
 // [1]  ON COMPUTING THE POINTS AND WEIGHTS FOR GAUSS–LEGENDRE QUADRATURE
 //                              PAUL N. SWARZTRAUBER
