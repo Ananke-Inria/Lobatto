@@ -7,11 +7,10 @@ use gg_lobatto::quadrature::*;
 fn it_works() {
     let (points, weights) = gauss(4);
 
-    println!("Points: {:?}", points);
-    println!("Weights: {:?}", weights);
-
     let sum: f64 = weights.iter().sum();
 
+    println!("Points: {:?}", points);
+    println!("Weights: {:?}", weights);
     println!("The sum is {:?}", sum);
 
     let (points, weights) = gauss_lobatto(5);
