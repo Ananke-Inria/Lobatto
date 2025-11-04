@@ -73,7 +73,7 @@ pub fn d_q3_q3_vec<const N: usize, const M: usize>(in_q3: &[f64], out_q3: &mut [
         *a_out = DX3[2] * (*b) - DX3[3] * (*c) + (*d) - 6.0 * (*a);
     }
 
-    for ((((b_out, a), b), c), d) in b_out.iter_mut().zip(a).zip(b).zip(c).zip(d) {
+    for (((b_out, a), c), d) in b_out.iter_mut().zip(a).zip(c).zip(d) {
         *b_out = DX3[4] * (*c) - DX3[0] * (*a) - DX3[1] * (*d);
     }
 

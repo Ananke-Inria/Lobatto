@@ -74,18 +74,18 @@ impl Interpolator {
         multi_index
     }
 
-    fn get_index(n_points_acc: &Vec<usize>, mult_i: Vec<usize>) -> usize {
-        let n = n_points_acc.len();
-        let mut i = 0;
+    // fn get_index(n_points_acc: &Vec<usize>, mult_i: Vec<usize>) -> usize {
+    //     let n = n_points_acc.len();
+    //     let mut i = 0;
 
-        for k in 1..n {
-            i += mult_i[k] * n_points_acc[k - 1];
-        }
+    //     for k in 1..n {
+    //         i += mult_i[k] * n_points_acc[k - 1];
+    //     }
 
-        i += mult_i[0];
+    //     i += mult_i[0];
 
-        i
-    }
+    //     i
+    // }
 
     pub fn new(dim: Vec<usize>) -> Self {
         let n = dim.len();
