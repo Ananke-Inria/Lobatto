@@ -2,6 +2,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 
 use gg_lobatto::hc_interpolation::*;
 use gg_lobatto::interpolation::*;
+use nalgebra::DVector;
 
 fn bench_hc_interpolation(c: &mut Criterion) {
     let v_in = vec![1.0; 16];
@@ -15,14 +16,14 @@ fn bench_hc_interpolation(c: &mut Criterion) {
 }
 
 fn bench_gle_interpolation(c: &mut Criterion) {
-    let v_in: Vec<f64> = vec![1.0; 16];
-    let mut v_out: Vec<f64> = vec![0.0; 16];
+    let v_in: DVector<f64> = DVector::from_vec(vec![1.0; 16]);
+    let mut v_out: DVector<f64> = DVector::from_vec(vec![0.0; 16]);
 
-    let gle = Interpolator::new(vec![4, 4]);
+    let gle = Calculator::new(vec![(4, true), (4, true)]);
 
     c.bench_function("gle_interpolation", |b| {
         b.iter(|| {
-            gle.derivative_interpolation(0, &v_in, &mut v_out);
+            gle.diff(0, &v_in, &mut v_out);
         })
     });
 }
