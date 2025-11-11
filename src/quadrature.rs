@@ -70,7 +70,7 @@ pub fn gauss_lobatto(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     }
 }
 
-pub fn normalized_gauss_lobatto(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
+pub fn gauss_lobatto_on_unit_interval(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     let mut points: Vec<f64>;
     let mut weights: Vec<f64>;
 
@@ -82,7 +82,7 @@ pub fn normalized_gauss_lobatto(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     return (points, weights);
 }
 
-pub fn normalized_gauss(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
+pub fn gauss_on_unit_interval(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     let mut points: Vec<f64>;
     let mut weights: Vec<f64>;
 

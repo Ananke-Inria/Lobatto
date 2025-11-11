@@ -1,23 +1,31 @@
 use crate::quadrature::*;
+use nalgebra::*;
 
 /// 1D Interpolation at 'p' of the ith basis function. The lagrangian basis are built upon
 /// the list of points given by 'pos'. The index i should be between 0 and n-1.
-/// if two values are identical in the list of points the behavior is undetermined
 pub fn lagrangian_interpolation(pos: &Vec<f64>, p: f64, i: usize) -> f64 {
     let mut s = 1.0;
+    let mut d = 1.0;
 
     for r in 0..pos.len() {
         if r != i {
-            s *= (p - pos[r]) / (pos[i] - pos[r]);
+            d *= pos[i] - pos[r];
         }
     }
 
-    s
+    for r in 0..pos.len() {
+        if r != i {
+            s *= p - pos[r];
+        }
+    }
+
+    debug_assert!(d != 0.0);
+
+    s / d
 }
 
 // 1D Interpolation at 'p' of the derivative of the ith basis function. The lagrangian basis are built upon
 // the list of points given by 'pos'. The index i should be between 0 and n-1.
-// if two values are identical in the list of points the behavior is undertemined
 pub fn lagrangian_derivative_interpolation(pos: &Vec<f64>, p: f64, i: usize) -> f64 {
     let mut s = 0.0;
     let mut d = 1.0;
@@ -40,6 +48,8 @@ pub fn lagrangian_derivative_interpolation(pos: &Vec<f64>, p: f64, i: usize) -> 
         }
     }
 
+    debug_assert!(d != 0.0);
+
     s / d
 }
 
@@ -47,19 +57,22 @@ pub fn lagrangian_derivative_interpolation(pos: &Vec<f64>, p: f64, i: usize) -> 
 // on another Lagrangian basis on Gauss or Gauss-Lobatto points
 // Note: at the moment only functions represented on the same set of points are implemented
 #[derive(Debug)]
-pub struct Interpolator {
-    pub dim: Vec<usize>,
+pub struct Calculator {
+    pub basis: Vec<(usize, bool)>,
+
     pub weights: Vec<Vec<f64>>,
     pub points: Vec<Vec<f64>>,
-    pub derivative_interpolation: Vec<Vec<Vec<f64>>>,
+
+    pub diff_matrices: Vec<DMatrix<f64>>,
 
     pub n_points: usize,
     pub n_points_acc: Vec<usize>,
-    pub iterator_dim_dec: Vec<usize>,
-    pub iterator_dim_init: Vec<Vec<usize>>,
+
+    pub step: Vec<usize>,
+    pub start: Vec<Vec<usize>>,
 }
 
-impl Interpolator {
+impl Calculator {
     fn get_multi_index(n_points_acc: &Vec<usize>, mut i: usize) -> Vec<usize> {
         let n = n_points_acc.len();
 
@@ -87,48 +100,56 @@ impl Interpolator {
     //     i
     // }
 
-    pub fn new(dim: Vec<usize>) -> Self {
-        let n = dim.len();
+    pub fn new(basis: Vec<(usize, bool)>) -> Self {
+        let n = basis.len();
 
         let mut weights = vec![vec![1.0]; n];
         let mut points = vec![vec![0.5]; n];
-        let mut derivative_interpolation = vec![vec![vec![0.0]]; n];
+
+        let mut diff_matrices = vec![nalgebra::DMatrix::<f64>::zeros(1, 1); n];
 
         for k in 0..n {
             assert!(
-                dim[k] != 0,
-                "There should be at elast one point in all dimension"
+                (basis[k].0 > 1 && basis[k].1 == true) || (basis[k].0 > 0 && basis[k].1 == false),
+                "not enough points to define the quadrature rule"
             );
 
-            if dim[k] > 1 {
-                (points[k], weights[k]) = normalized_gauss_lobatto(dim[k]);
+            if basis[k].1 == true {
+                (points[k], weights[k]) = gauss_lobatto_on_unit_interval(basis[k].0);
+            } else {
+                (points[k], weights[k]) = gauss_on_unit_interval(basis[k].0);
+            }
 
-                derivative_interpolation[k] = vec![vec![0.0; dim[k]]; dim[k]];
+            diff_matrices[k].resize_mut(basis[k].0, basis[k].0, 0.0);
 
-                for i in 0..dim[k] {
-                    for j in 0..dim[k] {
-                        derivative_interpolation[k][i][j] =
-                            lagrangian_derivative_interpolation(&points[k], points[k][j], i);
-                    }
+            for i in 0..basis[k].0 {
+                for j in 0..basis[k].0 {
+                    diff_matrices[k][(j, i)] =
+                        lagrangian_derivative_interpolation(&points[k], points[k][j], i);
                 }
             }
         }
 
-        let mut iterator_dim_dec = vec![1; n];
-        let mut iterator_dim_init = vec![Vec::<usize>::new(); n];
+        let mut step = vec![1; n];
+        let mut start = vec![Vec::<usize>::new(); n];
+
         let mut n_points = 1;
-        let mut n_points_acc = vec![dim[0]; n];
+        let mut n_points_acc = vec![basis[0].0; n];
 
         for k in 0..n {
-            n_points *= dim[k];
+            n_points *= basis[k].0;
         }
 
         for k in 1..n {
-            n_points_acc[k] = dim[k] * n_points_acc[k - 1];
+            n_points_acc[k] = basis[k].0 * n_points_acc[k - 1];
         }
 
         for k in 1..n {
-            iterator_dim_dec[k] = iterator_dim_dec[k - 1] * dim[k];
+            step[k] = step[k - 1] * basis[k].0;
+        }
+
+        for k in 0..n {
+            step[k] -= 1;
         }
 
         for k in 0..n {
@@ -136,37 +157,57 @@ impl Interpolator {
                 let multi_index = Self::get_multi_index(&n_points_acc, l);
 
                 if multi_index[k] == 0 {
-                    iterator_dim_init[k].push(l);
+                    start[k].push(l);
                 }
             }
         }
 
         Self {
-            dim,
+            basis,
             weights,
             points,
-            derivative_interpolation,
+            diff_matrices,
             n_points,
             n_points_acc,
-            iterator_dim_dec,
-            iterator_dim_init,
+            step,
+            start,
         }
     }
 
-    pub fn derivative_interpolation(&self, dim: usize, sol: &Vec<f64>, sol_der: &mut Vec<f64>) {
-        assert!(dim < self.dim.len(), "Derivative is not defined");
+    pub fn diff(&self, dim: usize, sol: &DVector<f64>, sol_diff: &mut DVector<f64>) {
+        assert!(
+            dim < self.basis.len(),
+            "Differentiation is not defined in this direction"
+        );
 
-        let dec = self.iterator_dim_dec[dim];
-        let init_indices = &self.iterator_dim_init[dim];
-        let der_interpol = &self.derivative_interpolation[dim];
-        let n = self.dim[dim];
+        assert!(
+            self.n_points == sol.len(),
+            "The input vector does not have the adequate size"
+        );
 
-        for k in init_indices {
-            for j in 0..n {
-                for i in 0..n {
-                    sol_der[k + dec * j] += sol[k + dec * i] * der_interpol[i][j];
-                }
-            }
+        assert!(
+            self.n_points == sol_diff.len(),
+            "The ouput vector does not have the adequate size"
+        );
+
+        let step = self.step[dim];
+        let start = &self.start[dim];
+
+        let diff_matrix = &self.diff_matrices[dim];
+        let n = self.basis[dim].0;
+
+        for k in start {
+            let sol_view = sol.rows_with_step(*k, n, step);
+
+            let mut sol_diff_view = sol_diff.rows_with_step_mut(*k, n, step);
+
+            diff_matrix.mul_to(&sol_view, &mut sol_diff_view);
+
+            // for j in 0..n {
+            //     for i in 0..n {
+            //         sol_diff[k + (step + 1) * j] += sol[k + (step + 1) * i] * diff_matrix[(j, i)];
+            //     }
+            // }
         }
     }
 }

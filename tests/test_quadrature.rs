@@ -43,6 +43,18 @@ fn test_gauss_quadrature() {
             );
         }
 
+        //Test if the quadrature points are in increasing order
+        for i in 1..points.len() {
+            assert!(
+                points[i] > points[i - 1],
+                "Points not in increasing order for n={}, index={}: {} > {}",
+                n,
+                i,
+                points[i - 1],
+                points[i]
+            );
+        }
+
         //Test if the quadrature points are symmetric
         let m = points.len();
         for i in 0..(m / 2) {
@@ -123,6 +135,18 @@ fn test_gauss_lobatto_quadrature() {
                 n,
                 i,
                 w
+            );
+        }
+
+        //Test if the quadrature points are in increasing order
+        for i in 1..points.len() {
+            assert!(
+                points[i] > points[i - 1],
+                "Points not in increasing order for n={}, index={}: {} > {}",
+                n,
+                i,
+                points[i - 1],
+                points[i]
             );
         }
 
