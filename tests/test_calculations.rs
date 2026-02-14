@@ -1,5 +1,5 @@
-use gg_lobatto::hc_interpolation::*;
-use gg_lobatto::interpolation::*;
+use gg_lobatto::calculator::*;
+use gg_lobatto::hc_calculations::*;
 use nalgebra::DVector;
 
 #[test]
