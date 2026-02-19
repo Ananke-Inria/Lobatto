@@ -1,8 +1,31 @@
-//const SQRT_TWENTY_ONE: f64 = 4.582575694955840;
+// ============================================================================
+// Hardcoded (HC) differentiation operators for Qr Gauss-Lobatto elements
+//
+// These functions implement the action of the 1D spectral differentiation
+// matrix D on a vector of nodal values, exploiting the structure of the
+// Gauss-Lobatto nodes to reduce flop count compared to a general matrix–vector
+// product.  Multi-dimensional operators (Qr×Qr, Qr×Qr×Qr) are built by
+// applying the 1D kernel direction by direction (sum-factorisation).
+//
+// Two families are provided:
+//   - Scalar  : operate on a single element at a time (AoS layout).
+//   - Vectorized : operate on a batch of N elements simultaneously,
+//     using an SoA layout that exposes SIMD parallelism to the compiler.
+//
+// Data layouts
+// ────────────
+// Scalar/AoS  – flat array indexed as node (i, j, k)  →  i + (r+1)*j + (r+1)²*k
+//           (x fastest, z slowest), where r+1 is the number of nodes per
+//           direction (r+1=4 for Q3, r+1=5 for Q4).
+//
+// Vectorized/SoA  – for a batch of N elements the position of element e
+//           at node (i, j, k) is  N*(i + (r+1)*j + (r+1)²*k) + e.
+//           Equivalently, the batch is stored as (r+1)³ contiguous blocks of N
+//           values, one block per node index.
+// ============================================================================
 
-// constexpr Real a = (7.0-sqrt_twentyone)/14.0;
-// constexpr Real w[3] ={1 - 3*a + 2*a*a, 4*a - 4*a*a, 2*a*a - a};
-// constexpr Real z[2] = {1-a, a};
+// ----------------------------------------------------------------------------
+// Differentiation coefficients for Q3 (4-node Gauss-Lobatto, degree 3)
 
 const DX3: [f64; 5] = [
     1.6180339887498944584,
@@ -12,92 +35,460 @@ const DX3: [f64; 5] = [
     2.2360679774997902491,
 ];
 
-// const DX4: [f64; 7] = [
-//     2.4819805060619613002,
-//     0.51801949393803370381,
-//     13.513004977448479949,
-//     2.673169155390906937,
-//     1.5275252316519465356,
-//     2.8203283558848517565,
-//     3.4914862437758804603 / (16.0 / 3.0),
-// ];
+// ============================================================================
+// Kernel primitives
+// ============================================================================
 
-pub fn d_q3_q3<const M: usize>(in_q3: &[f64], out_q3: &mut [f64]) {
-    assert!(in_q3.len() > 3 * M);
-    assert!(out_q3.len() > 3 * M);
+/// Apply the 1D Q3 differentiation operator to 4 nodes at stride `M`.
+///
+/// Reads nodes `a = in[0]`, `b = in[M]`, `c = in[2M]`, `d = in[3M]` and
+/// writes the derivative values back to the same positions in `out`.
+/// The stride `M` controls which direction is differentiated:
+///   - `M = 1`  → x-direction (consecutive nodes)
+///   - `M = 4`  → y-direction (stride 4 in a 4×4 face)
+///   - `M = 16` → z-direction (stride 16 in a 4×4×4 cube)
+#[inline(always)]
+pub fn _d_q3_q3<const M: usize>(in_q3: &[f64], out_q3: &mut [f64]) {
+    assert!(in_q3.len() >= 3 * M + 1);
+    assert!(out_q3.len() >= 3 * M + 1);
 
-    let a = &in_q3[0];
-    let b = &in_q3[M];
-    let c = &in_q3[2 * M];
-    let d = &in_q3[3 * M];
+    let a = in_q3[0];
+    let b = in_q3[M];
+    let c = in_q3[2 * M];
+    let d = in_q3[3 * M];
 
-    out_q3[0] = DX3[2] * (*b) - DX3[3] * (*c) + (*d) - 6.0 * (*a);
-    out_q3[M] = DX3[4] * (*c) - DX3[0] * (*a) - DX3[1] * (*d);
-    out_q3[2 * M] = DX3[1] * (*a) - DX3[4] * (*b) + DX3[0] * (*d);
-    out_q3[3 * M] = DX3[3] * (*b) - DX3[2] * (*c) - (*a) + 6.0 * (*d);
+    out_q3[0] = DX3[2] * b - DX3[3] * c + d - 6.0 * a;
+    out_q3[M] = DX3[4] * c - DX3[0] * a - DX3[1] * d;
+    out_q3[2 * M] = DX3[1] * a - DX3[4] * b + DX3[0] * d;
+    out_q3[3 * M] = DX3[3] * b - DX3[2] * c - a + 6.0 * d;
 }
 
-pub fn dx_q33_q33(input: &[f64], output: &mut [f64]) {
-    assert!(input.len() >= 16 && output.len() >= 16);
+/// Vectorized 1D Q3 differentiation kernel for a batch of `N` elements.
+///
+/// Input and output use the SoA layout: node group `g` occupies the slice
+/// `[g*M*N .. g*M*N + N]` (four groups: g = 0, 1, 2, 3).  The stride `M`
+/// selects the differentiation direction, exactly as in `_d_q3_q3`.
+///
+/// The four output loops are kept separate so the compiler can auto-vectorize
+/// each one independently (SIMD over the N-element batch dimension).
+pub fn _d_q3_q3_vec<const N: usize, const M: usize>(in_q3: &[f64], out_q3: &mut [f64]) {
+    assert!(in_q3.len() >= N * (3 * M + 1));
+    assert!(out_q3.len() >= N * (3 * M + 1));
 
-    d_q3_q3::<1>(&input[0..4], &mut output[0..4]);
-    d_q3_q3::<1>(&input[4..8], &mut output[4..8]);
-    d_q3_q3::<1>(&input[8..12], &mut output[8..12]);
-    d_q3_q3::<1>(&input[12..16], &mut output[12..16]);
-}
-
-pub fn dx_q333_q333(input: &[f64], output: &mut [f64]) {
-    assert!(input.len() >= 64 && output.len() >= 64);
-    for i in 0..16 {
-        let start = 4 * i;
-        let end = start + 4;
-        d_q3_q3::<1>(&input[start..end], &mut output[start..end]);
-    }
-}
-
-#[inline(never)]
-pub fn d_q3_q3_vec<const N: usize, const M: usize>(in_q3: &[f64], out_q3: &mut [f64]) {
-    assert!(M == 1);
-    assert!(in_q3.len() == N * 4);
-    assert!(out_q3.len() == N * 4);
     let a = &in_q3[0..N];
     let b = &in_q3[M * N..M * N + N];
     let c = &in_q3[2 * M * N..2 * M * N + N];
     let d = &in_q3[3 * M * N..3 * M * N + N];
 
-    let (a_out, rest) = out_q3.split_at_mut(N);
-    let (b_out, rest) = rest.split_at_mut(N);
-    let (c_out, d_out) = rest.split_at_mut(N);
-
-    for ((((a_out, a), b), c), d) in a_out.iter_mut().zip(a).zip(b).zip(c).zip(d) {
-        *a_out = DX3[2] * (*b) - DX3[3] * (*c) + (*d) - 6.0 * (*a);
+    for i in 0..N {
+        out_q3[i] = DX3[2] * b[i] - DX3[3] * c[i] + d[i] - 6.0 * a[i];
     }
-
-    for (((b_out, a), c), d) in b_out.iter_mut().zip(a).zip(c).zip(d) {
-        *b_out = DX3[4] * (*c) - DX3[0] * (*a) - DX3[1] * (*d);
+    for i in 0..N {
+        out_q3[M * N + i] = DX3[4] * c[i] - DX3[0] * a[i] - DX3[1] * d[i];
     }
-
-    for (((c_out, a), b), d) in c_out.iter_mut().zip(a).zip(b).zip(d) {
-        *c_out = DX3[1] * (*a) - DX3[4] * (*b) + DX3[0] * (*d);
+    for i in 0..N {
+        out_q3[2 * M * N + i] = DX3[1] * a[i] - DX3[4] * b[i] + DX3[0] * d[i];
     }
-
-    for ((((d_out, a), b), c), d) in d_out.iter_mut().zip(a).zip(b).zip(c).zip(d) {
-        *d_out = DX3[3] * (*b) - DX3[2] * (*c) - (*a) + 6.0 * (*d);
+    for i in 0..N {
+        out_q3[3 * M * N + i] = DX3[3] * b[i] - DX3[2] * c[i] - a[i] + 6.0 * d[i];
     }
 }
 
+// ============================================================================
+// Scalar differentiation operators  (single element, AoS layout)
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// 1D  —  Q3  (4 dofs)
+// ----------------------------------------------------------------------------
+
+/// x-derivative on a single Q3 element (4 dofs, flat layout).
+pub fn dx_q3_q3(input: &[f64], output: &mut [f64]) {
+    assert!(input.len() >= 4 && output.len() >= 4);
+    _d_q3_q3::<1>(&input[0..4], &mut output[0..4]);
+}
+
+// ----------------------------------------------------------------------------
+// 2D  —  Q3×Q3  (16 dofs, layout: i + 4*j,  x fastest)
+// ----------------------------------------------------------------------------
+
+/// x-derivative on a single Q3×Q3 element (16 dofs).
+/// Applies the 1D kernel to each of the 4 x-lines independently.
+pub fn dx_q33_q33(input: &[f64], output: &mut [f64]) {
+    assert!(input.len() >= 16 && output.len() >= 16);
+    _d_q3_q3::<1>(&input[0..4], &mut output[0..4]);
+    _d_q3_q3::<1>(&input[4..8], &mut output[4..8]);
+    _d_q3_q3::<1>(&input[8..12], &mut output[8..12]);
+    _d_q3_q3::<1>(&input[12..16], &mut output[12..16]);
+}
+
+/// y-derivative on a single Q3×Q3 element (16 dofs).
+/// Applies the 1D kernel to each of the 4 y-columns (stride M=4).
+pub fn dy_q33_q33(input: &[f64], output: &mut [f64]) {
+    assert!(input.len() >= 16 && output.len() >= 16);
+    _d_q3_q3::<4>(&input[0..13], &mut output[0..13]);
+    _d_q3_q3::<4>(&input[1..14], &mut output[1..14]);
+    _d_q3_q3::<4>(&input[2..15], &mut output[2..15]);
+    _d_q3_q3::<4>(&input[3..16], &mut output[3..16]);
+}
+
+// ----------------------------------------------------------------------------
+// 3D  —  Q3×Q3×Q3  (64 dofs, layout: i + 4*j + 16*k,  x fastest)
+// ----------------------------------------------------------------------------
+
+/// x-derivative on a single Q3×Q3×Q3 element (64 dofs).
+/// Applies the 1D kernel to each of the 16 x-lines (stride M=1).
+pub fn dx_q333_q333(input: &[f64], output: &mut [f64]) {
+    assert!(input.len() >= 64 && output.len() >= 64);
+    for i in 0..16 {
+        let start = 4 * i;
+        _d_q3_q3::<1>(&input[start..start + 4], &mut output[start..start + 4]);
+    }
+}
+
+/// y-derivative on a single Q3×Q3×Q3 element (64 dofs).
+/// Applies the 1D kernel to each of the 16 y-columns (stride M=4).
+/// A y-column at position (i, k) starts at index `i + 16*k`.
+pub fn dy_q333_q333(input: &[f64], output: &mut [f64]) {
+    assert!(input.len() >= 64 && output.len() >= 64);
+    for k in 0..4 {
+        for i in 0..4 {
+            let start = i + 16 * k;
+            _d_q3_q3::<4>(&input[start..start + 13], &mut output[start..start + 13]);
+        }
+    }
+}
+
+/// z-derivative on a single Q3×Q3×Q3 element (64 dofs).
+/// Applies the 1D kernel to each of the 16 z-columns (stride M=16).
+/// A z-column at position (i, j) starts at index `i + 4*j`.
+pub fn dz_q333_q333(input: &[f64], output: &mut [f64]) {
+    assert!(input.len() >= 64 && output.len() >= 64);
+    for j in 0..4 {
+        for i in 0..4 {
+            let start = i + 4 * j;
+            _d_q3_q3::<16>(&input[start..start + 49], &mut output[start..start + 49]);
+        }
+    }
+}
+
+// ============================================================================
+// Vectorized differentiation operators  (batch of N elements, dx-SoA layout)
+//
+// dx-SoA layout for a batch of N Q3×Q3×Q3 elements:
+//   position of element e at node (i, j, k)  =  N*(i + 4*j + 16*k) + e
+//
+// The same layout is used for all three directions; only the stride M passed
+// to `_d_q3_q3_vec` changes (M=1 for x, M=4 for y, M=16 for z).
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// 1D  —  Q3  (4*N dofs)
+// ----------------------------------------------------------------------------
+
+/// x-derivative on a batch of N Q3 elements (dx-SoA layout, 4*N dofs).
+pub fn dx_q3_q3_vec<const N: usize>(input: &[f64], output: &mut [f64]) {
+    _d_q3_q3_vec::<N, 1>(&input[0..N * 4], &mut output[0..N * 4]);
+}
+
+// ----------------------------------------------------------------------------
+// 2D  —  Q3×Q3  (16*N dofs)
+// ----------------------------------------------------------------------------
+
+/// x-derivative on a batch of N Q3×Q3 elements (dx-SoA layout, 16*N dofs).
+/// Processes 4 independent x-line groups of N×4 values.
 pub fn dx_q33_q33_vec<const N: usize>(input: &[f64], output: &mut [f64]) {
     for i in 0..4 {
         let start = N * 4 * i;
         let end = start + N * 4;
-        d_q3_q3_vec::<N, 1>(&input[start..end], &mut output[start..end]);
+        _d_q3_q3_vec::<N, 1>(&input[start..end], &mut output[start..end]);
     }
 }
 
+// ----------------------------------------------------------------------------
+// 3D  —  Q3×Q3×Q3  (64*N dofs)
+// ----------------------------------------------------------------------------
+
+/// x-derivative on a batch of N Q3×Q3×Q3 elements (dx-SoA layout, 64*N dofs).
+/// Processes 16 independent x-line groups of N×4 values (stride M=1).
 pub fn dx_q333_q333_vec<const N: usize>(input: &[f64], output: &mut [f64]) {
     for i in 0..16 {
         let start = N * 4 * i;
         let end = start + N * 4;
-        d_q3_q3_vec::<N, 1>(&input[start..end], &mut output[start..end]);
+        _d_q3_q3_vec::<N, 1>(&input[start..end], &mut output[start..end]);
+    }
+}
+
+/// y-derivative on a batch of N Q3×Q3×Q3 elements (dx-SoA layout, 64*N dofs).
+/// Processes 16 y-columns; column (i, k) starts at `N*(i + 16*k)`,
+/// slice length `13*N` (stride M=4 → 3*4+1 = 13 nodes).
+pub fn dy_q333_q333_vec<const N: usize>(input: &[f64], output: &mut [f64]) {
+    assert!(input.len() >= 64 * N && output.len() >= 64 * N);
+    for k in 0..4 {
+        for i in 0..4 {
+            let start = N * (i + 16 * k);
+            _d_q3_q3_vec::<N, 4>(
+                &input[start..start + 13 * N],
+                &mut output[start..start + 13 * N],
+            );
+        }
+    }
+}
+
+/// z-derivative on a batch of N Q3×Q3×Q3 elements (dx-SoA layout, 64*N dofs).
+/// Processes 16 z-columns; column (i, j) starts at `N*(i + 4*j)`,
+/// slice length `49*N` (stride M=16 → 3*16+1 = 49 nodes).
+pub fn dz_q333_q333_vec<const N: usize>(input: &[f64], output: &mut [f64]) {
+    assert!(input.len() >= 64 * N && output.len() >= 64 * N);
+    for j in 0..4 {
+        for i in 0..4 {
+            let start = N * (i + 4 * j);
+            _d_q3_q3_vec::<N, 16>(
+                &input[start..start + 49 * N],
+                &mut output[start..start + 49 * N],
+            );
+        }
+    }
+}
+
+// ============================================================================
+// Q4 operators  (5-node Gauss-Lobatto, degree 4)
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// Differentiation coefficients for Q4 (5-node Gauss-Lobatto, degree 4)
+// ----------------------------------------------------------------------------
+const DX4: [f64; 7] = [
+    2.4819805060619613002,
+    0.51801949393803370381,
+    13.513004977448479949,
+    2.673169155390906937,
+    1.5275252316519465356,
+    2.8203283558848517565,
+    3.4914862437758804603 / (16.0 / 3.0), // ≈ 0.6547
+];
+
+// ============================================================================
+// Kernel primitives
+// ============================================================================
+
+/// Apply the 1D Q4 differentiation operator to 5 nodes at stride `M`.
+///
+/// Reads nodes `a..e` at positions `0, M, 2M, 3M, 4M` and writes the
+/// derivative values back to the same positions in `out`.
+/// The middle node is internally scaled by `16/3` before use.
+/// The stride `M` controls which direction is differentiated:
+///   - `M = 1`  → x-direction
+///   - `M = 5`  → y-direction (stride 5 in a 5×5 face)
+///   - `M = 25` → z-direction (stride 25 in a 5×5×5 cube)
+#[inline(always)]
+pub fn _d_q4_q4<const M: usize>(in_q4: &[f64], out_q4: &mut [f64]) {
+    assert!(in_q4.len() >= 4 * M + 1);
+    assert!(out_q4.len() >= 4 * M + 1);
+
+    let a = in_q4[0];
+    let b = in_q4[M];
+    let c = (16.0 / 3.0) * in_q4[2 * M]; // premultiplied middle node
+    let d = in_q4[3 * M];
+    let e = in_q4[4 * M];
+
+    out_q4[0] = DX4[2] * b - 10.0 * a - c + DX4[5] * d - e;
+    out_q4[M] = DX4[1] * e - DX4[0] * a + DX4[6] * c - DX4[4] * d;
+    out_q4[2 * M] = 0.75 * (a - e) + DX4[3] * (d - b);
+    out_q4[3 * M] = DX4[4] * b - DX4[1] * a - DX4[6] * c + DX4[0] * e;
+    out_q4[4 * M] = a - DX4[5] * b + c - DX4[2] * d + 10.0 * e;
+}
+
+/// Vectorized 1D Q4 differentiation kernel for a batch of `N` elements.
+///
+/// Input and output use the SoA layout: node group `g` occupies the slice
+/// `[g*M*N .. g*M*N + N]` (five groups: g = 0..4).  The stride `M` selects
+/// the differentiation direction, exactly as in `_d_q4_q4`.
+///
+/// Loops are kept separate for independent SIMD vectorization.
+pub fn _d_q4_q4_vec<const N: usize, const M: usize>(in_q4: &[f64], out_q4: &mut [f64]) {
+    assert!(in_q4.len() >= N * (4 * M + 1));
+    assert!(out_q4.len() >= N * (4 * M + 1));
+
+    let a = &in_q4[0..N];
+    let b = &in_q4[M * N..M * N + N];
+    let c = &in_q4[2 * M * N..2 * M * N + N];
+    let d = &in_q4[3 * M * N..3 * M * N + N];
+    let e = &in_q4[4 * M * N..4 * M * N + N];
+
+    for i in 0..N {
+        out_q4[i] = DX4[2] * b[i] - 10.0 * a[i] - (16.0 / 3.0) * c[i] + DX4[5] * d[i] - e[i];
+    }
+    for i in 0..N {
+        out_q4[M * N + i] =
+            DX4[1] * e[i] - DX4[0] * a[i] + (16.0 / 3.0) * DX4[6] * c[i] - DX4[4] * d[i];
+    }
+    for i in 0..N {
+        out_q4[2 * M * N + i] = 0.75 * (a[i] - e[i]) + DX4[3] * (d[i] - b[i]);
+    }
+    for i in 0..N {
+        out_q4[3 * M * N + i] =
+            DX4[4] * b[i] - DX4[1] * a[i] - (16.0 / 3.0) * DX4[6] * c[i] + DX4[0] * e[i];
+    }
+    for i in 0..N {
+        out_q4[4 * M * N + i] =
+            a[i] - DX4[5] * b[i] + (16.0 / 3.0) * c[i] - DX4[2] * d[i] + 10.0 * e[i];
+    }
+}
+
+// ============================================================================
+// Scalar differentiation operators  (single element, AoS layout)
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// 1D  —  Q4  (5 dofs)
+// ----------------------------------------------------------------------------
+
+/// x-derivative on a single Q4 element (5 dofs, flat layout).
+pub fn dx_q4_q4(input: &[f64], output: &mut [f64]) {
+    assert!(input.len() >= 5 && output.len() >= 5);
+    _d_q4_q4::<1>(&input[0..5], &mut output[0..5]);
+}
+
+// ----------------------------------------------------------------------------
+// 2D  —  Q4×Q4  (25 dofs, layout: i + 5*j,  x fastest)
+// ----------------------------------------------------------------------------
+
+/// x-derivative on a single Q4×Q4 element (25 dofs).
+/// Applies the 1D kernel to each of the 5 x-lines (stride M=1).
+pub fn dx_q44_q44(input: &[f64], output: &mut [f64]) {
+    assert!(input.len() >= 25 && output.len() >= 25);
+    for i in 0..5 {
+        let start = 5 * i;
+        _d_q4_q4::<1>(&input[start..start + 5], &mut output[start..start + 5]);
+    }
+}
+
+/// y-derivative on a single Q4×Q4 element (25 dofs).
+/// Applies the 1D kernel to each of the 5 y-columns (stride M=5).
+/// Column i spans indices i, i+5, i+10, i+15, i+20  →  slice [i..i+21].
+pub fn dy_q44_q44(input: &[f64], output: &mut [f64]) {
+    assert!(input.len() >= 25 && output.len() >= 25);
+    for i in 0..5 {
+        _d_q4_q4::<5>(&input[i..i + 21], &mut output[i..i + 21]);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// 3D  —  Q4×Q4×Q4  (125 dofs, layout: i + 5*j + 25*k,  x fastest)
+// ----------------------------------------------------------------------------
+
+/// x-derivative on a single Q4×Q4×Q4 element (125 dofs).
+/// Applies the 1D kernel to each of the 25 x-lines (stride M=1).
+pub fn dx_q444_q444(input: &[f64], output: &mut [f64]) {
+    assert!(input.len() >= 125 && output.len() >= 125);
+    for i in 0..25 {
+        let start = 5 * i;
+        _d_q4_q4::<1>(&input[start..start + 5], &mut output[start..start + 5]);
+    }
+}
+
+/// y-derivative on a single Q4×Q4×Q4 element (125 dofs).
+/// Applies the 1D kernel to each of the 25 y-columns (stride M=5).
+/// A y-column at position (i, k) starts at index `i + 25*k`.
+pub fn dy_q444_q444(input: &[f64], output: &mut [f64]) {
+    assert!(input.len() >= 125 && output.len() >= 125);
+    for k in 0..5 {
+        for i in 0..5 {
+            let start = i + 25 * k;
+            _d_q4_q4::<5>(&input[start..start + 21], &mut output[start..start + 21]);
+        }
+    }
+}
+
+/// z-derivative on a single Q4×Q4×Q4 element (125 dofs).
+/// Applies the 1D kernel to each of the 25 z-columns (stride M=25).
+/// A z-column at position (i, j) starts at index `i + 5*j`.
+pub fn dz_q444_q444(input: &[f64], output: &mut [f64]) {
+    assert!(input.len() >= 125 && output.len() >= 125);
+    for j in 0..5 {
+        for i in 0..5 {
+            let start = i + 5 * j;
+            _d_q4_q4::<25>(&input[start..start + 101], &mut output[start..start + 101]);
+        }
+    }
+}
+
+// ============================================================================
+// Vectorized differentiation operators  (batch of N elements, SoA layout)
+//
+// SoA layout for a batch of N Q4×Q4×Q4 elements:
+//   position of element e at node (i, j, k)  =  N*(i + 5*j + 25*k) + e
+//
+// The same layout is used for all three directions; only the stride M passed
+// to `_d_q4_q4_vec` changes (M=1 for x, M=5 for y, M=25 for z).
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// 1D  —  Q4  (5*N dofs)
+// ----------------------------------------------------------------------------
+
+/// x-derivative on a batch of N Q4 elements (SoA layout, 5*N dofs).
+pub fn dx_q4_q4_vec<const N: usize>(input: &[f64], output: &mut [f64]) {
+    _d_q4_q4_vec::<N, 1>(&input[0..N * 5], &mut output[0..N * 5]);
+}
+
+// ----------------------------------------------------------------------------
+// 2D  —  Q4×Q4  (25*N dofs)
+// ----------------------------------------------------------------------------
+
+/// x-derivative on a batch of N Q4×Q4 elements (SoA layout, 25*N dofs).
+/// Processes 5 independent x-line groups of N×5 values.
+pub fn dx_q44_q44_vec<const N: usize>(input: &[f64], output: &mut [f64]) {
+    for i in 0..5 {
+        let start = N * 5 * i;
+        let end = start + N * 5;
+        _d_q4_q4_vec::<N, 1>(&input[start..end], &mut output[start..end]);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// 3D  —  Q4×Q4×Q4  (125*N dofs)
+// ----------------------------------------------------------------------------
+
+/// x-derivative on a batch of N Q4×Q4×Q4 elements (SoA layout, 125*N dofs).
+/// Processes 25 independent x-line groups of N×5 values (stride M=1).
+pub fn dx_q444_q444_vec<const N: usize>(input: &[f64], output: &mut [f64]) {
+    for i in 0..25 {
+        let start = N * 5 * i;
+        let end = start + N * 5;
+        _d_q4_q4_vec::<N, 1>(&input[start..end], &mut output[start..end]);
+    }
+}
+
+/// y-derivative on a batch of N Q4×Q4×Q4 elements (SoA layout, 125*N dofs).
+/// Processes 25 y-columns; column (i, k) starts at `N*(i + 25*k)`,
+/// slice length `21*N` (stride M=5 → 4*5+1 = 21 nodes).
+pub fn dy_q444_q444_vec<const N: usize>(input: &[f64], output: &mut [f64]) {
+    assert!(input.len() >= 125 * N && output.len() >= 125 * N);
+    for k in 0..5 {
+        for i in 0..5 {
+            let start = N * (i + 25 * k);
+            _d_q4_q4_vec::<N, 5>(
+                &input[start..start + 21 * N],
+                &mut output[start..start + 21 * N],
+            );
+        }
+    }
+}
+
+/// z-derivative on a batch of N Q4×Q4×Q4 elements (SoA layout, 125*N dofs).
+/// Processes 25 z-columns; column (i, j) starts at `N*(i + 5*j)`,
+/// slice length `101*N` (stride M=25 → 4*25+1 = 101 nodes).
+pub fn dz_q444_q444_vec<const N: usize>(input: &[f64], output: &mut [f64]) {
+    assert!(input.len() >= 125 * N && output.len() >= 125 * N);
+    for j in 0..5 {
+        for i in 0..5 {
+            let start = N * (i + 5 * j);
+            _d_q4_q4_vec::<N, 25>(
+                &input[start..start + 101 * N],
+                &mut output[start..start + 101 * N],
+            );
+        }
     }
 }
