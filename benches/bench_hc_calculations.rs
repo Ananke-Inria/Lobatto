@@ -269,6 +269,7 @@ fn bench_dx_q4_scaling(c: &mut Criterion) {
     bench_n!(4);
     bench_n!(8);
     bench_n!(16);
+    bench_n!(32);
 
     group.finish();
 }
@@ -373,6 +374,45 @@ fn bench_dx_q444_batch(c: &mut Criterion) {
     group.finish();
 }
 
+// Sweep batch size N = 2, 4, 8, 16, 32 to find where vectorization of dx_q44 becomes beneficial.
+fn bench_dx_q44_scaling(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dx_q44_batch_scaling");
+
+    macro_rules! bench_n {
+        ($n:literal) => {{
+            group.throughput(Throughput::Elements($n * 25));
+
+            let v_in_s = seeded_vec(25 * $n);
+            let mut v_out_s = vec![0.0_f64; 25 * $n];
+            group.bench_function(BenchmarkId::new("scalar", $n), |b| {
+                b.iter(|| {
+                    for i in 0..$n {
+                        let start = 25 * i;
+                        dx_q44_q44(
+                            black_box(&v_in_s[start..start + 25]),
+                            &mut v_out_s[start..start + 25],
+                        );
+                    }
+                })
+            });
+
+            let v_in_v = aos_to_soa(&v_in_s, $n, 5, 5);
+            let mut v_out_v = vec![0.0_f64; 25 * $n];
+            group.bench_function(BenchmarkId::new("vec", $n), |b| {
+                b.iter(|| dx_q44_q44_vec::<$n>(black_box(&v_in_v), &mut v_out_v))
+            });
+        }};
+    }
+
+    bench_n!(2);
+    bench_n!(4);
+    bench_n!(8);
+    bench_n!(16);
+    bench_n!(32);
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_dx_q33,
@@ -387,5 +427,6 @@ criterion_group!(
     bench_dx_q44_batch,
     bench_dx_q444_batch,
     bench_dx_q4_scaling,
+    bench_dx_q44_scaling,
 );
 criterion_main!(benches);

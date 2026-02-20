@@ -123,13 +123,11 @@ pub fn dx_q33_q33(input: &[f64], output: &mut [f64]) {
 }
 
 /// y-derivative on a single Q3×Q3 element (16 dofs).
-/// Applies the 1D kernel to each of the 4 y-columns (stride M=4).
+/// The AoS layout (x-fastest) groups all y-node values for each x-position into
+/// consecutive 4-element blocks, matching exactly the SoA layout for `_d_q3_q3_vec::<4, 1>`.
 pub fn dy_q33_q33(input: &[f64], output: &mut [f64]) {
     assert!(input.len() >= 16 && output.len() >= 16);
-    _d_q3_q3::<4>(&input[0..13], &mut output[0..13]);
-    _d_q3_q3::<4>(&input[1..14], &mut output[1..14]);
-    _d_q3_q3::<4>(&input[2..15], &mut output[2..15]);
-    _d_q3_q3::<4>(&input[3..16], &mut output[3..16]);
+    _d_q3_q3_vec::<4, 1>(input, output);
 }
 
 // ----------------------------------------------------------------------------
@@ -160,16 +158,11 @@ pub fn dy_q333_q333(input: &[f64], output: &mut [f64]) {
 }
 
 /// z-derivative on a single Q3×Q3×Q3 element (64 dofs).
-/// Applies the 1D kernel to each of the 16 z-columns (stride M=16).
-/// A z-column at position (i, j) starts at index `i + 4*j`.
+/// The AoS layout (z-slowest) stores all 16 (x, y) values for each z-level g in
+/// a contiguous block at offset 16*g — exactly the SoA layout for `_d_q3_q3_vec::<16, 1>`.
 pub fn dz_q333_q333(input: &[f64], output: &mut [f64]) {
     assert!(input.len() >= 64 && output.len() >= 64);
-    for j in 0..4 {
-        for i in 0..4 {
-            let start = i + 4 * j;
-            _d_q3_q3::<16>(&input[start..start + 49], &mut output[start..start + 49]);
-        }
-    }
+    _d_q3_q3_vec::<16, 1>(input, output);
 }
 
 // ============================================================================
@@ -365,20 +358,20 @@ pub fn dx_q44_q44(input: &[f64], output: &mut [f64]) {
 }
 
 /// y-derivative on a single Q4×Q4 element (25 dofs).
-/// Applies the 1D kernel to each of the 5 y-columns (stride M=5).
-/// Column i spans indices i, i+5, i+10, i+15, i+20  →  slice [i..i+21].
+/// The AoS layout (x-fastest) already stores all y-node values for a given
+/// x-position in consecutive blocks of 5, which matches exactly the SoA
+/// layout expected by `_d_q4_q4_vec_bis::<5, 1>`.  We exploit this to
+/// process all 5 x-columns simultaneously with SIMD.
 pub fn dy_q44_q44(input: &[f64], output: &mut [f64]) {
     assert!(input.len() >= 25 && output.len() >= 25);
-    for i in 0..5 {
-        _d_q4_q4::<5>(&input[i..i + 21], &mut output[i..i + 21]);
-    }
+    _d_q4_q4_vec::<5, 1>(input, output);
 }
 
 // ----------------------------------------------------------------------------
 // 3D  —  Q4×Q4×Q4  (125 dofs, layout: i + 5*j + 25*k,  x fastest)
 // ----------------------------------------------------------------------------
 
-/// x-derivative on a single Q4×Q4×Q4 element (125 dofs).
+/// x-derivative on a single Q4×Q4×Q4 element (125 dofs) — original scalar implementation.
 /// Applies the 1D kernel to each of the 25 x-lines (stride M=1).
 pub fn dx_q444_q444(input: &[f64], output: &mut [f64]) {
     assert!(input.len() >= 125 && output.len() >= 125);
@@ -388,9 +381,8 @@ pub fn dx_q444_q444(input: &[f64], output: &mut [f64]) {
     }
 }
 
-/// y-derivative on a single Q4×Q4×Q4 element (125 dofs).
+/// y-derivative on a single Q4×Q4×Q4 element (125 dofs) — original scalar implementation.
 /// Applies the 1D kernel to each of the 25 y-columns (stride M=5).
-/// A y-column at position (i, k) starts at index `i + 25*k`.
 pub fn dy_q444_q444(input: &[f64], output: &mut [f64]) {
     assert!(input.len() >= 125 && output.len() >= 125);
     for k in 0..5 {
@@ -402,16 +394,12 @@ pub fn dy_q444_q444(input: &[f64], output: &mut [f64]) {
 }
 
 /// z-derivative on a single Q4×Q4×Q4 element (125 dofs).
-/// Applies the 1D kernel to each of the 25 z-columns (stride M=25).
-/// A z-column at position (i, j) starts at index `i + 5*j`.
+/// The AoS layout (z-slowest) stores all 25 (x, y) values for each z-level g in
+/// a contiguous block at offset 25*g — this is exactly the SoA layout expected by
+/// `_d_q4_q4_vec::<25, 1>`.  No gather/scatter needed, same principle as `dy_q44_q44`.
 pub fn dz_q444_q444(input: &[f64], output: &mut [f64]) {
     assert!(input.len() >= 125 && output.len() >= 125);
-    for j in 0..5 {
-        for i in 0..5 {
-            let start = i + 5 * j;
-            _d_q4_q4::<25>(&input[start..start + 101], &mut output[start..start + 101]);
-        }
-    }
+    _d_q4_q4_vec::<25, 1>(input, output);
 }
 
 // ============================================================================
