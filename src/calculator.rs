@@ -1,3 +1,5 @@
+use std::vec;
+
 use crate::quadrature::*;
 use nalgebra::*;
 
@@ -73,10 +75,11 @@ pub struct Calculator {
 }
 
 impl Calculator {
-    fn get_multi_index(n_points_acc: &Vec<usize>, mut i: usize) -> Vec<usize> {
+    fn _get_multi_index(n_points_acc: &Vec<usize>, index: usize) -> Vec<usize> {
         let n = n_points_acc.len();
 
         let mut multi_index = vec![0; n];
+        let mut i = index;
 
         for k in (1..n).rev() {
             multi_index[k] = i / n_points_acc[k - 1];
@@ -87,18 +90,22 @@ impl Calculator {
         multi_index
     }
 
-    // fn get_index(n_points_acc: &Vec<usize>, mult_i: Vec<usize>) -> usize {
-    //     let n = n_points_acc.len();
-    //     let mut i = 0;
+    pub fn get_multi_index(&self, index: usize) -> Vec<usize> {
+        Self::_get_multi_index(&self.n_points_acc, index)
+    }
 
-    //     for k in 1..n {
-    //         i += mult_i[k] * n_points_acc[k - 1];
-    //     }
+    pub fn get_index(&self, multi_index: &Vec<usize>) -> usize {
+        let n = self.n_points_acc.len();
+        let mut i = 0;
 
-    //     i += mult_i[0];
+        for k in 1..n {
+            i += multi_index[k] * self.n_points_acc[k - 1];
+        }
 
-    //     i
-    // }
+        i += multi_index[0];
+
+        i
+    }
 
     pub fn new(basis: Vec<(usize, bool)>) -> Self {
         let n = basis.len();
@@ -106,7 +113,7 @@ impl Calculator {
         let mut weights = vec![vec![1.0]; n];
         let mut points = vec![vec![0.5]; n];
 
-        let mut diff_matrices = vec![nalgebra::DMatrix::<f64>::zeros(1, 1); n];
+        let mut diff_matrices = vec![DMatrix::<f64>::zeros(1, 1); n];
 
         for k in 0..n {
             assert!(
@@ -122,6 +129,7 @@ impl Calculator {
 
             diff_matrices[k].resize_mut(basis[k].0, basis[k].0, 0.0);
 
+            // D_{ji} = (phi_i)'(xi_j)
             for i in 0..basis[k].0 {
                 for j in 0..basis[k].0 {
                     diff_matrices[k][(j, i)] =
@@ -154,7 +162,7 @@ impl Calculator {
 
         for k in 0..n {
             for l in 0..n_points {
-                let multi_index = Self::get_multi_index(&n_points_acc, l);
+                let multi_index = Self::_get_multi_index(&n_points_acc, l);
 
                 if multi_index[k] == 0 {
                     start[k].push(l);
@@ -209,5 +217,39 @@ impl Calculator {
             //     }
             // }
         }
+    }
+
+    pub fn mass_matrix(&self) -> DMatrix<f64> {
+        let mut mass_matrix = DMatrix::<f64>::zeros(self.n_points, self.n_points);
+
+        for k in 0..self.n_points {
+            let multi_index = self.get_multi_index(k);
+
+            let mut weight = 1.0;
+            for l in 0..self.basis.len() {
+                weight *= self.weights[l][multi_index[l]];
+            }
+
+            mass_matrix[(k, k)] = weight;
+        }
+
+        mass_matrix
+    }
+
+    pub fn diff_matrix(&self, dim: usize) -> DMatrix<f64> {
+        let mut diff_matrix = DMatrix::<f64>::zeros(self.n_points, self.n_points);
+
+        let step = self.step[dim];
+        let start = &self.start[dim];
+
+        let n = self.basis[dim].0;
+
+        for k in start {
+            diff_matrix
+                .view_with_steps_mut((*k, *k), (n, n), (step, step))
+                .copy_from(&self.diff_matrices[dim]);
+        }
+
+        diff_matrix
     }
 }
