@@ -3,4 +3,5 @@
 pub mod calculator;
 pub mod hc_calculations;
 pub mod hofft;
+pub mod hot;
 pub mod quadrature;

@@ -1,4 +1,5 @@
 use crate::calculator::*;
+use rayon::prelude::*;
 use std::f64::consts::PI;
 use std::sync::Arc;
 
@@ -279,108 +280,119 @@ impl<const N: usize> HoFFTNDLaplaceSolver<N> {
         let local_strides = compute_strides(&rs);
         let n_strides = compute_strides(&ns);
 
-        // local mass matrix index from global flat index (j-component only)
-        let local_j = |p: usize| -> usize {
-            (0..N).fold(0, |acc, d| {
+        // Build g with mass scaling (parallel, no unsafe)
+        let mut g: Vec<Complex<f64>> = f.as_slice().par_iter().enumerate().map(|(p, &fp)| {
+            let lj = (0..N).fold(0, |acc, d| {
                 acc + ((p / strides[d]) % ndofs[d] / ns[d]) * local_strides[d]
-            })
-        };
-        // offset in g for local DOF j_flat within a Fourier mode
-        let joffset = |j_flat: usize| -> usize {
-            (0..N).fold(0, |acc, d| {
-                acc + (j_flat / local_strides[d]) % rs[d] * ns[d] * strides[d]
-            })
-        };
+            });
+            Complex::new(self.periodic_mass_matrix[lj] * fp, 0.0)
+        }).collect();
 
-        let mut g: Vec<Complex<f64>> = (0..total)
-            .map(|p| Complex::new(self.periodic_mass_matrix[local_j(p)] * f[p], 0.0))
-            .collect();
-
-        // FFT direction by direction
+        // Forward FFT direction by direction.
+        // SAFETY: flat_base yields disjoint strided slices of g for distinct s values.
         for d in 0..N {
             let nd = ndofs[d];
             let stride = strides[d];
-            let mut buf = vec![Complex::<f64>::new(0.0, 0.0); nd];
-            for s in 0..total / nd {
+            let fw_fft = &self.solvers[d].fw_fft;
+            let ptr = g.as_mut_ptr() as usize;
+            (0..total / nd).into_par_iter().for_each(|s| {
                 let base = flat_base(s, d, &ndofs, &strides);
+                let p = ptr as *mut Complex<f64>;
+                let mut buf: Vec<Complex<f64>> =
+                    (0..nd).map(|m| unsafe { *p.add(base + m * stride) }).collect();
+                fw_fft.process(&mut buf);
                 for m in 0..nd {
-                    buf[m] = g[base + m * stride];
+                    unsafe { *p.add(base + m * stride) = buf[m] };
                 }
-                self.solvers[d].fw_fft.process(&mut buf);
-                for m in 0..nd {
-                    g[base + m * stride] = buf[m];
-                }
-            }
-        }
-
-        // Apply ND symbol pseudo-inverse
-        for k_flat in 0..n_total {
-            let base = (0..N).fold(0, |acc, d| {
-                acc + (k_flat / n_strides[d]) % ns[d] * strides[d]
             });
-            let mut v = DVector::<Complex<f64>>::zeros(r_total);
-            for j_flat in 0..r_total {
-                v[j_flat] = g[base + joffset(j_flat)];
-            }
-
-            // Step a: apply Q†_d for each direction
-            for d in 0..N {
-                let k_d = (k_flat / n_strides[d]) % ns[d];
-                let r_d = rs[d];
-                let step = local_strides[d] - 1;
-                for s in 0..r_total / r_d {
-                    let bj = flat_base(s, d, &rs, &local_strides);
-                    let x = self.solvers[d].eigenvectors[k_d].ad_mul(&v.rows_with_step(bj, r_d, step));
-                    v.rows_with_step_mut(bj, r_d, step).set_column(0, &x);
-                }
-            }
-
-            // Step b: pointwise divide by ND eigenvalue
-            for j_flat in 0..r_total {
-                let lambda = self.alpha
-                    + (0..N)
-                        .map(|d| {
-                            let k_d = (k_flat / n_strides[d]) % ns[d];
-                            let j_d = (j_flat / local_strides[d]) % rs[d];
-                            self.beta * self.solvers[d].eigenvalues[k_d][j_d]
-                        })
-                        .sum::<f64>();
-                v[j_flat] /= lambda;
-            }
-
-            // Step c: apply Q_d for each direction
-            for d in 0..N {
-                let k_d = (k_flat / n_strides[d]) % ns[d];
-                let r_d = rs[d];
-                let step = local_strides[d] - 1;
-                for s in 0..r_total / r_d {
-                    let bj = flat_base(s, d, &rs, &local_strides);
-                    let x = &self.solvers[d].eigenvectors[k_d] * v.rows_with_step(bj, r_d, step);
-                    v.rows_with_step_mut(bj, r_d, step).set_column(0, &x);
-                }
-            }
-
-            for j_flat in 0..r_total {
-                g[base + joffset(j_flat)] = v[j_flat];
-            }
         }
 
-        // IFFT direction by direction
+        // Apply ND symbol pseudo-inverse, parallel over Fourier modes.
+        // SAFETY: different k_flat map to disjoint cells in g —
+        //   index = Σ_d [k_d + j_d·n_d]·strides[d] is injective in (k_flat, j_flat),
+        //   so sets for distinct k_flat are disjoint.
+        {
+            let ptr = g.as_mut_ptr() as usize;
+            (0..n_total).into_par_iter().for_each(|k_flat| {
+                let base =
+                    (0..N).fold(0, |acc, d| acc + (k_flat / n_strides[d]) % ns[d] * strides[d]);
+                let p = ptr as *mut Complex<f64>;
+
+                // Gather local vector
+                let mut v = DVector::<Complex<f64>>::from_fn(r_total, |j_flat, _| {
+                    let off = (0..N).fold(0, |acc, d| {
+                        acc + (j_flat / local_strides[d]) % rs[d] * ns[d] * strides[d]
+                    });
+                    unsafe { *p.add(base + off) }
+                });
+
+                // Step a: apply Q†_d for each direction
+                for d in 0..N {
+                    let k_d = (k_flat / n_strides[d]) % ns[d];
+                    let r_d = rs[d];
+                    let step = local_strides[d] - 1;
+                    for s in 0..r_total / r_d {
+                        let bj = flat_base(s, d, &rs, &local_strides);
+                        let x = self.solvers[d].eigenvectors[k_d]
+                            .ad_mul(&v.rows_with_step(bj, r_d, step));
+                        v.rows_with_step_mut(bj, r_d, step).set_column(0, &x);
+                    }
+                }
+
+                // Step b: pointwise divide by ND eigenvalue
+                for j_flat in 0..r_total {
+                    let lambda = self.alpha
+                        + (0..N)
+                            .map(|d| {
+                                let k_d = (k_flat / n_strides[d]) % ns[d];
+                                let j_d = (j_flat / local_strides[d]) % rs[d];
+                                self.beta * self.solvers[d].eigenvalues[k_d][j_d]
+                            })
+                            .sum::<f64>();
+                    v[j_flat] /= lambda;
+                }
+
+                // Step c: apply Q_d for each direction
+                for d in 0..N {
+                    let k_d = (k_flat / n_strides[d]) % ns[d];
+                    let r_d = rs[d];
+                    let step = local_strides[d] - 1;
+                    for s in 0..r_total / r_d {
+                        let bj = flat_base(s, d, &rs, &local_strides);
+                        let x = &self.solvers[d].eigenvectors[k_d]
+                            * v.rows_with_step(bj, r_d, step);
+                        v.rows_with_step_mut(bj, r_d, step).set_column(0, &x);
+                    }
+                }
+
+                // Scatter back
+                for j_flat in 0..r_total {
+                    let off = (0..N).fold(0, |acc, d| {
+                        acc + (j_flat / local_strides[d]) % rs[d] * ns[d] * strides[d]
+                    });
+                    unsafe { *p.add(base + off) = v[j_flat] };
+                }
+            });
+        }
+
+        // Inverse FFT direction by direction.
+        // SAFETY: same disjoint-fiber argument as forward FFT.
         for d in 0..N {
             let nd = ndofs[d];
             let norm = self.solvers[d].n as f64;
             let stride = strides[d];
-            let mut buf = vec![Complex::<f64>::new(0.0, 0.0); nd];
-            for s in 0..total / nd {
+            let i_fft = &self.solvers[d].i_fft;
+            let ptr = g.as_mut_ptr() as usize;
+            (0..total / nd).into_par_iter().for_each(|s| {
                 let base = flat_base(s, d, &ndofs, &strides);
+                let p = ptr as *mut Complex<f64>;
+                let mut buf: Vec<Complex<f64>> =
+                    (0..nd).map(|m| unsafe { *p.add(base + m * stride) }).collect();
+                i_fft.process(&mut buf);
                 for m in 0..nd {
-                    buf[m] = g[base + m * stride];
+                    unsafe { *p.add(base + m * stride) = buf[m] / norm };
                 }
-                self.solvers[d].i_fft.process(&mut buf);
-                for m in 0..nd {
-                    g[base + m * stride] = buf[m] / norm;
-                }
-            }
+            });
         }
 
         for i in 0..total {
