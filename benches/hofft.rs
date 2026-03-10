@@ -1,0 +1,155 @@
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use gg_lobatto::hofft::*;
+use nalgebra::DVector;
+use std::f64::consts::PI;
+
+/// Benchmark `solve_in_place` for the problem (M + K) u = f on [0, 1]
+/// using u(x) = exp(sin(2*pi*x)) as the test function.
+/// Sweeps over polynomial order r and number of elements n.
+fn bench_solve_in_place(c: &mut Criterion) {
+    let l = 1.0_f64;
+    let alpha = 1.0_f64;
+    let beta = 1.0_f64;
+    let w = 2.0 * PI / l;
+
+    let rhs_f = |x: f64| {
+        let s = (w * x).sin();
+        let cv = (w * x).cos();
+        let u = s.exp();
+        alpha * u - beta * w * w * (cv * cv - s) * u
+    };
+
+    let orders: &[usize] = &[1, 2, 3, 4];
+    let n_values: &[usize] = &[4, 8, 16, 32, 64, 128];
+
+    let mut group = c.benchmark_group("hofft_solve_in_place");
+
+    for &r in orders {
+        for &n in n_values {
+            let ndof = n * r;
+            group.throughput(Throughput::Elements(ndof as u64));
+
+            let solver = HoFFT1DLaplaceSolver::new(l, n, r, alpha, beta);
+            let x = solver.get_x();
+
+            let f_init: DVector<f64> = DVector::from_fn(ndof, |i, _| rhs_f(x[i]));
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("r={r}"), n),
+                &(solver, f_init),
+                |b, (solver, f_init)| {
+                    b.iter(|| {
+                        let mut f = black_box(f_init.clone());
+                        solver.solve_in_place(&mut f);
+                        f
+                    })
+                },
+            );
+        }
+    }
+
+    group.finish();
+}
+
+fn bench_solve_in_place_2d(c: &mut Criterion) {
+    let alpha = 1.0_f64;
+    let beta = 1.0_f64;
+    let w = 2.0 * PI;
+
+    let orders: &[usize] = &[1, 2, 3, 4];
+    let n_values: &[usize] = &[4, 8, 16, 32, 64];
+
+    let mut group = c.benchmark_group("hofft_solve_in_place_2d");
+
+    for &r in orders {
+        for &n in n_values {
+            let ndof = (n * r).pow(2);
+            group.throughput(Throughput::Elements(ndof as u64));
+
+            let solver = HoFFTNDLaplaceSolver::<2>::new([1.0; 2], [n; 2], [r; 2], alpha, beta);
+            let x = solver.get_x();
+
+            let f_init = DVector::from_fn(ndof, |i, _| {
+                let (xi, yi) = (x[0][i], x[1][i]);
+                let rhs_1d = |t: f64| {
+                    let s = (w * t).sin();
+                    let cv = (w * t).cos();
+                    let u = s.exp();
+                    alpha * u - beta * w * w * (cv * cv - s) * u
+                };
+                let ux = (w * xi).sin().exp();
+                let uy = (w * yi).sin().exp();
+                rhs_1d(xi) * uy + ux * rhs_1d(yi) - alpha * ux * uy
+            });
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("r={r}"), n),
+                &(solver, f_init),
+                |b, (solver, f_init)| {
+                    b.iter(|| {
+                        let mut f = black_box(f_init.clone());
+                        solver.solve_in_place(&mut f);
+                        f
+                    })
+                },
+            );
+        }
+    }
+
+    group.finish();
+}
+
+fn bench_solve_in_place_3d(c: &mut Criterion) {
+    let alpha = 1.0_f64;
+    let beta = 1.0_f64;
+    let w = 2.0 * PI;
+
+    let orders: &[usize] = &[1, 2, 3, 4];
+    let n_values: &[usize] = &[4, 8, 16, 32];
+
+    let mut group = c.benchmark_group("hofft_solve_in_place_3d");
+
+    for &r in orders {
+        for &n in n_values {
+            let ndof = (n * r).pow(3);
+            group.throughput(Throughput::Elements(ndof as u64));
+
+            let solver = HoFFTNDLaplaceSolver::<3>::new([1.0; 3], [n; 3], [r; 3], alpha, beta);
+            let x = solver.get_x();
+
+            let f_init = DVector::from_fn(ndof, |i, _| {
+                let (xi, yi, zi) = (x[0][i], x[1][i], x[2][i]);
+                let rhs_1d = |t: f64| {
+                    let s = (w * t).sin();
+                    let cv = (w * t).cos();
+                    let u = s.exp();
+                    alpha * u - beta * w * w * (cv * cv - s) * u
+                };
+                let (ux, uy, uz) = (
+                    (w * xi).sin().exp(),
+                    (w * yi).sin().exp(),
+                    (w * zi).sin().exp(),
+                );
+                rhs_1d(xi) * uy * uz + ux * rhs_1d(yi) * uz + ux * uy * rhs_1d(zi)
+                    - 2.0 * alpha * ux * uy * uz
+            });
+
+            group.bench_with_input(
+                BenchmarkId::new(format!("r={r}"), n),
+                &(solver, f_init),
+                |b, (solver, f_init)| {
+                    b.iter(|| {
+                        let mut f = black_box(f_init.clone());
+                        solver.solve_in_place(&mut f);
+                        f
+                    })
+                },
+            );
+        }
+    }
+
+    group.finish();
+}
+
+criterion_group!(benches, bench_solve_in_place, bench_solve_in_place_2d, bench_solve_in_place_3d);
+criterion_main!(benches);
