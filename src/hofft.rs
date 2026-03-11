@@ -1,3 +1,26 @@
+//! High-order FFT (HoFFT) solver for the periodic Laplace equation.
+//!
+//! Solves (α M + β K) u = f` on `[0, L]^N` with periodic boundary conditions
+//! using a spectral-element discretisation: *n* elements of polynomial order *r*
+//! per direction, so each direction has `n·r` DOFs.
+//!
+//! ## Algorithm (1D outline)
+//!
+//! 1. **Mass scaling** — multiply the load vector `f` by the periodic diagonal
+//!    mass matrix `M` to convert from strong-form RHS to FEM RHS.
+//! 2. **Forward FFT** — apply a length-*n* FFT along each direction to decouple
+//!    the *n* Fourier modes.
+//! 3. **Symbol solve** — for each Fourier mode `k`, apply the pseudo-inverse of
+//!    the local symbol matrix `S(k)` (an *r×r* Hermitian system) via its
+//!    pre-computed eigendecomposition.
+//! 4. **Inverse FFT** — transform back to physical space.
+//!
+//! The ND solver (`HoFFTNDLaplaceSolver`) extends this by applying steps 2 and 4
+//! direction by direction (sum factorisation) and solving the full `r^N × r^N`
+//! block-diagonal system in step 3 using tensor-product eigendecompositions.
+//! Steps 2 and 4 are parallelised with Rayon over independent fibers; step 3 is
+//! parallelised over independent Fourier modes.
+
 use crate::calculator::*;
 use rayon::prelude::*;
 use std::f64::consts::PI;
@@ -6,27 +29,57 @@ use std::sync::Arc;
 use nalgebra::*;
 use rustfft::*;
 
+/// 1D HoFFT Laplace solver: $n$ elements of polynomial order $r$ in $\[0,L\]$.
+///
+/// Solves $$ \alpha u - \beta \Delta u = f $$ with periodic boundary conditions using:
+/// - a GLL spectral-element discretisation with *n* elements of order *r*,
+/// - FFT diagonalisation over the *n* element-to-element coupling modes,
+/// - per-mode *r×r* Hermitian eigendecomposition for the local solve.
+///
+/// The DOF layout in `get_x` / `solve_in_place` is *interleaved by mode*:
+/// flat index `j * n + k` corresponds to local node `j` of element `k`.
 pub struct HoFFT1DLaplaceSolver {
-    pub l: f64,   //Length of the domain
-    pub n: usize, // Number of elements in the domain
-    pub r: usize, //polynomial order of the local approximation method (greater than one)
+    /// Domain length.
+    pub l: f64,
+    /// Number of elements.
+    pub n: usize,
+    /// Polynomial order per element (number of interior+boundary GLL nodes per element).
+    pub r: usize,
 
-    pub fw_fft: Arc<dyn Fft<f64>>, //FFT engine
-    pub i_fft: Arc<dyn Fft<f64>>,  //IFFT engine
+    /// Forward FFT engine (length *n*).
+    pub fw_fft: Arc<dyn Fft<f64>>,
+    /// Inverse FFT engine (length *n*).
+    pub i_fft: Arc<dyn Fft<f64>>,
 
+    /// GLL quadrature calculator for a single element of order *r*.
     pub lobatto_calculator: Calculator,
+    /// Per-Fourier-mode symbol matrices `S(k)`, size *r×r*, Hermitian.
+    /// `symbol[k] = α h M_loc + β/h K_loc(e^{2πi k/n})`.
     pub symbol: Vec<DMatrix<Complex<f64>>>,
+    /// Pseudo-inverse of each symbol matrix, pre-computed via eigendecomposition.
     pub symbol_pseudo_inv: Vec<DMatrix<Complex<f64>>>,
-    // Eigendecomposition of each symbol[k] (valid for Hermitian positive definite symbols):
-    // symbol[k] = eigenvectors[k] * diag(eigenvalues[k]) * eigenvectors[k]†
+    /// Real eigenvalues of the mass-normalised symbol for each Fourier mode `k`.
+    /// `eigenvalues[k][j]` = λ_j of `M^{-1/2} S(k) M^{-1/2}`.
     pub eigenvalues: Vec<DVector<f64>>,
+    /// M-orthonormal eigenvectors: `S(k) V(k) = M V(k) diag(λ)`.
+    /// `eigenvectors[k]` is the *r×r* complex unitary matrix.
     pub eigenvectors: Vec<DMatrix<Complex<f64>>>,
+    /// Diagonal of the periodic local mass matrix (length *r*).
+    /// DOF 0 collects contributions from both sides of the periodic boundary.
     pub periodic_mass_matrix: DVector<f64>,
+    /// Coefficient of the mass term α.
     pub alpha: f64,
+    /// Coefficient of the stiffness term β.
     pub beta: f64,
 }
 
 impl HoFFT1DLaplaceSolver {
+    /// Construct the 1D HoFFT solver.
+    ///
+    /// - `l`: domain length.
+    /// - `n`: number of elements.
+    /// - `r`: polynomial order (GLL nodes per element, excluding the shared endpoint).
+    /// - `alpha`, `beta`: operator coefficients for `α M + β K`.
     pub fn new(l: f64, n: usize, r: usize, alpha: f64, beta: f64) -> Self {
         let mut planner = FftPlanner::<f64>::new();
         let fw_fft = planner.plan_fft_forward(n);
@@ -50,7 +103,7 @@ impl HoFFT1DLaplaceSolver {
         let stiffness_matrix: Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>> =
             diff_matrix.transpose() * mass_matrix.clone() * diff_matrix;
 
-        //Conpute the symbol of the operator for each frequency
+        //Compute the symbol of the operator for each frequency
         for k in 0..n {
             let h = l / (n as f64);
             let phase = -2.0 * PI * (k as f64) / (n as f64);
@@ -83,20 +136,22 @@ impl HoFFT1DLaplaceSolver {
                 Complex::new(1.0 / periodic_mass_matrix[i].sqrt(), 0.0)
             }));
 
-        //Eigenvectors and eigenvalues of alpha I + beta M^{-1/2} K M^{-1/2}
+        // Generalised eigendecomposition via mass normalisation:
+        //   M^{-1/2} S(k) M^{-1/2} W = W Λ   ⟹   eigenvectors V = M^{-1/2} W
         let eigs: Vec<SymmetricEigen<Complex<f64>, Dyn>> = symbol
             .iter()
             .map(|s| SymmetricEigen::new(&mass_sqrt_inv_c * s * &mass_sqrt_inv_c))
             .collect();
         let eigenvalues: Vec<DVector<f64>> = eigs.iter().map(|e| e.eigenvalues.clone()).collect();
 
-        //Eigenvectors of alpha I + beta M^{-1} K
+        // M-orthonormal eigenvectors of α I + β M^{-1} K
         let eigenvectors: Vec<DMatrix<Complex<f64>>> = eigs
             .iter()
             .map(|e| &mass_sqrt_inv_c * e.eigenvectors.clone())
             .collect();
 
-        // Pseudoinverse of  alpha M + beta K via eigendecomposition: S^+ = Q * diag(1/λ if |λ|>tol else 0) * Q†
+        // Pseudo-inverse of α M + β K via eigendecomposition:
+        //   S⁺ = Q diag(1/λ if |λ| > tol else 0) Q†
         const PINV_TOL: f64 = 1e-12;
         let symbol_pseudo_inv: Vec<DMatrix<Complex<f64>>> = eigenvalues
             .iter()
@@ -125,6 +180,8 @@ impl HoFFT1DLaplaceSolver {
         }
     }
 
+    /// GLL nodes on `[0, L]`, length `n * r`, ordered by local node then element:
+    /// `x[j * n + k]` = position of local node `j` in element `k`.
     pub fn get_x(&self) -> DVector<f64> {
         let h = self.l / (self.n as f64);
         let mut x = DVector::<f64>::zeros(self.n * self.r);
@@ -136,6 +193,11 @@ impl HoFFT1DLaplaceSolver {
         x
     }
 
+    /// Solve `(α M + β K) u = f` in place.
+    ///
+    /// On input, `f` contains the strong-form right-hand side evaluated at
+    /// the GLL nodes returned by [`HoFFT1DLaplaceSolver::get_x`].
+    /// On output, `f` contains the FEM solution `u` at the same nodes.
     pub fn solve_in_place(&self, f: &mut DVector<f64>) {
         let norm = self.n as f64;
 
@@ -186,14 +248,24 @@ impl HoFFT1DLaplaceSolver {
     }
 }
 
+// Return the column-major strides for a tensor-product array of shape `sizes`.
+// st[0] = 1 (direction 0 / x varies fastest), st[d] = st[d-1] * sizes[d-1].
 fn compute_strides<const N: usize>(sizes: &[usize; N]) -> [usize; N] {
     let mut st = [1usize; N];
-    for d in (1..N).rev() {
-        st[d - 1] = st[d] * sizes[d];
+    for d in 1..N {
+        st[d] = st[d - 1] * sizes[d - 1];
     }
     st
 }
 
+// Compute the flat base index of the `s`-th fiber along direction `d`.
+//
+// A "fiber" along direction `d` is the set of indices obtained by varying only
+// the `d`-th coordinate.  This function returns the flat index at which that
+// fiber starts (i.e. where the `d`-th coordinate is 0).
+//
+// For a given `d`, successive values of `s` in `0..total/sizes[d]` produce
+// *disjoint* index sets — a key safety invariant for the parallel unsafe code.
 fn flat_base<const N: usize>(
     s: usize,
     d: usize,
@@ -202,7 +274,7 @@ fn flat_base<const N: usize>(
 ) -> usize {
     let mut base = 0usize;
     let mut rem = s;
-    for d2 in (0..N).rev() {
+    for d2 in 0..N {
         if d2 == d {
             continue;
         }
@@ -213,37 +285,46 @@ fn flat_base<const N: usize>(
 }
 
 /// N-dimensional HoFFT Laplace solver.
-/// Stores one `HoFFT1DLaplaceSolver` per spatial direction.
-/// N is a compile-time constant (const generic).
+///
+/// Extends [`HoFFT1DLaplaceSolver`] to `N` spatial dimensions using sum
+/// factorisation: FFTs are applied direction by direction, and the symbol
+/// pseudo-inverse is applied to each `(r_0 × … × r_{N-1})`-dimensional block
+/// independently for each Fourier mode combination.
+///
+/// `N` is a compile-time constant (const generic), so the compiler can
+/// unroll the per-direction loops.
 pub struct HoFFTNDLaplaceSolver<const N: usize> {
+    /// One 1D solver per spatial direction.
     pub solvers: [HoFFT1DLaplaceSolver; N],
-    /// Diagonal of the local ND mass matrix M^{(0)} ⊗ ... ⊗ M^{(N-1)}.
-    /// Length = r_0 * ... * r_{N-1}, last direction varies fastest.
+    /// Diagonal of the Kronecker-product mass matrix `M^{(0)} ⊗ … ⊗ M^{(N-1)}`.
+    /// Length = `r_0 * … * r_{N-1}`, first direction (x) varies fastest.
     pub periodic_mass_matrix: DVector<f64>,
+    /// Coefficient of the mass term α (shared across directions).
     pub alpha: f64,
+    /// Coefficient of the stiffness term β (shared across directions).
     pub beta: f64,
 }
 
 impl<const N: usize> HoFFTNDLaplaceSolver<N> {
     /// Construct the ND solver from per-direction parameters.
-    /// - `ls[d]`  : domain length in direction d
-    /// - `ns[d]`  : number of elements in direction d
-    /// - `rs[d]`  : polynomial order in direction d
-    /// - `alpha`  : coefficient of the mass term (shared across directions)
-    /// - `beta`   : coefficient of the stiffness term (shared across directions)
+    ///
+    /// - `ls[d]`: domain length in direction `d`.
+    /// - `ns[d]`: number of elements in direction `d`.
+    /// - `rs[d]`: polynomial order in direction `d`.
+    /// - `alpha`, `beta`: coefficients of `α M + β K`.
     pub fn new(ls: [f64; N], ns: [usize; N], rs: [usize; N], alpha: f64, beta: f64) -> Self {
         let solvers =
             std::array::from_fn(|d| HoFFT1DLaplaceSolver::new(ls[d], ns[d], rs[d], 0.0, 1.0));
 
-        // Build the diagonal of M^{(0)} ⊗ ... ⊗ M^{(N-1)} iteratively.
+        // Build the diagonal of M^{(0)} ⊗ … ⊗ M^{(N-1)} iteratively.
         // Each 1D mass matrix is diagonal (GLL quadrature), so the Kronecker product
-        // is also diagonal: entry (i_0,...,i_{N-1}) = prod_d M^{(d)}[i_d, i_d].
+        // is also diagonal: entry (i_0,…,i_{N-1}) = ∏_d M^{(d)}[i_d, i_d].
         let periodic_mass_matrix =
             (1..N).fold(solvers[0].periodic_mass_matrix.clone(), |acc, d| {
                 let m_d = &solvers[d].periodic_mass_matrix;
                 DVector::from_iterator(
                     acc.len() * m_d.len(),
-                    acc.iter().flat_map(|&v| m_d.iter().map(move |&w| v * w)),
+                    m_d.iter().flat_map(|&w| acc.iter().map(move |&v| v * w)),
                 )
             });
 
@@ -255,20 +336,32 @@ impl<const N: usize> HoFFTNDLaplaceSolver<N> {
         }
     }
 
-    /// Return the tensor-product grid as N coordinate vectors, each of length
-    /// total_ndof = ∏_d (n_d * r_d). Point `p` has coordinates (result[0][p], …, result[N-1][p]).
-    /// The last direction varies fastest
+    /// Return the tensor-product grid as `N` coordinate vectors, each of length
+    /// `total_ndof = ∏_d (n_d * r_d)`.
+    ///
+    /// Point `p` has coordinates `(result[0][p], …, result[N-1][p])`.
+    /// The first direction (x) varies fastest.
     pub fn get_x(&self) -> [DVector<f64>; N] {
         let x1d: [DVector<f64>; N] = std::array::from_fn(|d| self.solvers[d].get_x());
         let ndofs: [usize; N] = std::array::from_fn(|d| x1d[d].len());
         let total: usize = ndofs.iter().product();
         let strides = compute_strides(&ndofs);
 
-        std::array::from_fn(|d| {
-            DVector::from_fn(total, |p, _| x1d[d][(p / strides[d]) % ndofs[d]])
-        })
+        std::array::from_fn(|d| DVector::from_fn(total, |p, _| x1d[d][(p / strides[d]) % ndofs[d]]))
     }
 
+    /// Solve `(α M + β K) u = f` in place using the ND HoFFT algorithm.
+    ///
+    /// On input, `f` contains the strong-form RHS at the tensor-product GLL grid
+    /// returned by [`HoFFTNDLaplaceSolver::get_x`].
+    /// On output, `f` contains the FEM solution `u` at the same grid.
+    ///
+    /// # Parallelism
+    /// - Mass scaling: trivially parallel (`par_iter_mut`).
+    /// - Forward/inverse FFT: parallel over independent fibers (unsafe raw-pointer
+    ///   aliasing, safe by the disjoint-fiber invariant of `flat_base`).
+    /// - Symbol solve: parallel over independent Fourier modes (unsafe, safe by
+    ///   injectivity of the global index formula).
     pub fn solve_in_place(&self, f: &mut DVector<f64>) {
         let ndofs: [usize; N] = std::array::from_fn(|d| self.solvers[d].n * self.solvers[d].r);
         let rs: [usize; N] = std::array::from_fn(|d| self.solvers[d].r);
@@ -281,12 +374,17 @@ impl<const N: usize> HoFFTNDLaplaceSolver<N> {
         let n_strides = compute_strides(&ns);
 
         // Build g with mass scaling (parallel, no unsafe)
-        let mut g: Vec<Complex<f64>> = f.as_slice().par_iter().enumerate().map(|(p, &fp)| {
-            let lj = (0..N).fold(0, |acc, d| {
-                acc + ((p / strides[d]) % ndofs[d] / ns[d]) * local_strides[d]
-            });
-            Complex::new(self.periodic_mass_matrix[lj] * fp, 0.0)
-        }).collect();
+        let mut g: Vec<Complex<f64>> = f
+            .as_slice()
+            .par_iter()
+            .enumerate()
+            .map(|(p, &fp)| {
+                let lj = (0..N).fold(0, |acc, d| {
+                    acc + ((p / strides[d]) % ndofs[d] / ns[d]) * local_strides[d]
+                });
+                Complex::new(self.periodic_mass_matrix[lj] * fp, 0.0)
+            })
+            .collect();
 
         // Forward FFT direction by direction.
         // SAFETY: flat_base yields disjoint strided slices of g for distinct s values.
@@ -298,8 +396,9 @@ impl<const N: usize> HoFFTNDLaplaceSolver<N> {
             (0..total / nd).into_par_iter().for_each(|s| {
                 let base = flat_base(s, d, &ndofs, &strides);
                 let p = ptr as *mut Complex<f64>;
-                let mut buf: Vec<Complex<f64>> =
-                    (0..nd).map(|m| unsafe { *p.add(base + m * stride) }).collect();
+                let mut buf: Vec<Complex<f64>> = (0..nd)
+                    .map(|m| unsafe { *p.add(base + m * stride) })
+                    .collect();
                 fw_fft.process(&mut buf);
                 for m in 0..nd {
                     unsafe { *p.add(base + m * stride) = buf[m] };
@@ -314,11 +413,12 @@ impl<const N: usize> HoFFTNDLaplaceSolver<N> {
         {
             let ptr = g.as_mut_ptr() as usize;
             (0..n_total).into_par_iter().for_each(|k_flat| {
-                let base =
-                    (0..N).fold(0, |acc, d| acc + (k_flat / n_strides[d]) % ns[d] * strides[d]);
+                let base = (0..N).fold(0, |acc, d| {
+                    acc + (k_flat / n_strides[d]) % ns[d] * strides[d]
+                });
                 let p = ptr as *mut Complex<f64>;
 
-                // Gather local vector
+                // Gather the r_total values belonging to this Fourier mode
                 let mut v = DVector::<Complex<f64>>::from_fn(r_total, |j_flat, _| {
                     let off = (0..N).fold(0, |acc, d| {
                         acc + (j_flat / local_strides[d]) % rs[d] * ns[d] * strides[d]
@@ -339,7 +439,7 @@ impl<const N: usize> HoFFTNDLaplaceSolver<N> {
                     }
                 }
 
-                // Step b: pointwise divide by ND eigenvalue
+                // Step b: pointwise divide by ND eigenvalue λ = α + Σ_d β λ^{(d)}_{k_d, j_d}
                 for j_flat in 0..r_total {
                     let lambda = self.alpha
                         + (0..N)
@@ -359,8 +459,8 @@ impl<const N: usize> HoFFTNDLaplaceSolver<N> {
                     let step = local_strides[d] - 1;
                     for s in 0..r_total / r_d {
                         let bj = flat_base(s, d, &rs, &local_strides);
-                        let x = &self.solvers[d].eigenvectors[k_d]
-                            * v.rows_with_step(bj, r_d, step);
+                        let x =
+                            &self.solvers[d].eigenvectors[k_d] * v.rows_with_step(bj, r_d, step);
                         v.rows_with_step_mut(bj, r_d, step).set_column(0, &x);
                     }
                 }
@@ -386,8 +486,9 @@ impl<const N: usize> HoFFTNDLaplaceSolver<N> {
             (0..total / nd).into_par_iter().for_each(|s| {
                 let base = flat_base(s, d, &ndofs, &strides);
                 let p = ptr as *mut Complex<f64>;
-                let mut buf: Vec<Complex<f64>> =
-                    (0..nd).map(|m| unsafe { *p.add(base + m * stride) }).collect();
+                let mut buf: Vec<Complex<f64>> = (0..nd)
+                    .map(|m| unsafe { *p.add(base + m * stride) })
+                    .collect();
                 i_fft.process(&mut buf);
                 for m in 0..nd {
                     unsafe { *p.add(base + m * stride) = buf[m] / norm };

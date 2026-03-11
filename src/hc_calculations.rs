@@ -1,28 +1,29 @@
-// ============================================================================
-// Hardcoded (HC) differentiation operators for Qr Gauss-Lobatto elements
-//
-// These functions implement the action of the 1D spectral differentiation
-// matrix D on a vector of nodal values, exploiting the structure of the
-// Gauss-Lobatto nodes to reduce flop count compared to a general matrix–vector
-// product.  Multi-dimensional operators (Qr×Qr, Qr×Qr×Qr) are built by
-// applying the 1D kernel direction by direction (sum-factorisation).
-//
-// Two families are provided:
-//   - Scalar  : operate on a single element at a time (AoS layout).
-//   - Vectorized : operate on a batch of N elements simultaneously,
-//     using an SoA layout that exposes SIMD parallelism to the compiler.
-//
-// Data layouts
-// ────────────
-// Scalar/AoS  – flat array indexed as node (i, j, k)  →  i + (r+1)*j + (r+1)²*k
-//           (x fastest, z slowest), where r+1 is the number of nodes per
-//           direction (r+1=4 for Q3, r+1=5 for Q4).
-//
-// Vectorized/SoA  – for a batch of N elements the position of element e
-//           at node (i, j, k) is  N*(i + (r+1)*j + (r+1)²*k) + e.
-//           Equivalently, the batch is stored as (r+1)³ contiguous blocks of N
-//           values, one block per node index.
-// ============================================================================
+//! Hard-coded spectral differentiation operators for Q3 and Q4 Gauss-Lobatto elements.
+//!
+//! These functions implement the action of the 1D spectral differentiation
+//! matrix **D** on a vector of nodal values, exploiting the structure of the
+//! Gauss-Lobatto nodes to reduce the flop count compared to a general
+//! matrix–vector product.  Multi-dimensional operators (Q3×Q3, Q3×Q3×Q3,
+//! Q4×Q4, Q4×Q4×Q4) are built by applying the 1D kernel direction by direction
+//! (sum-factorisation).
+//!
+//! ## Two families
+//!
+//! - **Scalar** — operate on a single element at a time (Array-of-Structures layout).
+//! - **Vectorized** — operate on a batch of `N` elements simultaneously,
+//!   using a Structure-of-Arrays layout that exposes SIMD parallelism to the
+//!   compiler.
+//!
+//! ## Data layouts
+//!
+//! **Scalar / AoS** — flat array indexed as node `(i, j, k)` →
+//! `i + (r+1)*j + (r+1)²*k` (x fastest, z slowest), where `r+1` is the number
+//! of nodes per direction (`r+1 = 4` for Q3, `r+1 = 5` for Q4).
+//!
+//! **Vectorized / SoA** — for a batch of `N` elements the position of element
+//! `e` at node `(i, j, k)` is `N*(i + (r+1)*j + (r+1)²*k) + e`.
+//! Equivalently, the batch is stored as `(r+1)³` contiguous blocks of `N`
+//! values, one block per node index.
 
 // ----------------------------------------------------------------------------
 // Differentiation coefficients for Q3 (4-node Gauss-Lobatto, degree 3)
@@ -49,18 +50,7 @@ const DX3: [f64; 5] = [
 ///   - `M = 16` → z-direction (stride 16 in a 4×4×4 cube)
 #[inline(always)]
 pub fn _d_q3_q3<const M: usize>(in_q3: &[f64], out_q3: &mut [f64]) {
-    assert!(in_q3.len() >= 3 * M + 1);
-    assert!(out_q3.len() >= 3 * M + 1);
-
-    let a = in_q3[0];
-    let b = in_q3[M];
-    let c = in_q3[2 * M];
-    let d = in_q3[3 * M];
-
-    out_q3[0] = DX3[2] * b - DX3[3] * c + d - 6.0 * a;
-    out_q3[M] = DX3[4] * c - DX3[0] * a - DX3[1] * d;
-    out_q3[2 * M] = DX3[1] * a - DX3[4] * b + DX3[0] * d;
-    out_q3[3 * M] = DX3[3] * b - DX3[2] * c - a + 6.0 * d;
+    _d_q3_q3_vec::<1, M>(in_q3, out_q3);
 }
 
 /// Vectorized 1D Q3 differentiation kernel for a batch of `N` elements.
@@ -276,20 +266,7 @@ const DX4: [f64; 7] = [
 ///   - `M = 25` → z-direction (stride 25 in a 5×5×5 cube)
 #[inline(always)]
 pub fn _d_q4_q4<const M: usize>(in_q4: &[f64], out_q4: &mut [f64]) {
-    assert!(in_q4.len() >= 4 * M + 1);
-    assert!(out_q4.len() >= 4 * M + 1);
-
-    let a = in_q4[0];
-    let b = in_q4[M];
-    let c = (16.0 / 3.0) * in_q4[2 * M]; // premultiplied middle node
-    let d = in_q4[3 * M];
-    let e = in_q4[4 * M];
-
-    out_q4[0] = DX4[2] * b - 10.0 * a - c + DX4[5] * d - e;
-    out_q4[M] = DX4[1] * e - DX4[0] * a + DX4[6] * c - DX4[4] * d;
-    out_q4[2 * M] = 0.75 * (a - e) + DX4[3] * (d - b);
-    out_q4[3 * M] = DX4[4] * b - DX4[1] * a - DX4[6] * c + DX4[0] * e;
-    out_q4[4 * M] = a - DX4[5] * b + c - DX4[2] * d + 10.0 * e;
+    _d_q4_q4_vec::<1, M>(in_q4, out_q4);
 }
 
 /// Vectorized 1D Q4 differentiation kernel for a batch of `N` elements.

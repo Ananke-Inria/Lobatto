@@ -1,15 +1,20 @@
-// Algorithms based on the article
-//
-// [1]  ON COMPUTING THE POINTS AND WEIGHTS FOR GAUSS–LEGENDRE QUADRATURE
-//                              PAUL N. SWARZTRAUBER
-//      SIAM Journal of Scientific Computing, 2002, Vol. 24, No. 3, pp. 945–954
-// and
-//
-//  [2] Accurate Computation of Weights in Classical Gauss–Christoffel Quadrature Rules
-//                                  E. Yakimiw
-// Journal of Computational Physics, 1996, Vol. 129, No. 2, pp. 406-430
-//
+//! Gauss and Gauss-Lobatto quadrature rules on [-1, 1] and [0, 1].
+//!
+//! Algorithms are based on:
+//!
+//! - \[1\] Swarztrauber, P. N. (2002). *On computing the points and weights for
+//!   Gauss–Legendre quadrature*. SIAM Journal of Scientific Computing, 24(3), 945–954.
+//! - \[2\] Yakimiw, E. (1996). *Accurate computation of weights in classical
+//!   Gauss–Christoffel quadrature rules*. Journal of Computational Physics, 129(2), 406–430.
 
+/// Compute `n_quad_points`-point Gauss-Legendre quadrature on [-1, 1].
+///
+/// Returns `(points, weights)` with `points` sorted in increasing order.
+/// Exact closed-form expressions are used for 1, 2, and 3 points; the general
+/// case uses Newton's method on the Fourier representation of Legendre polynomials.
+///
+/// # Panics
+/// Panics if `n_quad_points == 0`.
 pub fn gauss(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     assert!(
         n_quad_points >= 1,
@@ -39,6 +44,25 @@ pub fn gauss(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     }
 }
 
+/// Compute `n_quad_points`-point Gauss-Lobatto-Legendre (GLL) quadrature on [-1, 1].
+///
+/// GLL quadrature includes the endpoints ±1 as nodes, which makes it well-suited
+/// for finite-element assembly (shared boundary DOFs). Returns `(points, weights)`
+/// with `points` sorted in increasing order.
+/// Exact closed-form expressions are used for 2, 3, and 4 points; the general
+/// case uses Newton's method on the derivative of the Legendre polynomial.
+///
+/// The nodes $x_1 = -1 < x_2 < \cdots < x_{n-1} < x_n = 1$ are the endpoints
+/// together with the roots of $P_{n-1}'$, the derivative of the Legendre polynomial
+/// of degree $n-1$.  The corresponding weights are:
+///
+/// $$w_i = \frac{2}{n(n-1)\,[P_{n-1}(x_i)]^2}, \quad i = 1, \dots, n$$
+///
+/// where the endpoint weights simplify to $w_1 = w_n = \dfrac{2}{n(n-1)}$
+/// since $P_{n-1}(\pm 1) = (\pm 1)^{n-1}$.
+///
+/// # Panics
+/// Panics if `n_quad_points < 2` (GLL requires at least the two endpoints).
 pub fn gauss_lobatto(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     assert!(
         n_quad_points >= 2,
@@ -70,6 +94,10 @@ pub fn gauss_lobatto(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     }
 }
 
+/// GLL quadrature on the unit interval [0, 1].
+///
+/// Equivalent to [`gauss_lobatto`] with the affine change of variable `x = (t+1)/2`.
+/// Returns `(points, weights)` with `points ∈ [0, 1]` and `sum(weights) == 1`.
 pub fn gauss_lobatto_on_unit_interval(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     let mut points: Vec<f64>;
     let mut weights: Vec<f64>;
@@ -82,6 +110,10 @@ pub fn gauss_lobatto_on_unit_interval(n_quad_points: usize) -> (Vec<f64>, Vec<f6
     return (points, weights);
 }
 
+/// Gauss-Legendre quadrature on the unit interval [0, 1].
+///
+/// Equivalent to [`gauss`] with the affine change of variable `x = (t+1)/2`.
+/// Returns `(points, weights)` with `points ∈ (0, 1)` and `sum(weights) == 1`.
 pub fn gauss_on_unit_interval(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     let mut points: Vec<f64>;
     let mut weights: Vec<f64>;
@@ -94,10 +126,12 @@ pub fn gauss_on_unit_interval(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     return (points, weights);
 }
 
-// Computes the fourier coefficients of the legendre  polynomial Pn
-// and of its first and second derivative as defined by equation (2) of [1].
-// The recurrence of equation (6) of [1] is implemented.
-// The chosen normalizaton is to have the leading coefficient equals to one.
+// Computes the Fourier coefficients of the Legendre polynomial P_n and its
+// first and second derivatives, using the Fourier–cosine representation
+//   P_n(cos θ) = Σ_k a_{n,k} cos(k θ)
+// defined by equation (2) of [1].  The recurrence of equation (6)/(8) of [1]
+// is implemented.  The normalisation convention is that the leading coefficient
+// equals one.
 fn legendre_fourier(n: usize) -> Vec<f64> {
     let mut ank_vec = vec![0 as f64; n + 1];
 
@@ -126,6 +160,7 @@ fn legendre_fourier(n: usize) -> Vec<f64> {
     return ank_vec;
 }
 
+// Evaluate P_n(cos θ) from its Fourier coefficients `ank_vec`.
 fn fourier_value(theta: f64, ank_vec: &Vec<f64>) -> f64 {
     let m = ank_vec.len();
     let mut v = 0 as f64;
@@ -141,6 +176,7 @@ fn fourier_value(theta: f64, ank_vec: &Vec<f64>) -> f64 {
     return v;
 }
 
+// Evaluate d/dθ P_n(cos θ) from its Fourier coefficients.
 fn fourier_d_value(theta: f64, ank_vec: &Vec<f64>) -> f64 {
     let m = ank_vec.len();
     let mut dv = 0 as f64;
@@ -155,6 +191,7 @@ fn fourier_d_value(theta: f64, ank_vec: &Vec<f64>) -> f64 {
     return dv;
 }
 
+// Evaluate d²/dθ² P_n(cos θ) from its Fourier coefficients.
 fn fourier_dd_value(theta: f64, ank_vec: &Vec<f64>) -> f64 {
     let m = ank_vec.len();
     let mut ddv = 0 as f64;
@@ -170,8 +207,9 @@ fn fourier_dd_value(theta: f64, ank_vec: &Vec<f64>) -> f64 {
     return ddv;
 }
 
-// Return the roots of the legendre polynomial or its derivative of order n using the decompositon (2) of [1]. More precisely, the roots of  P_n (cos \theta) or P_n' (cos \theta) are returned.
-// The roots are symmetric with respect to the origin so only the roots in [0,pi/2] are returned
+// Return the roots (in θ-space) of P_n(cos θ) or P_n'(cos θ), along with the
+// values of P_n and P_n' at those roots.  Only roots in [0, π/2] are returned
+// (the full set is recovered by symmetry).  Newton's method is applied in θ-space.
 fn theta_root_legendre_or_d_legendre(n: usize, d_legendre: bool) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
     const EPS: f64 = std::f64::EPSILON;
     const PI: f64 = core::f64::consts::PI;
@@ -251,6 +289,8 @@ fn theta_root_legendre_or_d_legendre(n: usize, d_legendre: bool) -> (Vec<f64>, V
     return (roots, p_at_roots, dp_at_roots);
 }
 
+// Return the normalisation constant 1/P_n(cos π) = 1/P_n(-1) used by the
+// weight formulae of [1] and [2].
 fn get_normalized_coefficient(n: usize) -> f64 {
     let ank_vec = legendre_fourier(n);
     const PI: f64 = core::f64::consts::PI;
@@ -266,6 +306,7 @@ fn theta_root_d_legendre(n: usize) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
     return theta_root_legendre_or_d_legendre(n, true);
 }
 
+// Build the full GLL quadrature rule for n_quad_points ≥ 5 using formula (A.1.20) of [2].
 fn compute_gauss_lobatto_quadrature(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     let (root_theta, p_at_root_theta, dp_at_root_theta) = theta_root_d_legendre(n_quad_points - 1);
 
@@ -310,6 +351,7 @@ fn compute_gauss_lobatto_quadrature(n_quad_points: usize) -> (Vec<f64>, Vec<f64>
     return (points, weights);
 }
 
+// Build the full Gauss-Legendre quadrature rule for n_quad_points ≥ 4 using formula (17) of [1].
 fn compute_gauss_quadrature(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     let (root_theta, p_at_root_theta, dp_at_root_theta) = theta_root_legendre(n_quad_points);
 
