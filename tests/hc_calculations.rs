@@ -15,7 +15,7 @@ fn seeded_vec(n: usize) -> Vec<f64> {
         .collect()
 }
 
-/// AoS → SoA layout transposition (same as benchmarks).
+/// AoS → SoA layout transposition.
 ///
 /// Each element contains `groups` consecutive groups of `dofs_per_group` dofs.
 /// - AoS index: `j * groups * dofs_per_group + i * dofs_per_group + k`
@@ -58,394 +58,577 @@ fn assert_close(a: &[f64], b: &[f64], tol: f64) {
     }
 }
 
-// ── Scalar functions vs GLE Calculator ──────────────────────────────────────
+/// Apply GLE `diff(dir)` to each of `n` elements (AoS layout, `dofs` dofs each).
+fn gll_batch_ref(
+    v_in_aos: &[f64],
+    n: usize,
+    dofs: usize,
+    dir: usize,
+    gle: &Calculator,
+) -> Vec<f64> {
+    let mut out = vec![0.0_f64; n * dofs];
+    for i in 0..n {
+        let s = dofs * i;
+        let mut v = DVector::zeros(dofs);
+        gle.diff(dir, &DVector::from_row_slice(&v_in_aos[s..s + dofs]), &mut v);
+        out[s..s + dofs].copy_from_slice(v.as_slice());
+    }
+    out
+}
 
-/// x-differentiation on a single Q3 element (4 dofs).
+// ── N=1 tests vs GLE Calculator ─────────────────────────────────────────────
+//
+// With N=1 the SoA layout is identical to AoS, so the functions can be called
+// directly on the plain input vector and compared against the GLE reference.
+
 #[test]
 fn test_dx_q3_q3() {
     let v_in = seeded_vec(4);
-    let mut v_out_hc = vec![0.0_f64; 4];
-    dx_q3_q3(&v_in, &mut v_out_hc);
+    let mut v_out = vec![0.0_f64; 4];
+    dx_q3_q3::<1>(&v_in, &mut v_out);
 
-    let mut v_out_gle = DVector::zeros(4);
-    let gle = Calculator::new(vec![(4, true)]);
-    gle.diff(0, &DVector::from_vec(v_in), &mut v_out_gle);
-
-    assert_close(&v_out_hc, v_out_gle.as_slice(), 1e-10);
+    let mut ref_out = DVector::zeros(4);
+    Calculator::new(vec![(4, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
 }
 
-/// x-differentiation on a Q3×Q3 element (16 dofs).
 #[test]
 fn test_dx_q33_q33() {
     let v_in = seeded_vec(16);
-    let mut v_out_hc = vec![0.0_f64; 16];
-    dx_q33_q33(&v_in, &mut v_out_hc);
+    let mut v_out = vec![0.0_f64; 16];
+    dx_q33_q33::<1>(&v_in, &mut v_out);
 
-    let mut v_out_gle = DVector::zeros(16);
-    let gle = Calculator::new(vec![(4, true), (4, true)]);
-    gle.diff(0, &DVector::from_vec(v_in), &mut v_out_gle);
-
-    assert_close(&v_out_hc, v_out_gle.as_slice(), 1e-10);
+    let mut ref_out = DVector::zeros(16);
+    Calculator::new(vec![(4, true), (4, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
 }
 
-/// y-differentiation on a Q3×Q3 element (16 dofs).
-#[test]
-fn test_dy_q33_q33() {
-    let v_in = seeded_vec(16);
-    let mut v_out_hc = vec![0.0_f64; 16];
-    dy_q33_q33(&v_in, &mut v_out_hc);
-
-    let mut v_out_gle = DVector::zeros(16);
-    let gle = Calculator::new(vec![(4, true), (4, true)]);
-    gle.diff(1, &DVector::from_vec(v_in), &mut v_out_gle);
-
-    assert_close(&v_out_hc, v_out_gle.as_slice(), 1e-10);
-}
-
-/// x-differentiation on a Q3×Q3×Q3 element (64 dofs).
 #[test]
 fn test_dx_q333_q333() {
     let v_in = seeded_vec(64);
-    let mut v_out_hc = vec![0.0_f64; 64];
-    dx_q333_q333(&v_in, &mut v_out_hc);
+    let mut v_out = vec![0.0_f64; 64];
+    dx_q333_q333::<1>(&v_in, &mut v_out);
 
-    let mut v_out_gle = DVector::zeros(64);
-    let gle = Calculator::new(vec![(4, true), (4, true), (4, true)]);
-    gle.diff(0, &DVector::from_vec(v_in), &mut v_out_gle);
-
-    assert_close(&v_out_hc, v_out_gle.as_slice(), 1e-10);
+    let mut ref_out = DVector::zeros(64);
+    Calculator::new(vec![(4, true), (4, true), (4, true)]).diff(
+        0,
+        &DVector::from_vec(v_in),
+        &mut ref_out,
+    );
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
 }
 
-/// y-differentiation on a Q3×Q3×Q3 element (64 dofs).
 #[test]
 fn test_dy_q333_q333() {
     let v_in = seeded_vec(64);
-    let mut v_out_hc = vec![0.0_f64; 64];
-    dy_q333_q333(&v_in, &mut v_out_hc);
+    let mut v_out = vec![0.0_f64; 64];
+    dy_q333_q333::<1>(&v_in, &mut v_out);
 
-    let mut v_out_gle = DVector::zeros(64);
-    let gle = Calculator::new(vec![(4, true), (4, true), (4, true)]);
-    gle.diff(1, &DVector::from_vec(v_in), &mut v_out_gle);
-
-    assert_close(&v_out_hc, v_out_gle.as_slice(), 1e-10);
+    let mut ref_out = DVector::zeros(64);
+    Calculator::new(vec![(4, true), (4, true), (4, true)]).diff(
+        1,
+        &DVector::from_vec(v_in),
+        &mut ref_out,
+    );
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
 }
 
-/// z-differentiation on a Q3×Q3×Q3 element (64 dofs).
 #[test]
 fn test_dz_q333_q333() {
     let v_in = seeded_vec(64);
-    let mut v_out_hc = vec![0.0_f64; 64];
-    dz_q333_q333(&v_in, &mut v_out_hc);
+    let mut v_out = vec![0.0_f64; 64];
+    dz_q333_q333::<1>(&v_in, &mut v_out);
 
-    let mut v_out_gle = DVector::zeros(64);
-    let gle = Calculator::new(vec![(4, true), (4, true), (4, true)]);
-    gle.diff(2, &DVector::from_vec(v_in), &mut v_out_gle);
-
-    assert_close(&v_out_hc, v_out_gle.as_slice(), 1e-10);
+    let mut ref_out = DVector::zeros(64);
+    Calculator::new(vec![(4, true), (4, true), (4, true)]).diff(
+        2,
+        &DVector::from_vec(v_in),
+        &mut ref_out,
+    );
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
 }
 
-// ── Vectorized (SoA) functions vs scalar equivalents ────────────────────────
-//
-// The vec functions use SoA layout: for a batch of N elements each with G groups
-// of D dofs, the input is organised as G contiguous blocks of N×D values.
-// Tests verify vec output matches scalar output after converting layouts.
-
-/// x-differentiation on a batch of N Q3 elements: `dx_q3_q3_vec` vs `dx_q3_q3`.
-/// Layout: 1 group × 4 dofs  →  aos_to_soa(n, 1, 4).
-#[test]
-fn test_dx_q3_q3_vec() {
-    const N: usize = 8;
-    let v_in_aos = seeded_vec(4 * N);
-
-    let mut v_out_scalar = vec![0.0_f64; 4 * N];
-    for i in 0..N {
-        let s = 4 * i;
-        dx_q3_q3(&v_in_aos[s..s + 4], &mut v_out_scalar[s..s + 4]);
-    }
-
-    let v_in_soa = aos_to_soa(&v_in_aos, N, 1, 4);
-    let mut v_out_soa = vec![0.0_f64; 4 * N];
-    dx_q3_q3_vec::<N>(&v_in_soa, &mut v_out_soa);
-    let v_out_vec = soa_to_aos(&v_out_soa, N, 1, 4);
-
-    assert_close(&v_out_scalar, &v_out_vec, 1e-14);
-}
-
-/// x-differentiation on a batch of N Q3×Q3 elements: `dx_q33_q33_vec` vs `dx_q33_q33`.
-/// Layout: 4 groups × 4 dofs  →  aos_to_soa(n, 4, 4).
-#[test]
-fn test_dx_q33_q33_vec() {
-    const N: usize = 4;
-    let v_in_aos = seeded_vec(16 * N);
-
-    let mut v_out_scalar = vec![0.0_f64; 16 * N];
-    for i in 0..N {
-        let s = 16 * i;
-        dx_q33_q33(&v_in_aos[s..s + 16], &mut v_out_scalar[s..s + 16]);
-    }
-
-    let v_in_soa = aos_to_soa(&v_in_aos, N, 4, 4);
-    let mut v_out_soa = vec![0.0_f64; 16 * N];
-    dx_q33_q33_vec::<N>(&v_in_soa, &mut v_out_soa);
-    let v_out_vec = soa_to_aos(&v_out_soa, N, 4, 4);
-
-    assert_close(&v_out_scalar, &v_out_vec, 1e-14);
-}
-
-/// x-differentiation on a batch of N Q3×Q3×Q3 elements: `dx_q333_q333_vec` vs `dx_q333_q333`.
-/// Layout: 16 groups × 4 dofs  →  aos_to_soa(n, 16, 4).
-#[test]
-fn test_dx_q333_q333_vec() {
-    const N: usize = 4;
-    let v_in_aos = seeded_vec(64 * N);
-
-    let mut v_out_scalar = vec![0.0_f64; 64 * N];
-    for i in 0..N {
-        let s = 64 * i;
-        dx_q333_q333(&v_in_aos[s..s + 64], &mut v_out_scalar[s..s + 64]);
-    }
-
-    let v_in_soa = aos_to_soa(&v_in_aos, N, 16, 4);
-    let mut v_out_soa = vec![0.0_f64; 64 * N];
-    dx_q333_q333_vec::<N>(&v_in_soa, &mut v_out_soa);
-    let v_out_vec = soa_to_aos(&v_out_soa, N, 16, 4);
-
-    assert_close(&v_out_scalar, &v_out_vec, 1e-14);
-}
-
-// For dy/dz vec, input is dx-SoA (same aos_to_soa(n, 16, 4)) and output stays in that
-// same format (position = N*(i+4j+16k)+e), so soa_to_aos(n, 16, 4) converts it back.
-
-/// y-differentiation on a batch of N Q3×Q3×Q3 elements: `dy_q333_q333_vec` vs `dy_q333_q333`.
-#[test]
-fn test_dy_q333_q333_vec() {
-    const N: usize = 4;
-    let v_in_aos = seeded_vec(64 * N);
-
-    let mut v_out_scalar = vec![0.0_f64; 64 * N];
-    for i in 0..N {
-        let s = 64 * i;
-        dy_q333_q333(&v_in_aos[s..s + 64], &mut v_out_scalar[s..s + 64]);
-    }
-
-    let v_in_soa = aos_to_soa(&v_in_aos, N, 16, 4);
-    let mut v_out_soa = vec![0.0_f64; 64 * N];
-    dy_q333_q333_vec::<N>(&v_in_soa, &mut v_out_soa);
-    let v_out_vec = soa_to_aos(&v_out_soa, N, 16, 4);
-
-    assert_close(&v_out_scalar, &v_out_vec, 1e-14);
-}
-
-/// z-differentiation on a batch of N Q3×Q3×Q3 elements: `dz_q333_q333_vec` vs `dz_q333_q333`.
-#[test]
-fn test_dz_q333_q333_vec() {
-    const N: usize = 4;
-    let v_in_aos = seeded_vec(64 * N);
-
-    let mut v_out_scalar = vec![0.0_f64; 64 * N];
-    for i in 0..N {
-        let s = 64 * i;
-        dz_q333_q333(&v_in_aos[s..s + 64], &mut v_out_scalar[s..s + 64]);
-    }
-
-    let v_in_soa = aos_to_soa(&v_in_aos, N, 16, 4);
-    let mut v_out_soa = vec![0.0_f64; 64 * N];
-    dz_q333_q333_vec::<N>(&v_in_soa, &mut v_out_soa);
-    let v_out_vec = soa_to_aos(&v_out_soa, N, 16, 4);
-
-    assert_close(&v_out_scalar, &v_out_vec, 1e-14);
-}
-
-// ── Q4 scalar functions vs GLE Calculator ────────────────────────────────────
-
-/// x-differentiation on a single Q4 element (5 dofs).
 #[test]
 fn test_dx_q4_q4() {
     let v_in = seeded_vec(5);
-    let mut v_out_hc = vec![0.0_f64; 5];
-    dx_q4_q4(&v_in, &mut v_out_hc);
+    let mut v_out = vec![0.0_f64; 5];
+    dx_q4_q4::<1>(&v_in, &mut v_out);
 
-    let mut v_out_gle = DVector::zeros(5);
-    let gle = Calculator::new(vec![(5, true)]);
-    gle.diff(0, &DVector::from_vec(v_in), &mut v_out_gle);
-
-    assert_close(&v_out_hc, v_out_gle.as_slice(), 1e-10);
+    let mut ref_out = DVector::zeros(5);
+    Calculator::new(vec![(5, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
 }
 
-/// x-differentiation on a Q4×Q4 element (25 dofs).
 #[test]
 fn test_dx_q44_q44() {
     let v_in = seeded_vec(25);
-    let mut v_out_hc = vec![0.0_f64; 25];
-    dx_q44_q44(&v_in, &mut v_out_hc);
+    let mut v_out = vec![0.0_f64; 25];
+    dx_q44_q44::<1>(&v_in, &mut v_out);
 
-    let mut v_out_gle = DVector::zeros(25);
-    let gle = Calculator::new(vec![(5, true), (5, true)]);
-    gle.diff(0, &DVector::from_vec(v_in), &mut v_out_gle);
-
-    assert_close(&v_out_hc, v_out_gle.as_slice(), 1e-10);
+    let mut ref_out = DVector::zeros(25);
+    Calculator::new(vec![(5, true), (5, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
 }
 
-/// y-differentiation on a Q4×Q4 element (25 dofs).
-#[test]
-fn test_dy_q44_q44() {
-    let v_in = seeded_vec(25);
-    let mut v_out_hc = vec![0.0_f64; 25];
-    dy_q44_q44(&v_in, &mut v_out_hc);
-
-    let mut v_out_gle = DVector::zeros(25);
-    let gle = Calculator::new(vec![(5, true), (5, true)]);
-    gle.diff(1, &DVector::from_vec(v_in), &mut v_out_gle);
-
-    assert_close(&v_out_hc, v_out_gle.as_slice(), 1e-10);
-}
-
-/// x-differentiation on a Q4×Q4×Q4 element (125 dofs).
 #[test]
 fn test_dx_q444_q444() {
     let v_in = seeded_vec(125);
-    let mut v_out_hc = vec![0.0_f64; 125];
-    dx_q444_q444(&v_in, &mut v_out_hc);
+    let mut v_out = vec![0.0_f64; 125];
+    dx_q444_q444::<1>(&v_in, &mut v_out);
 
-    let mut v_out_gle = DVector::zeros(125);
-    let gle = Calculator::new(vec![(5, true), (5, true), (5, true)]);
-    gle.diff(0, &DVector::from_vec(v_in), &mut v_out_gle);
-
-    assert_close(&v_out_hc, v_out_gle.as_slice(), 1e-10);
+    let mut ref_out = DVector::zeros(125);
+    Calculator::new(vec![(5, true), (5, true), (5, true)]).diff(
+        0,
+        &DVector::from_vec(v_in),
+        &mut ref_out,
+    );
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
 }
 
-/// y-differentiation on a Q4×Q4×Q4 element (125 dofs).
 #[test]
 fn test_dy_q444_q444() {
     let v_in = seeded_vec(125);
-    let mut v_out_hc = vec![0.0_f64; 125];
-    dy_q444_q444(&v_in, &mut v_out_hc);
+    let mut v_out = vec![0.0_f64; 125];
+    dy_q444_q444::<1>(&v_in, &mut v_out);
 
-    let mut v_out_gle = DVector::zeros(125);
-    let gle = Calculator::new(vec![(5, true), (5, true), (5, true)]);
-    gle.diff(1, &DVector::from_vec(v_in), &mut v_out_gle);
-
-    assert_close(&v_out_hc, v_out_gle.as_slice(), 1e-10);
+    let mut ref_out = DVector::zeros(125);
+    Calculator::new(vec![(5, true), (5, true), (5, true)]).diff(
+        1,
+        &DVector::from_vec(v_in),
+        &mut ref_out,
+    );
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
 }
 
-/// z-differentiation on a Q4×Q4×Q4 element (125 dofs).
 #[test]
 fn test_dz_q444_q444() {
     let v_in = seeded_vec(125);
-    let mut v_out_hc = vec![0.0_f64; 125];
-    dz_q444_q444(&v_in, &mut v_out_hc);
+    let mut v_out = vec![0.0_f64; 125];
+    dz_q444_q444::<1>(&v_in, &mut v_out);
 
-    let mut v_out_gle = DVector::zeros(125);
-    let gle = Calculator::new(vec![(5, true), (5, true), (5, true)]);
-    gle.diff(2, &DVector::from_vec(v_in), &mut v_out_gle);
-
-    assert_close(&v_out_hc, v_out_gle.as_slice(), 1e-10);
+    let mut ref_out = DVector::zeros(125);
+    Calculator::new(vec![(5, true), (5, true), (5, true)]).diff(
+        2,
+        &DVector::from_vec(v_in),
+        &mut ref_out,
+    );
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
 }
 
-// ── Q4 vectorized (SoA) functions vs scalar equivalents ──────────────────────
+// ── Batch N=8 tests vs GLE ───────────────────────────────────────────────────
 //
-// SoA layout for Q4×Q4×Q4: position = N*(i + 5*j + 25*k) + e.
-// Transposition parameters: 25 groups × 5 dofs  →  aos_to_soa(n, 25, 5).
+// Batch input is prepared in AoS layout, transposed to SoA, processed by the
+// generic function, transposed back to AoS, then compared element-wise against
+// the GLE reference.
 
-/// x-differentiation on a batch of N Q4 elements: `dx_q4_q4_vec` vs `dx_q4_q4`.
-/// Layout: 1 group × 5 dofs  →  aos_to_soa(n, 1, 5).
 #[test]
-fn test_dx_q4_q4_vec() {
+fn test_dx_q3_q3_batch() {
+    const N: usize = 8;
+    let v_in_aos = seeded_vec(4 * N);
+    let gle = Calculator::new(vec![(4, true)]);
+    let ref_out = gll_batch_ref(&v_in_aos, N, 4, 0, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 1, 4);
+    let mut v_out_soa = vec![0.0_f64; 4 * N];
+    dx_q3_q3::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 1, 4);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dx_q33_q33_batch() {
+    const N: usize = 8;
+    let v_in_aos = seeded_vec(16 * N);
+    let gle = Calculator::new(vec![(4, true), (4, true)]);
+    let ref_out = gll_batch_ref(&v_in_aos, N, 16, 0, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 4, 4);
+    let mut v_out_soa = vec![0.0_f64; 16 * N];
+    dx_q33_q33::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 4, 4);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dx_q333_q333_batch() {
+    const N: usize = 4;
+    let v_in_aos = seeded_vec(64 * N);
+    let gle = Calculator::new(vec![(4, true), (4, true), (4, true)]);
+    let ref_out = gll_batch_ref(&v_in_aos, N, 64, 0, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 16, 4);
+    let mut v_out_soa = vec![0.0_f64; 64 * N];
+    dx_q333_q333::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 16, 4);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dy_q333_q333_batch() {
+    const N: usize = 4;
+    let v_in_aos = seeded_vec(64 * N);
+    let gle = Calculator::new(vec![(4, true), (4, true), (4, true)]);
+    let ref_out = gll_batch_ref(&v_in_aos, N, 64, 1, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 16, 4);
+    let mut v_out_soa = vec![0.0_f64; 64 * N];
+    dy_q333_q333::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 16, 4);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dz_q333_q333_batch() {
+    const N: usize = 4;
+    let v_in_aos = seeded_vec(64 * N);
+    let gle = Calculator::new(vec![(4, true), (4, true), (4, true)]);
+    let ref_out = gll_batch_ref(&v_in_aos, N, 64, 2, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 16, 4);
+    let mut v_out_soa = vec![0.0_f64; 64 * N];
+    dz_q333_q333::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 16, 4);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dx_q4_q4_batch() {
     const N: usize = 8;
     let v_in_aos = seeded_vec(5 * N);
-
-    let mut v_out_scalar = vec![0.0_f64; 5 * N];
-    for i in 0..N {
-        let s = 5 * i;
-        dx_q4_q4(&v_in_aos[s..s + 5], &mut v_out_scalar[s..s + 5]);
-    }
+    let gle = Calculator::new(vec![(5, true)]);
+    let ref_out = gll_batch_ref(&v_in_aos, N, 5, 0, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 1, 5);
     let mut v_out_soa = vec![0.0_f64; 5 * N];
-    dx_q4_q4_vec::<N>(&v_in_soa, &mut v_out_soa);
-    let v_out_vec = soa_to_aos(&v_out_soa, N, 1, 5);
+    dx_q4_q4::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 1, 5);
 
-    assert_close(&v_out_scalar, &v_out_vec, 1e-14);
+    assert_close(&v_out_aos, &ref_out, 1e-10);
 }
 
-/// x-differentiation on a batch of N Q4×Q4 elements: `dx_q44_q44_vec` vs `dx_q44_q44`.
-/// Layout: 5 groups × 5 dofs  →  aos_to_soa(n, 5, 5).
 #[test]
-fn test_dx_q44_q44_vec() {
-    const N: usize = 4;
+fn test_dx_q44_q44_batch() {
+    const N: usize = 8;
     let v_in_aos = seeded_vec(25 * N);
-
-    let mut v_out_scalar = vec![0.0_f64; 25 * N];
-    for i in 0..N {
-        let s = 25 * i;
-        dx_q44_q44(&v_in_aos[s..s + 25], &mut v_out_scalar[s..s + 25]);
-    }
+    let gle = Calculator::new(vec![(5, true), (5, true)]);
+    let ref_out = gll_batch_ref(&v_in_aos, N, 25, 0, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 5, 5);
     let mut v_out_soa = vec![0.0_f64; 25 * N];
-    dx_q44_q44_vec::<N>(&v_in_soa, &mut v_out_soa);
-    let v_out_vec = soa_to_aos(&v_out_soa, N, 5, 5);
+    dx_q44_q44::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 5, 5);
 
-    assert_close(&v_out_scalar, &v_out_vec, 1e-14);
+    assert_close(&v_out_aos, &ref_out, 1e-10);
 }
 
-/// x-differentiation on a batch of N Q4×Q4×Q4 elements: `dx_q444_q444_vec` vs `dx_q444_q444`.
-/// Layout: 25 groups × 5 dofs  →  aos_to_soa(n, 25, 5).
 #[test]
-fn test_dx_q444_q444_vec() {
+fn test_dx_q444_q444_batch() {
     const N: usize = 4;
     let v_in_aos = seeded_vec(125 * N);
-
-    let mut v_out_scalar = vec![0.0_f64; 125 * N];
-    for i in 0..N {
-        let s = 125 * i;
-        dx_q444_q444(&v_in_aos[s..s + 125], &mut v_out_scalar[s..s + 125]);
-    }
+    let gle = Calculator::new(vec![(5, true), (5, true), (5, true)]);
+    let ref_out = gll_batch_ref(&v_in_aos, N, 125, 0, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 25, 5);
     let mut v_out_soa = vec![0.0_f64; 125 * N];
-    dx_q444_q444_vec::<N>(&v_in_soa, &mut v_out_soa);
-    let v_out_vec = soa_to_aos(&v_out_soa, N, 25, 5);
+    dx_q444_q444::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 25, 5);
 
-    assert_close(&v_out_scalar, &v_out_vec, 1e-14);
+    assert_close(&v_out_aos, &ref_out, 1e-10);
 }
 
-/// y-differentiation on a batch of N Q4×Q4×Q4 elements: `dy_q444_q444_vec` vs `dy_q444_q444`.
 #[test]
-fn test_dy_q444_q444_vec() {
+fn test_dy_q444_q444_batch() {
     const N: usize = 4;
     let v_in_aos = seeded_vec(125 * N);
-
-    let mut v_out_scalar = vec![0.0_f64; 125 * N];
-    for i in 0..N {
-        let s = 125 * i;
-        dy_q444_q444(&v_in_aos[s..s + 125], &mut v_out_scalar[s..s + 125]);
-    }
+    let gle = Calculator::new(vec![(5, true), (5, true), (5, true)]);
+    let ref_out = gll_batch_ref(&v_in_aos, N, 125, 1, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 25, 5);
     let mut v_out_soa = vec![0.0_f64; 125 * N];
-    dy_q444_q444_vec::<N>(&v_in_soa, &mut v_out_soa);
-    let v_out_vec = soa_to_aos(&v_out_soa, N, 25, 5);
+    dy_q444_q444::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 25, 5);
 
-    assert_close(&v_out_scalar, &v_out_vec, 1e-14);
+    assert_close(&v_out_aos, &ref_out, 1e-10);
 }
 
-/// z-differentiation on a batch of N Q4×Q4×Q4 elements: `dz_q444_q444_vec` vs `dz_q444_q444`.
 #[test]
-fn test_dz_q444_q444_vec() {
+fn test_dz_q444_q444_batch() {
     const N: usize = 4;
     let v_in_aos = seeded_vec(125 * N);
-
-    let mut v_out_scalar = vec![0.0_f64; 125 * N];
-    for i in 0..N {
-        let s = 125 * i;
-        dz_q444_q444(&v_in_aos[s..s + 125], &mut v_out_scalar[s..s + 125]);
-    }
+    let gle = Calculator::new(vec![(5, true), (5, true), (5, true)]);
+    let ref_out = gll_batch_ref(&v_in_aos, N, 125, 2, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 25, 5);
     let mut v_out_soa = vec![0.0_f64; 125 * N];
-    dz_q444_q444_vec::<N>(&v_in_soa, &mut v_out_soa);
-    let v_out_vec = soa_to_aos(&v_out_soa, N, 25, 5);
+    dz_q444_q444::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 25, 5);
 
-    assert_close(&v_out_scalar, &v_out_vec, 1e-14);
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+// ── Q5 N=1 tests vs GLE Calculator ──────────────────────────────────────────
+
+#[test]
+fn test_dx_q5_q5() {
+    let v_in = seeded_vec(6);
+    let mut v_out = vec![0.0_f64; 6];
+    dx_q5_q5::<1>(&v_in, &mut v_out);
+
+    let mut ref_out = DVector::zeros(6);
+    Calculator::new(vec![(6, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+}
+
+#[test]
+fn test_dx_q55_q55() {
+    let v_in = seeded_vec(36);
+    let mut v_out = vec![0.0_f64; 36];
+    dx_q55_q55::<1>(&v_in, &mut v_out);
+
+    let mut ref_out = DVector::zeros(36);
+    Calculator::new(vec![(6, true), (6, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+}
+
+#[test]
+fn test_dx_q555_q555() {
+    let v_in = seeded_vec(216);
+    let mut v_out = vec![0.0_f64; 216];
+    dx_q555_q555::<1>(&v_in, &mut v_out);
+
+    let mut ref_out = DVector::zeros(216);
+    Calculator::new(vec![(6, true), (6, true), (6, true)]).diff(
+        0,
+        &DVector::from_vec(v_in),
+        &mut ref_out,
+    );
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+}
+
+#[test]
+fn test_dy_q555_q555() {
+    let v_in = seeded_vec(216);
+    let mut v_out = vec![0.0_f64; 216];
+    dy_q555_q555::<1>(&v_in, &mut v_out);
+
+    let mut ref_out = DVector::zeros(216);
+    Calculator::new(vec![(6, true), (6, true), (6, true)]).diff(
+        1,
+        &DVector::from_vec(v_in),
+        &mut ref_out,
+    );
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+}
+
+#[test]
+fn test_dz_q555_q555() {
+    let v_in = seeded_vec(216);
+    let mut v_out = vec![0.0_f64; 216];
+    dz_q555_q555::<1>(&v_in, &mut v_out);
+
+    let mut ref_out = DVector::zeros(216);
+    Calculator::new(vec![(6, true), (6, true), (6, true)]).diff(
+        2,
+        &DVector::from_vec(v_in),
+        &mut ref_out,
+    );
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+}
+
+// ── Q5 batch N=4/8 tests vs GLE ──────────────────────────────────────────────
+
+#[test]
+fn test_dx_q5_q5_batch() {
+    const N: usize = 8;
+    let v_in_aos = seeded_vec(6 * N);
+    let gle = Calculator::new(vec![(6, true)]);
+    let ref_out = gll_batch_ref(&v_in_aos, N, 6, 0, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 1, 6);
+    let mut v_out_soa = vec![0.0_f64; 6 * N];
+    dx_q5_q5::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 1, 6);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dx_q555_q555_batch() {
+    const N: usize = 4;
+    let v_in_aos = seeded_vec(216 * N);
+    let gle = Calculator::new(vec![(6, true), (6, true), (6, true)]);
+    let ref_out = gll_batch_ref(&v_in_aos, N, 216, 0, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 36, 6);
+    let mut v_out_soa = vec![0.0_f64; 216 * N];
+    dx_q555_q555::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 36, 6);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dy_q555_q555_batch() {
+    const N: usize = 4;
+    let v_in_aos = seeded_vec(216 * N);
+    let gle = Calculator::new(vec![(6, true), (6, true), (6, true)]);
+    let ref_out = gll_batch_ref(&v_in_aos, N, 216, 1, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 36, 6);
+    let mut v_out_soa = vec![0.0_f64; 216 * N];
+    dy_q555_q555::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 36, 6);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dz_q555_q555_batch() {
+    const N: usize = 4;
+    let v_in_aos = seeded_vec(216 * N);
+    let gle = Calculator::new(vec![(6, true), (6, true), (6, true)]);
+    let ref_out = gll_batch_ref(&v_in_aos, N, 216, 2, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 36, 6);
+    let mut v_out_soa = vec![0.0_f64; 216 * N];
+    dz_q555_q555::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 36, 6);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+// ── Q6 N=1 tests vs GLE Calculator ──────────────────────────────────────────
+
+#[test]
+fn test_dx_q6_q6() {
+    let v_in = seeded_vec(7);
+    let mut v_out = vec![0.0_f64; 7];
+    dx_q6_q6::<1>(&v_in, &mut v_out);
+
+    let mut ref_out = DVector::zeros(7);
+    Calculator::new(vec![(7, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+}
+
+#[test]
+fn test_dx_q66_q66() {
+    let v_in = seeded_vec(49);
+    let mut v_out = vec![0.0_f64; 49];
+    dx_q66_q66::<1>(&v_in, &mut v_out);
+
+    let mut ref_out = DVector::zeros(49);
+    Calculator::new(vec![(7, true), (7, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+}
+
+#[test]
+fn test_dx_q666_q666() {
+    let v_in = seeded_vec(343);
+    let mut v_out = vec![0.0_f64; 343];
+    dx_q666_q666::<1>(&v_in, &mut v_out);
+
+    let mut ref_out = DVector::zeros(343);
+    Calculator::new(vec![(7, true), (7, true), (7, true)]).diff(
+        0,
+        &DVector::from_vec(v_in),
+        &mut ref_out,
+    );
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+}
+
+#[test]
+fn test_dy_q666_q666() {
+    let v_in = seeded_vec(343);
+    let mut v_out = vec![0.0_f64; 343];
+    dy_q666_q666::<1>(&v_in, &mut v_out);
+
+    let mut ref_out = DVector::zeros(343);
+    Calculator::new(vec![(7, true), (7, true), (7, true)]).diff(
+        1,
+        &DVector::from_vec(v_in),
+        &mut ref_out,
+    );
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+}
+
+#[test]
+fn test_dz_q666_q666() {
+    let v_in = seeded_vec(343);
+    let mut v_out = vec![0.0_f64; 343];
+    dz_q666_q666::<1>(&v_in, &mut v_out);
+
+    let mut ref_out = DVector::zeros(343);
+    Calculator::new(vec![(7, true), (7, true), (7, true)]).diff(
+        2,
+        &DVector::from_vec(v_in),
+        &mut ref_out,
+    );
+    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+}
+
+// ── Q6 batch N=4/8 tests vs GLE ──────────────────────────────────────────────
+
+#[test]
+fn test_dx_q6_q6_batch() {
+    const N: usize = 8;
+    let v_in_aos = seeded_vec(7 * N);
+    let gle = Calculator::new(vec![(7, true)]);
+    let ref_out = gll_batch_ref(&v_in_aos, N, 7, 0, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 1, 7);
+    let mut v_out_soa = vec![0.0_f64; 7 * N];
+    dx_q6_q6::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 1, 7);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dx_q666_q666_batch() {
+    const N: usize = 4;
+    let v_in_aos = seeded_vec(343 * N);
+    let gle = Calculator::new(vec![(7, true), (7, true), (7, true)]);
+    let ref_out = gll_batch_ref(&v_in_aos, N, 343, 0, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 49, 7);
+    let mut v_out_soa = vec![0.0_f64; 343 * N];
+    dx_q666_q666::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 49, 7);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dy_q666_q666_batch() {
+    const N: usize = 4;
+    let v_in_aos = seeded_vec(343 * N);
+    let gle = Calculator::new(vec![(7, true), (7, true), (7, true)]);
+    let ref_out = gll_batch_ref(&v_in_aos, N, 343, 1, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 49, 7);
+    let mut v_out_soa = vec![0.0_f64; 343 * N];
+    dy_q666_q666::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 49, 7);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dz_q666_q666_batch() {
+    const N: usize = 4;
+    let v_in_aos = seeded_vec(343 * N);
+    let gle = Calculator::new(vec![(7, true), (7, true), (7, true)]);
+    let ref_out = gll_batch_ref(&v_in_aos, N, 343, 2, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 49, 7);
+    let mut v_out_soa = vec![0.0_f64; 343 * N];
+    dz_q666_q666::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 49, 7);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
 }
