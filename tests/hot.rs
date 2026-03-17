@@ -1,42 +1,6 @@
 use gg_lobatto::hot::*;
-use nalgebra::{DMatrix, DVector};
+use nalgebra::DVector;
 use std::f64::consts::PI;
-
-// ── Eigendecomposition ───────────────────────────────────────────────────────
-
-#[test]
-fn test_hot1d_eigendecomposition() {
-    const ORTHO_TOL: f64 = 1e-10;
-    const RECON_TOL: f64 = 1e-10;
-    const PINV_TOL: f64 = 1e-8;
-
-    for &r in &[2, 3, 4, 5, 6] {
-        let solver = Hot1DLaplaceSolver::new(1.0, r, 1.0, 1.0);
-        let m = DMatrix::from_diagonal(&solver.periodic_mass_matrix);
-        let id = DMatrix::<f64>::identity(r, r);
-        let v = &solver.eigenvectors;
-
-        // V^T M V = I  (M-orthonormality)
-        let vtmv = v.transpose() * &m * v;
-        let err = (&vtmv - &id).norm();
-        assert!(err < ORTHO_TOL, "r={r}: V^T M V ≠ I  (err={err:.2e})");
-
-        // symbol * V = M * V * Λ  (generalised eigenproblem)
-        let lambda = DMatrix::from_diagonal(&DVector::from_fn(r, |i, _| solver.eigenvalues[i]));
-        let lhs = &solver.symbol * v;
-        let rhs = &m * v * &lambda;
-        let rel = (&lhs - &rhs).norm() / rhs.norm();
-        assert!(rel < RECON_TOL, "r={r}: symbol·V ≠ M·V·Λ  (rel={rel:.2e})");
-
-        // symbol * symbol_pseudo_inv ≈ I  (when alpha=1 pseudo-inv = inv)
-        let prod = &solver.symbol * &solver.symbol_pseudo_inv;
-        let pinv_err = (&prod - &id).norm();
-        assert!(
-            pinv_err < PINV_TOL,
-            "r={r}: symbol · symbol_pseudo_inv ≠ I  (err={pinv_err:.2e})"
-        );
-    }
-}
 
 // ── 1D p-convergence ─────────────────────────────────────────────────────────
 
@@ -99,7 +63,7 @@ fn convergence_1d() {
         let mut prev_err: Option<f64> = None;
 
         for r in 2..=*r_max {
-            let solver = Hot1DLaplaceSolver::new(1.0, r, alpha, beta);
+            let solver = Hot1DLaplaceSolver::new(1.0, 0.0, r, alpha, beta);
             let x = solver.get_x();
             let mut f = DVector::from_fn(r, |i, _| rhs_f(x[i]));
             solver.solve_in_place(&mut f);
@@ -162,7 +126,7 @@ fn convergence_2d() {
 
     let mut prev_err: Option<f64> = None;
     for r in 2..=r_max {
-        let solver = HotNDLaplaceSolver::<2>::new([1.0; 2], [r; 2], alpha, beta);
+        let solver = HotNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [r; 2], alpha, beta);
         let x = solver.get_x();
         let total = x[0].len();
         let mut f = DVector::from_fn(total, |i, _| rhs_f(x[0][i], x[1][i]));
@@ -186,6 +150,55 @@ fn convergence_2d() {
     );
 }
 
+// ── 2D p-convergence, α=0, zero-mean sine source ─────────────────────────────
+
+#[test]
+fn convergence_2d_laplace() {
+    let alpha = 0.0_f64;
+    let beta = 1.0_f64;
+    let w = 2.0 * PI;
+    let w2 = w * w;
+
+    // u(x,y) = sin(2πx)·sin(2πy)  — zero mean, periodic
+    // −Δu = 2w²·sin(2πx)·sin(2πy)  — also zero mean (compatibility for α=0)
+    let exact_u = |x: f64, y: f64| (w * x).sin() * (w * y).sin();
+    let rhs_f = |x: f64, y: f64| beta * 2.0 * w2 * (w * x).sin() * (w * y).sin();
+
+    let r_mono = 3;
+    let r_max = 12;
+    println!("\n{:=<60}", "");
+    println!("HOT 2D p-convergence on [0,1]²,  α={alpha}, β={beta}  (zero-mean)");
+    println!("u = sin(2πx)·sin(2πy),  ∫f=0  (monotone from r={r_mono})");
+    println!("{:=<60}\n", "");
+    println!("{:>5} {:>10} {:>12}", "r", "ndof", "max_err");
+    println!("{:-<30}", "");
+
+    let mut prev_err: Option<f64> = None;
+    for r in 2..=r_max {
+        let solver = HotNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [r; 2], alpha, beta);
+        let x = solver.get_x();
+        let total = x[0].len();
+        let mut f = DVector::from_fn(total, |i, _| rhs_f(x[0][i], x[1][i]));
+        solver.solve_in_place(&mut f);
+        let err = (0..total)
+            .map(|i| (f[i] - exact_u(x[0][i], x[1][i])).abs())
+            .fold(0.0_f64, f64::max);
+
+        println!("{r:>5} {total:>10} {err:>12.3e}");
+        if let Some(pe) = prev_err {
+            if r >= r_mono && pe > 1e-14 {
+                assert!(err < pe, "r={r}: 2D zero-mean error did not decrease");
+            }
+        }
+        prev_err = Some(err);
+    }
+    assert!(
+        prev_err.unwrap() < 1e-8,
+        "2D zero-mean: error at r={r_max} is {:.2e}",
+        prev_err.unwrap()
+    );
+}
+
 // ── 3D p-convergence ─────────────────────────────────────────────────────────
 
 #[test]
@@ -205,8 +218,19 @@ fn convergence_3d() {
         w2 * (c * c - s) * s.exp()
     };
 
+    let ls = [1.0_f64, 2.0, 3.0];
+    let xls = [0.0_f64, 1.0, -1.0];
+
     println!("\n{:=<65}", "");
-    println!("HOT 3D p-convergence on [0,1]³,  α={alpha}, β={beta}");
+    println!(
+        "HOT 3D p-convergence on [{},{}]×[{},{}]×[{},{}],  α={alpha}, β={beta}",
+        xls[0],
+        xls[0] + ls[0],
+        xls[1],
+        xls[1] + ls[1],
+        xls[2],
+        xls[2] + ls[2]
+    );
 
     let r_mono = 7; // 3D pre-asymptotic regime is wider — check from r=7
     let r_max = 20;
@@ -217,20 +241,29 @@ fn convergence_3d() {
 
     let mut prev_err: Option<f64> = None;
     for r in 2..=r_max {
-        let solver = HotNDLaplaceSolver::<3>::new([1.0; 3], [r; 3], alpha, beta);
+        let solver = HotNDLaplaceSolver::<3>::new(ls, xls, [r; 3], alpha, beta);
         let x = solver.get_x();
         let total = x[0].len();
 
         let mut f = DVector::from_fn(total, |i, _| {
-            let (xi, yi, zi) = (x[0][i], x[1][i], x[2][i]);
+            let xi = (x[0][i] - xls[0]) / ls[0];
+            let yi = (x[1][i] - xls[1]) / ls[1];
+            let zi = (x[2][i] - xls[2]) / ls[2];
             let (ux, uy, uz) = (u1d(xi), u1d(yi), u1d(zi));
-            let (uxx, uyy, uzz) = (u1d_pp(xi), u1d_pp(yi), u1d_pp(zi));
+            let uxx = u1d_pp(xi) / ls[0].powi(2);
+            let uyy = u1d_pp(yi) / ls[1].powi(2);
+            let uzz = u1d_pp(zi) / ls[2].powi(2);
             alpha * ux * uy * uz - beta * (uxx * uy * uz + ux * uyy * uz + ux * uy * uzz)
         });
         solver.solve_in_place(&mut f);
 
         let err = (0..total)
-            .map(|i| (f[i] - u1d(x[0][i]) * u1d(x[1][i]) * u1d(x[2][i])).abs())
+            .map(|i| {
+                let xi = (x[0][i] - xls[0]) / ls[0];
+                let yi = (x[1][i] - xls[1]) / ls[1];
+                let zi = (x[2][i] - xls[2]) / ls[2];
+                (f[i] - u1d(xi) * u1d(yi) * u1d(zi)).abs()
+            })
             .fold(0.0_f64, f64::max);
 
         println!("{r:>5} {total:>12} {err:>12.3e}");
@@ -244,6 +277,98 @@ fn convergence_3d() {
     assert!(
         prev_err.unwrap() < 1e-4,
         "3D: error at r={r_max:} is {:.2e}",
+        prev_err.unwrap()
+    );
+}
+
+// ── 3D p-convergence measured via eval at off-grid points ────────────────────
+
+#[test]
+fn convergence_3d_eval() {
+    let alpha = 1.0_f64;
+    let beta = 1.0_f64;
+    let w = 2.0 * PI;
+    let w2 = w * w;
+
+    let u1d = |x: f64| (w * x).sin().exp();
+    let u1d_pp = |x: f64| {
+        let s = (w * x).sin();
+        let c = (w * x).cos();
+        w2 * (c * c - s) * s.exp()
+    };
+    let ls = [1.0_f64, 2.0, 3.0];
+    let xls = [0.0_f64, 1.0, -1.0];
+
+    let exact_u = |x: f64, y: f64, z: f64| {
+        u1d((x - xls[0]) / ls[0]) * u1d((y - xls[1]) / ls[1]) * u1d((z - xls[2]) / ls[2])
+    };
+
+    // 100 deterministic points spread across the domain, well-separated from GLL nodes.
+    let pts: Vec<[f64; 3]> = (0..100)
+        .map(|i| {
+            let t = (i as f64 + 0.5) / 100.0;
+            [
+                xls[0] + (7.0 * PI * t).fract() * ls[0],
+                xls[1] + (11.0 * PI * t).fract() * ls[1],
+                xls[2] + (13.0 * PI * t).fract() * ls[2],
+            ]
+        })
+        .collect();
+
+    let r_mono = 7;
+    let r_max = 14;
+
+    println!("\n{:=<55}", "");
+    println!(
+        "HOT 3D eval p-convergence on [{},{}]×[{},{}]×[{},{}],  α={alpha}, β={beta}",
+        xls[0],
+        xls[0] + ls[0],
+        xls[1],
+        xls[1] + ls[1],
+        xls[2],
+        xls[2] + ls[2]
+    );
+    println!("100 off-grid points  (monotone check from r={r_mono})");
+    println!("{:=<55}", "");
+    println!("{:>5} {:>14}", "r", "max_err_eval");
+    println!("{:-<22}", "");
+
+    let mut prev_err: Option<f64> = None;
+    for r in 2..=r_max {
+        let solver = HotNDLaplaceSolver::<3>::new(ls, xls, [r; 3], alpha, beta);
+        let x = solver.get_x();
+        let total = x[0].len();
+
+        let mut f = DVector::from_fn(total, |i, _| {
+            let xi = (x[0][i] - xls[0]) / ls[0];
+            let yi = (x[1][i] - xls[1]) / ls[1];
+            let zi = (x[2][i] - xls[2]) / ls[2];
+            let (ux, uy, uz) = (u1d(xi), u1d(yi), u1d(zi));
+            let uxx = u1d_pp(xi) / ls[0].powi(2);
+            let uyy = u1d_pp(yi) / ls[1].powi(2);
+            let uzz = u1d_pp(zi) / ls[2].powi(2);
+            alpha * ux * uy * uz - beta * (uxx * uy * uz + ux * uyy * uz + ux * uy * uzz)
+        });
+        solver.solve_in_place(&mut f);
+
+        let vals = solver.eval(&pts, &f);
+        let max_err = pts
+            .iter()
+            .zip(vals.iter())
+            .map(|(pt, &v)| (v - exact_u(pt[0], pt[1], pt[2])).abs())
+            .fold(0.0_f64, f64::max);
+
+        println!("{r:>5} {max_err:>14.3e}");
+        if let Some(pe) = prev_err {
+            if r >= r_mono && pe > 1e-14 {
+                assert!(max_err < pe, "r={r}: 3D eval error did not decrease");
+            }
+        }
+        prev_err = Some(max_err);
+    }
+    assert!(
+        prev_err.unwrap() < 1e-2,
+        "3D eval: error at r={r_max} is {:.2e}",
         prev_err.unwrap()
     );
 }

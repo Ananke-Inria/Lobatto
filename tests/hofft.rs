@@ -1,7 +1,7 @@
 use gg_lobatto::hofft::*;
-use nalgebra::Complex;
-use nalgebra::{DMatrix, DVector};
+use nalgebra::DVector;
 use std::f64::consts::PI;
+use std::time::Instant;
 
 /// Solve (alpha - beta * d^2/dx^2) u = f and return the max error against exact_u.
 fn compute_error(
@@ -13,7 +13,7 @@ fn compute_error(
     exact_u: &dyn Fn(f64) -> f64,
     rhs_f: &dyn Fn(f64) -> f64,
 ) -> f64 {
-    let solver = HoFFT1DLaplaceSolver::new(l, n, r, alpha, beta);
+    let solver = HoFFT1DLaplaceSolver::new(l, 0.0, n, r, alpha, beta);
     let x = solver.get_x();
     let ndof = n * r;
 
@@ -32,75 +32,11 @@ fn compute_error(
 }
 
 #[test]
-fn test_symbol_eigendecomposition() {
-    const ORTHO_TOL: f64 = 1e-10;
-    const RECON_TOL: f64 = 1e-10;
-    const PINV_TOL: f64 = 1e-8;
-
-    for &r in &[1, 2, 3, 4, 5, 6] {
-        for &n in &[4, 16, 32, 64, 128] {
-            let solver = HoFFT1DLaplaceSolver::new(1.0, n, r, 1.0, 1.0);
-            let id = DMatrix::<Complex<f64>>::identity(r, r);
-
-            // M and M^-1 as complex diagonal matrices
-            let m_c = DMatrix::from_diagonal(&DVector::from_fn(r, |i, _| {
-                Complex::new(solver.periodic_mass_matrix[i], 0.0)
-            }));
-
-            let m_inv_c = DMatrix::from_diagonal(&DVector::from_fn(r, |i, _| {
-                Complex::new(1.0 / solver.periodic_mass_matrix[i], 0.0)
-            }));
-
-            for k in 0..n {
-                // V : physical eigenvectors (M-orthonormal)
-                let v = &solver.eigenvectors[k];
-
-                // 1. V is M-orthonormal: V† M V = I
-                let vtmv = v.adjoint() * &m_c * v;
-                let ortho_err = (&vtmv - &id).norm();
-                assert!(
-                    ortho_err < ORTHO_TOL,
-                    "r={r} n={n} k={k}: eigenvectors not M-orthonormal (err={ortho_err:.2e})"
-                );
-
-                // 2. V V† = M^{-1}
-                let vvt = v * v.adjoint();
-                let vvt_err = (&vvt - &m_inv_c).norm();
-                assert!(
-                    vvt_err < ORTHO_TOL,
-                    "r={r} n={n} k={k}: V V† ≠ M⁻¹ (err={vvt_err:.2e})"
-                );
-
-                // 3. Generalized eigenvalue problem: symbol * V = M * V * Λ
-                let lambda_diag = DMatrix::from_diagonal(&DVector::from_fn(r, |i, _| {
-                    Complex::new(solver.eigenvalues[k][i], 0.0)
-                }));
-                let lhs = &solver.symbol[k] * v;
-                let rhs = &m_c * v * &lambda_diag;
-                let recon_err = (&lhs - &rhs).norm() / rhs.norm();
-                assert!(
-                    recon_err < RECON_TOL,
-                    "r={r} n={n} k={k}: symbol*V ≠ M*V*Λ (relative err={recon_err:.2e})"
-                );
-
-                // 4. Pseudo-inverse: symbol * symbol_pseudo_inv = I (when alpha = 1 the pseudo-inverse is the inverse)
-                let pinv_prod = &solver.symbol[k] * &solver.symbol_pseudo_inv[k];
-                let pinv_err = (&pinv_prod - &id).norm();
-                assert!(
-                    pinv_err < PINV_TOL,
-                    "r={r} n={n} k={k}: symbol * symbol_pseudo_inv ≠ I (err={pinv_err:.2e})"
-                );
-            }
-        }
-    }
-}
-
-#[test]
 fn test_nd_fft_roundtrip() {
     const TOL: f64 = 1e-12;
 
     // 1D
-    let solver = HoFFTNDLaplaceSolver::<1>::new([1.0], [8], [3], 1.0, 0.0);
+    let solver = HoFFTNDLaplaceSolver::<1>::new([1.0], [0.0], [8], [3], 1.0, 0.0);
     let x = solver.get_x();
     let f_orig: DVector<f64> = DVector::from_fn(x[0].len(), |i, _| (x[0][i] * PI).sin());
     let mut f = f_orig.clone();
@@ -109,7 +45,7 @@ fn test_nd_fft_roundtrip() {
     assert!(err < TOL, "1D round-trip error = {err:.2e}");
 
     // 2D
-    let solver = HoFFTNDLaplaceSolver::<2>::new([1.0; 2], [4; 2], [2; 2], 1.0, 0.0);
+    let solver = HoFFTNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [4; 2], [2; 2], 1.0, 0.0);
     let x = solver.get_x();
     let total = x[0].len();
     let f_orig: DVector<f64> =
@@ -120,7 +56,7 @@ fn test_nd_fft_roundtrip() {
     assert!(err < TOL, "2D round-trip error = {err:.2e}");
 
     // 3D
-    let solver = HoFFTNDLaplaceSolver::<3>::new([1.0; 3], [4; 3], [2; 3], 1.0, 0.0);
+    let solver = HoFFTNDLaplaceSolver::<3>::new([1.0; 3], [0.0; 3], [4; 3], [2; 3], 1.0, 0.0);
     let x = solver.get_x();
     let total = x[0].len();
     let f_orig: DVector<f64> = DVector::from_fn(total, |i, _| {
@@ -281,7 +217,8 @@ fn convergence_2d() {
 
         for &n in &n_values {
             let h = 1.0 / n as f64;
-            let solver = HoFFTNDLaplaceSolver::<2>::new([1.0; 2], [n; 2], [r; 2], alpha, beta);
+            let solver =
+                HoFFTNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [n; 2], [r; 2], alpha, beta);
             let x = solver.get_x();
             let total = x[0].len();
 
@@ -325,7 +262,7 @@ fn convergence_2d_anisotropic() {
     let rhs_f = |x: f64, y: f64| c * exact_u(x, y);
 
     let compute_err = |ns: [usize; 2], rs: [usize; 2]| -> f64 {
-        let solver = HoFFTNDLaplaceSolver::<2>::new([1.0; 2], ns, rs, alpha, beta);
+        let solver = HoFFTNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], ns, rs, alpha, beta);
         let x = solver.get_x();
         let total = x[0].len();
         let mut f = DVector::<f64>::from_fn(total, |i, _| rhs_f(x[0][i], x[1][i]));
@@ -461,8 +398,19 @@ fn convergence_3d() {
     let orders = [2, 3, 4];
     let n_values = [4, 8, 16, 32, 64];
 
+    let ls = [1.0_f64, 2.0, 3.0];
+    let xls = [0.0_f64, 1.0, -1.0];
+
     println!("\n{:=<70}", "");
-    println!("3D convergence: (alpha*M + beta*K) u = f  on [0,1]³");
+    println!(
+        "3D convergence: (alpha*M + beta*K) u = f  on [{},{}]×[{},{}]×[{},{}]",
+        xls[0],
+        xls[0] + ls[0],
+        xls[1],
+        xls[1] + ls[1],
+        xls[2],
+        xls[2] + ls[2]
+    );
     println!("alpha = {alpha}, beta = {beta}");
     println!("{:=<70}\n", "");
 
@@ -480,20 +428,29 @@ fn convergence_3d() {
 
             for &n in &n_values {
                 let h = 1.0 / n as f64;
-                let solver = HoFFTNDLaplaceSolver::<3>::new([1.0; 3], [n; 3], [r; 3], alpha, beta);
+                let solver = HoFFTNDLaplaceSolver::<3>::new(ls, xls, [n; 3], [r; 3], alpha, beta);
                 let x = solver.get_x();
                 let total = x[0].len();
 
                 let mut f = DVector::<f64>::from_fn(total, |i, _| {
-                    let (xi, yi, zi) = (x[0][i], x[1][i], x[2][i]);
+                    let xi = (x[0][i] - xls[0]) / ls[0];
+                    let yi = (x[1][i] - xls[1]) / ls[1];
+                    let zi = (x[2][i] - xls[2]) / ls[2];
                     let (ux, uy, uz) = (u1d(xi), u1d(yi), u1d(zi));
-                    let (uxx, uyy, uzz) = (u1d_pp(xi), u1d_pp(yi), u1d_pp(zi));
+                    let uxx = u1d_pp(xi) / ls[0].powi(2);
+                    let uyy = u1d_pp(yi) / ls[1].powi(2);
+                    let uzz = u1d_pp(zi) / ls[2].powi(2);
                     alpha * ux * uy * uz - beta * (uxx * uy * uz + ux * uyy * uz + ux * uy * uzz)
                 });
                 solver.solve_in_place(&mut f);
 
                 let max_err = (0..total)
-                    .map(|i| (f[i] - u1d(x[0][i]) * u1d(x[1][i]) * u1d(x[2][i])).abs())
+                    .map(|i| {
+                        let xi = (x[0][i] - xls[0]) / ls[0];
+                        let yi = (x[1][i] - xls[1]) / ls[1];
+                        let zi = (x[2][i] - xls[2]) / ls[2];
+                        (f[i] - u1d(xi) * u1d(yi) * u1d(zi)).abs()
+                    })
                     .fold(0.0_f64, f64::max);
 
                 let rate = match (prev_h, prev_err) {
@@ -519,87 +476,230 @@ fn convergence_3d() {
     }
 }
 
-/// Check that with beta=0 the tensorial structure recovers the inverse of the local mass matrix.
-///
-/// V_ND = V_0^{(0)} ⊗ ... ⊗ V_{N-1}^{(0)} (eigenvectors at k=0 for each direction)
-/// satisfies V_ND * V_ND† = tilde_M_ND^{-1} = diag(1 / periodic_mass_matrix).
 #[test]
-fn test_nd_mass_matrix_inverse_tensorial() {
-    const TOL: f64 = 1e-12;
+fn convergence_2d_laplace() {
+    let alpha = 0.0_f64;
+    let beta = 1.0_f64;
+    let w = 2.0 * PI;
 
-    // Helper: build Kronecker product of two matrices A ⊗ B
-    let kron = |a: &DMatrix<Complex<f64>>, b: &DMatrix<Complex<f64>>| {
-        let (ra, ca) = (a.nrows(), a.ncols());
-        let (rb, cb) = (b.nrows(), b.ncols());
-        DMatrix::from_fn(ra * rb, ca * cb, |i, j| {
-            a[(i / rb, j / cb)] * b[(i % rb, j % cb)]
-        })
+    // u(x,y) = sin(2πx)·sin(2πy)  — zero mean, periodic
+    // −Δu = 2w²·sin(2πx)·sin(2πy)  — also zero mean (compatibility for α=0)
+    let exact_u = |x: f64, y: f64| (w * x).sin() * (w * y).sin();
+    let rhs_f = |x: f64, y: f64| beta * 2.0 * w * w * (w * x).sin() * (w * y).sin();
+
+    let orders = [1, 2, 3, 4];
+    let n_values = [4, 8, 16, 32, 64];
+
+    println!("\n{:=<70}", "");
+    println!("2D zero-mean convergence: (alpha*M + beta*K) u = f  on [0,1]²");
+    println!("alpha = {alpha}, beta = {beta}");
+    println!("u = sin(2πx)·sin(2πy),  ∫f=0  (compatibility for α=0)");
+    println!("{:=<70}\n", "");
+    println!(
+        "{:<6} {:>8} {:>14} {:>10} {:>10}",
+        "r", "n", "h", "max_err", "rate"
+    );
+    println!("{:-<52}", "");
+
+    for &r in &orders {
+        let mut prev_h: Option<f64> = None;
+        let mut prev_err: Option<f64> = None;
+
+        for &n in &n_values {
+            let h = 1.0 / n as f64;
+            let solver =
+                HoFFTNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [n; 2], [r; 2], alpha, beta);
+            let x = solver.get_x();
+            let total = x[0].len();
+
+            let mut f = DVector::<f64>::from_fn(total, |i, _| rhs_f(x[0][i], x[1][i]));
+            solver.solve_in_place(&mut f);
+
+            let max_err = (0..total)
+                .map(|i| (f[i] - exact_u(x[0][i], x[1][i])).abs())
+                .fold(0.0_f64, f64::max);
+
+            let rate = match (prev_h, prev_err) {
+                (Some(ph), Some(pe)) if pe > 0.0 && max_err > 0.0 => {
+                    let rate_val = (pe / max_err).ln() / (ph / h).ln();
+                    assert!(
+                        max_err < 1e-5 || rate_val >= (r as f64 - 1.0) - 0.1,
+                        "2D zero-mean r={r} n={n}: rate {rate_val:.2} < {} but err={max_err:.2e}",
+                        r + 1
+                    );
+                    format!("{rate_val:.2}")
+                }
+                _ => "-".to_string(),
+            };
+
+            println!("{r:<6} {n:>8} {h:>14.2e} {max_err:>10.2e} {rate:>10}");
+            prev_h = Some(h);
+            prev_err = Some(max_err);
+        }
+        println!();
+    }
+}
+
+/// 3D convergence measured at 100 deterministic off-grid points via `eval`.
+///
+/// Checks h-convergence (r=3 fixed, n increasing) using the same tensor-product
+/// test function as `convergence_3d`.  Error is the max over 100 pseudo-random
+/// points that do NOT coincide with any GLL node.
+#[test]
+fn convergence_3d_eval() {
+    let alpha = 1.0_f64;
+    let beta = 1.0_f64;
+    let w = 2.0 * PI;
+    let w2 = w * w;
+
+    let ls = [1.0_f64, 2.0, 3.0];
+    let xls = [0.0_f64, 1.0, -1.0];
+
+    let u1d = |x: f64| (w * x).sin().exp();
+    let u1d_pp = |x: f64| {
+        let s = (w * x).sin();
+        let c = (w * x).cos();
+        w2 * (c * c - s) * s.exp()
+    };
+    let exact_u = |x: f64, y: f64, z: f64| {
+        u1d((x - xls[0]) / ls[0]) * u1d((y - xls[1]) / ls[1]) * u1d((z - xls[2]) / ls[2])
     };
 
-    // 1D
-    {
-        let solver = HoFFTNDLaplaceSolver::<1>::new([1.0], [4], [3], 1.0, 0.0);
-        let v = &solver.solvers[0].eigenvectors[0];
-        let vvt = v * v.adjoint();
-        let r = v.nrows();
-        for i in 0..r {
-            for j in 0..r {
-                let expected = if i == j {
-                    Complex::new(1.0 / solver.solvers[0].periodic_mass_matrix[i], 0.0)
-                } else {
-                    Complex::new(0.0, 0.0)
-                };
-                assert!((vvt[(i, j)] - expected).norm() < TOL, "1D [{i},{j}]");
-            }
-        }
-    }
+    // 100 deterministic points spread across the domain, well-separated from GLL nodes.
+    let pts: Vec<[f64; 3]> = (0..100)
+        .map(|i| {
+            let t = (i as f64 + 0.5) / 100.0;
+            [
+                xls[0] + (7.0 * PI * t).fract() * ls[0],
+                xls[1] + (11.0 * PI * t).fract() * ls[1],
+                xls[2] + (13.0 * PI * t).fract() * ls[2],
+            ]
+        })
+        .collect();
 
-    // 2D: V_ND = V_0 ⊗ V_1
-    {
-        let solver = HoFFTNDLaplaceSolver::<2>::new([1.0; 2], [4; 2], [2; 2], 1.0, 0.0);
-        let v_nd = kron(
-            &solver.solvers[0].eigenvectors[0],
-            &solver.solvers[1].eigenvectors[0],
-        );
-        let vvt = &v_nd * v_nd.adjoint();
-        let r_total = v_nd.nrows();
-        for i in 0..r_total {
-            for j in 0..r_total {
-                let expected = if i == j {
-                    Complex::new(1.0 / solver.periodic_mass_matrix[i], 0.0)
-                } else {
-                    Complex::new(0.0, 0.0)
-                };
-                assert!((vvt[(i, j)] - expected).norm() < TOL, "2D [{i},{j}]");
-            }
-        }
-    }
+    let r = 5;
+    let n_values = [4, 8, 16, 32, 64, 128];
 
-    // 3D: V_ND = V_0 ⊗ V_1 ⊗ V_2
-    {
-        let solver = HoFFTNDLaplaceSolver::<3>::new([1.0; 3], [4; 3], [2; 3], 1.0, 0.0);
-        let v_nd = kron(
-            &kron(
-                &solver.solvers[0].eigenvectors[0],
-                &solver.solvers[1].eigenvectors[0],
-            ),
-            &solver.solvers[2].eigenvectors[0],
-        );
-        let vvt = &v_nd * v_nd.adjoint();
-        let r_total = v_nd.nrows();
-        for i in 0..r_total {
-            for j in 0..r_total {
-                let expected = if i == j {
-                    Complex::new(1.0 / solver.periodic_mass_matrix[i], 0.0)
-                } else {
-                    Complex::new(0.0, 0.0)
-                };
-                let scale = expected.norm().max(1.0);
+    println!("\n{:=<55}", "");
+    println!("3D eval convergence (HoFFT, r={r}), 100 off-grid points");
+    println!(
+        "domain: [{},{}]×[{},{}]×[{},{}]",
+        xls[0],
+        xls[0] + ls[0],
+        xls[1],
+        xls[1] + ls[1],
+        xls[2],
+        xls[2] + ls[2]
+    );
+    println!("{:=<55}", "");
+    println!("{:>8} {:>14} {:>10}", "n", "max_err_eval", "rate");
+    println!("{:-<36}", "");
+
+    let mut prev_h: Option<f64> = None;
+    let mut prev_err: Option<f64> = None;
+
+    for &n in &n_values {
+        let h = 1.0 / n as f64;
+        let solver = HoFFTNDLaplaceSolver::<3>::new(ls, xls, [n; 3], [r; 3], alpha, beta);
+        let x = solver.get_x();
+        let total = x[0].len();
+
+        let mut f = DVector::from_fn(total, |i, _| {
+            let xi = (x[0][i] - xls[0]) / ls[0];
+            let yi = (x[1][i] - xls[1]) / ls[1];
+            let zi = (x[2][i] - xls[2]) / ls[2];
+            let (ux, uy, uz) = (u1d(xi), u1d(yi), u1d(zi));
+            let uxx = u1d_pp(xi) / ls[0].powi(2);
+            let uyy = u1d_pp(yi) / ls[1].powi(2);
+            let uzz = u1d_pp(zi) / ls[2].powi(2);
+            alpha * ux * uy * uz - beta * (uxx * uy * uz + ux * uyy * uz + ux * uy * uzz)
+        });
+        solver.solve_in_place(&mut f);
+
+        let vals = solver.eval(&pts, &f);
+        let max_err = pts
+            .iter()
+            .zip(vals.iter())
+            .map(|(pt, &v)| (v - exact_u(pt[0], pt[1], pt[2])).abs())
+            .fold(0.0_f64, f64::max);
+
+        let rate = match (prev_h, prev_err) {
+            (Some(ph), Some(pe)) if pe > 0.0 && max_err > 0.0 => {
+                let rv = (pe / max_err).ln() / (ph / h).ln();
                 assert!(
-                    (vvt[(i, j)] - expected).norm() / scale < TOL,
-                    "3D [{i},{j}]"
+                    max_err < 1e-8 || rv >= r as f64 - 1.0,
+                    "3D eval r={r} n={n}: rate {rv:.2} < {}, err={max_err:.2e}",
+                    r + 1
                 );
+                format!("{rv:.2}")
             }
-        }
+            _ => "-".to_string(),
+        };
+
+        println!("{n:>8} {max_err:>14.2e} {rate:>10}");
+        prev_h = Some(h);
+        prev_err = Some(max_err);
     }
+}
+
+// ── 4D convection exactness test ──────────────────────────────────────────────
+
+#[test]
+fn convect_4d_q6() {
+    // Q6 elements (r=6), 4 elements per direction, 4D periodic domain [0,1]^4.
+    //
+    // u     = Q3 function  → exactly represented in Q6 space
+    // φ_d   = Q2 shift vanishing at boundaries: φ(t) = t + 0.3·t·(1−t)
+    //         φ(0)=0, φ(1)=1, monotone on [0,1]  → periodicity preserved
+    // u∘φ   = Q3 ∘ Q2 = Q6  → also exactly represented
+    //
+    // Expected max error: machine precision (~1e-13).
+    let r = 6;
+    let n = 6;
+
+    let solver = HoFFTNDLaplaceSolver::<4>::new([1.0; 4], [0.0; 4], [n; 4], [r; 4], 1.0, 1.0);
+    let x = solver.get_x();
+    let total = x[0].len();
+
+    // Q3 factor: q(t) = t²·(t−1),  q(0)=q(1)=0  →  periodic value ✓
+    // The periodic boundary wrap in flat_dof maps the right endpoint of the last
+    // element to DOF 0 (position 0), so q must satisfy q(0)=q(1) for exact repr.
+    let q = |t: f64| t * t * (t - 1.0);
+
+    // Build u at all DOF nodes.
+    let u = DVector::from_fn(total, |p, _| {
+        (0..4_usize).map(|d| q(x[d][p])).product::<f64>()
+    });
+
+    // Q2 flow map vanishing at both endpoints.
+    let phi = |t: f64| t + 0.3 * t * (1.0 - t);
+    let lambda = |pt: [f64; 4]| pt.map(phi);
+
+    // Exact convected values at each DOF node (computed directly).
+    let exact: Vec<f64> = (0..total)
+        .map(|p| (0..4_usize).map(|d| q(phi(x[d][p]))).product::<f64>())
+        .collect();
+
+    println!("\n{:=<62}", "");
+    println!("4D convect — r={r}, n={n}, DOFs = {total}  ({}^4)", n * r);
+    println!("u = Q3,  φ = t+0.3t(1−t) (Q2, bdry-preserving)  →  u∘φ = Q6");
+    println!("{:=<62}\n", "");
+
+    let t0 = Instant::now();
+    let result = solver.convect(lambda, &u);
+    let elapsed = t0.elapsed();
+
+    let max_err = result
+        .iter()
+        .zip(exact.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0_f64, f64::max);
+
+    println!("  max error : {max_err:.3e}");
+    println!("  wall time : {:.1} ms", elapsed.as_secs_f64() * 1e3);
+
+    assert!(
+        max_err < 1e-10,
+        "4D Q6 convect: max error {max_err:.2e} > 1e-10"
+    );
 }

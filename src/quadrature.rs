@@ -56,7 +56,7 @@ pub fn gauss(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
 /// together with the roots of $P_{n-1}'$, the derivative of the Legendre polynomial
 /// of degree $n-1$.  The corresponding weights are:
 ///
-/// $$w_i = \frac{2}{n(n-1)\,[P_{n-1}(x_i)]^2}, \quad i = 1, \dots, n$$
+/// $$w_i = \frac{2}{n(n-1) [P_{n-1}(x_i)]^2}, \quad i = 1, \dots, n$$
 ///
 /// where the endpoint weights simplify to $w_1 = w_n = \dfrac{2}{n(n-1)}$
 /// since $P_{n-1}(\pm 1) = (\pm 1)^{n-1}$.

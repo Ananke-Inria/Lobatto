@@ -20,4 +20,5 @@ pub mod calculator;
 pub mod hc_calculations;
 pub mod hofft;
 pub mod hot;
+pub(crate) mod lagrangian_interpolation;
 pub mod quadrature;

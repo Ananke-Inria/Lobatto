@@ -10,62 +10,9 @@
 
 use std::vec;
 
+use crate::lagrangian_interpolation::lagrangian_derivative_interpolation;
 use crate::quadrature::*;
 use nalgebra::*;
-
-/// Evaluate the `i`-th Lagrange basis function at `p`.
-///
-/// The basis is built on the nodes `pos`.  `i` must be in `0..pos.len()`.
-pub fn lagrangian_interpolation(pos: &Vec<f64>, p: f64, i: usize) -> f64 {
-    let mut s = 1.0;
-    let mut d = 1.0;
-
-    for r in 0..pos.len() {
-        if r != i {
-            d *= pos[i] - pos[r];
-        }
-    }
-
-    for r in 0..pos.len() {
-        if r != i {
-            s *= p - pos[r];
-        }
-    }
-
-    debug_assert!(d != 0.0);
-
-    s / d
-}
-
-/// Evaluate the derivative of the `i`-th Lagrange basis function at `p`.
-///
-/// The basis is built on the nodes `pos`.  `i` must be in `0..pos.len()`.
-pub fn lagrangian_derivative_interpolation(pos: &Vec<f64>, p: f64, i: usize) -> f64 {
-    let mut s = 0.0;
-    let mut d = 1.0;
-
-    for r in 0..pos.len() {
-        if r != i {
-            d *= pos[i] - pos[r];
-        }
-    }
-
-    for r1 in 0..pos.len() {
-        if r1 != i {
-            let mut c = 1.0;
-            for r2 in 0..pos.len() {
-                if r2 != r1 && r2 != i {
-                    c *= p - pos[r2];
-                }
-            }
-            s += c;
-        }
-    }
-
-    debug_assert!(d != 0.0);
-
-    s / d
-}
 
 /// Multi-dimensional spectral differentiation operator on a tensor-product GLL/Gauss grid.
 ///

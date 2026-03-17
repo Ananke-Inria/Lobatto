@@ -19,8 +19,8 @@ use std::f64::consts::PI;
 use std::time::Instant;
 
 fn main() {
-    let alpha = 1.0_f64;
-    let beta = 1.0_f64;
+    let alpha = 1.0;
+    let beta = 1.0;
     let w = 2.0 * PI;
     let w2 = w * w;
 
@@ -34,13 +34,41 @@ fn main() {
         w2 * (c * c - s) * s.exp()
     };
 
+    // 1000000 deterministic off-grid evaluation points in [0,1)^5
+    let eval_hofft_pts: Vec<[f64; 5]> = (0..1000000)
+        .map(|i| {
+            let t = (i as f64 + 0.5) / 1000000.0;
+            [
+                (7.0 * PI * t).fract(),
+                (11.0 * PI * t).fract(),
+                (13.0 * PI * t).fract(),
+                (17.0 * PI * t).fract(),
+                (19.0 * PI * t).fract(),
+            ]
+        })
+        .collect();
+
+    // 1000 deterministic off-grid evaluation points in [0,1)^5
+    let eval_hot_pts: Vec<[f64; 5]> = (0..1000)
+        .map(|i| {
+            let t = (i as f64 + 0.5) / 1000.0;
+            [
+                (7.0 * PI * t).fract(),
+                (11.0 * PI * t).fract(),
+                (13.0 * PI * t).fract(),
+                (17.0 * PI * t).fract(),
+                (19.0 * PI * t).fract(),
+            ]
+        })
+        .collect();
+
     // HoFFT parameters
-    let n = 8; // elements per direction
-    let r = 5; // polynomial order per direction
+    let n = 10; // elements per direction
+    let r = 4; // polynomial order per direction
     let ndof_1d: usize = n * r;
 
     // HOT parameters: same DOF/direction
-    let r_hot = ndof_1d;
+    let r_hot = 20_usize;
 
     let ndof_hofft: usize = ndof_1d.pow(5);
     let ndof_hot: usize = r_hot.pow(5);
@@ -49,15 +77,16 @@ fn main() {
     println!("║      5-D Laplace solver comparison: HoFFT vs HoT         ║");
     println!("╚══════════════════════════════════════════════════════════╝");
     println!();
-    println!("  DOF per direction : {ndof_1d}  (HoFFT: n={n}×r={r},  HOT: r_hot={r_hot})");
-    println!("  Total DOF         : {ndof_hofft}");
+    println!("  DOF per direction : {ndof_1d}  (HoFFT: n={n}×r={r},  HoT: r_hot={r_hot})");
+    println!("  Total DOF         : (HoFFT: {ndof_hofft}, HoT: {ndof_hot})");
     println!();
 
     // ── HoFFT ─────────────────────────────────────────────────────────────────
     println!("── HoFFT (n={n}, r={r}) ──────────────────────────────────────────");
 
     let t = Instant::now();
-    let solver_hofft = HoFFTNDLaplaceSolver::<5>::new([1.0; 5], [n; 5], [r; 5], alpha, beta);
+    let solver_hofft =
+        HoFFTNDLaplaceSolver::<5>::new([1.0; 5], [0.0; 5], [n; 5], [r; 5], alpha, beta);
     let hofft_setup_ms = t.elapsed().as_secs_f64() * 1e3;
     println!("  Setup time : {hofft_setup_ms:.1} ms");
 
@@ -104,6 +133,18 @@ fn main() {
         })
         .fold(0.0_f64, f64::max);
     println!("  Max error  : {hofft_err:.3e}");
+
+    let t = Instant::now();
+    let hofft_vals = solver_hofft.eval(&eval_hofft_pts, &f_hofft);
+    let hofft_eval_err = eval_hofft_pts
+        .iter()
+        .zip(hofft_vals.iter())
+        .map(|(&[p0, p1, p2, p3, p4], &v)| {
+            (v - u1d(p0) * u1d(p1) * u1d(p2) * u1d(p3) * u1d(p4)).abs()
+        })
+        .fold(0.0_f64, f64::max);
+    let hofft_eval_ms = t.elapsed().as_secs_f64() * 1e3;
+    println!("  Eval error : {hofft_eval_err:.3e}  ({hofft_eval_ms:.2} ms for 1000000 pts)");
     println!(
         "  Total time : {:.1} ms",
         hofft_setup_ms + hofft_rhs_ms + hofft_solve_ms
@@ -114,7 +155,7 @@ fn main() {
     println!("── HoT (r_hot={r_hot}, single element) ────────────────────────────");
 
     let t = Instant::now();
-    let solver_hot = HotNDLaplaceSolver::<5>::new([1.0; 5], [r_hot; 5], alpha, beta);
+    let solver_hot = HotNDLaplaceSolver::<5>::new([1.0; 5], [0.0; 5], [r_hot; 5], alpha, beta);
     let hot_setup_ms = t.elapsed().as_secs_f64() * 1e3;
     println!("  Setup time : {hot_setup_ms:.1} ms");
 
@@ -161,6 +202,18 @@ fn main() {
         })
         .fold(0.0_f64, f64::max);
     println!("  Max error  : {hot_err:.3e}");
+
+    let t = Instant::now();
+    let hot_vals = solver_hot.eval(&eval_hot_pts, &f_hot);
+    let hot_eval_err = eval_hot_pts
+        .iter()
+        .zip(hot_vals.iter())
+        .map(|(&[p0, p1, p2, p3, p4], &v)| {
+            (v - u1d(p0) * u1d(p1) * u1d(p2) * u1d(p3) * u1d(p4)).abs()
+        })
+        .fold(0.0_f64, f64::max);
+    let hot_eval_ms = t.elapsed().as_secs_f64() * 1e3;
+    println!("  Eval error : {hot_eval_err:.3e}  ({hot_eval_ms:.2} ms for 1000 pts)");
     println!(
         "  Total time : {:.1} ms",
         hot_setup_ms + hot_rhs_ms + hot_solve_ms
@@ -170,16 +223,25 @@ fn main() {
     // ── Summary ───────────────────────────────────────────────────────────────
     println!("── Summary ────────────────────────────────────────────────────────");
     println!(
-        "  {:>10}  {:>12}  {:>12}  {:>12}  {:>12}",
-        "method", "setup (ms)", "rhs (ms)", "solve (ms)", "max err"
-    );
-    println!("  {:->10}  {:->12}  {:->12}  {:->12}  {:->12}", "", "", "", "", "");
-    println!(
-        "  {:>10}  {:>12.1}  {:>12.1}  {:>12.1}  {:>12.3e}",
-        "HoFFT", hofft_setup_ms, hofft_rhs_ms, hofft_solve_ms, hofft_err
+        "  {:>10}  {:>12}  {:>12}  {:>12}  {:>12}  {:>12}  {:>14}",
+        "method", "setup (ms)", "rhs (ms)", "solve (ms)", "max err", "eval err", "eval (ms/1000)"
     );
     println!(
-        "  {:>10}  {:>12.1}  {:>12.1}  {:>12.1}  {:>12.3e}",
-        "HoT", hot_setup_ms, hot_rhs_ms, hot_solve_ms, hot_err
+        "  {:->10}  {:->12}  {:->12}  {:->12}  {:->12}  {:->12}  {:->14}",
+        "", "", "", "", "", "", ""
+    );
+    println!(
+        "  {:>10}  {:>12.1}  {:>12.1}  {:>12.1}  {:>12.3e}  {:>12.3e}  {:>14.2}",
+        "HoFFT",
+        hofft_setup_ms,
+        hofft_rhs_ms,
+        hofft_solve_ms,
+        hofft_err,
+        hofft_eval_err,
+        hofft_eval_ms / 1000.0
+    );
+    println!(
+        "  {:>10}  {:>12.1}  {:>12.1}  {:>12.1}  {:>12.3e}  {:>12.3e}  {:>14.2}",
+        "HoT", hot_setup_ms, hot_rhs_ms, hot_solve_ms, hot_err, hot_eval_err, hot_eval_ms
     );
 }
