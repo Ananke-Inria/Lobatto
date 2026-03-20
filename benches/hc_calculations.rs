@@ -1,9 +1,9 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::hint::black_box;
 
-use gg_lobatto::calculator::*;
-use gg_lobatto::hc_calculations::*;
 use nalgebra::DVector;
+use quadratix::calculator::*;
+use quadratix::hc_calculations::*;
 
 /// Xorshift64 with a fixed seed — produces the same sequence every run,
 /// no external crate required.

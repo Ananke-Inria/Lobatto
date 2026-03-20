@@ -212,16 +212,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
-name = "gg-lobatto"
-version = "1.0.0"
-dependencies = [
- "criterion",
- "nalgebra",
- "rayon",
- "rustfft",
-]
-
-[[package]]
 name = "glam"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -538,6 +528,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ee95bc4ef87b8d5ba32e8b7714ccc834865276eab0aed5c9958d00ec45f49e8"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "quadratix"
+version = "1.0.0"
+dependencies = [
+ "criterion",
+ "nalgebra",
+ "rayon",
+ "rustfft",
 ]
 
 [[package]]

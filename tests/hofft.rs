@@ -1,5 +1,5 @@
-use gg_lobatto::hofft::*;
 use nalgebra::DVector;
+use quadratix::hofft::*;
 use std::f64::consts::PI;
 use std::time::Instant;
 
@@ -41,29 +41,43 @@ fn test_nd_fft_roundtrip() {
     let f_orig: Vec<f64> = (0..x.len()).map(|i| (x[i][0] * PI).sin()).collect();
     let mut f = f_orig.clone();
     solver.solve_in_place(&mut f);
-    let err: f64 = f.iter().zip(f_orig.iter()).map(|(a, b)| (a - b).abs()).fold(0.0_f64, f64::max);
+    let err: f64 = f
+        .iter()
+        .zip(f_orig.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0_f64, f64::max);
     assert!(err < TOL, "1D round-trip error = {err:.2e}");
 
     // 2D
     let solver = HoFFTNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [4; 2], [2; 2], 1.0, 0.0);
     let x = solver.get_x();
     let total = x.len();
-    let f_orig: Vec<f64> = (0..total).map(|i| (x[i][0] * PI).sin() * (x[i][1] * PI).cos()).collect();
+    let f_orig: Vec<f64> = (0..total)
+        .map(|i| (x[i][0] * PI).sin() * (x[i][1] * PI).cos())
+        .collect();
     let mut f = f_orig.clone();
     solver.solve_in_place(&mut f);
-    let err: f64 = f.iter().zip(f_orig.iter()).map(|(a, b)| (a - b).abs()).fold(0.0_f64, f64::max);
+    let err: f64 = f
+        .iter()
+        .zip(f_orig.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0_f64, f64::max);
     assert!(err < TOL, "2D round-trip error = {err:.2e}");
 
     // 3D
     let solver = HoFFTNDLaplaceSolver::<3>::new([1.0; 3], [0.0; 3], [4; 3], [2; 3], 1.0, 0.0);
     let x = solver.get_x();
     let total = x.len();
-    let f_orig: Vec<f64> = (0..total).map(|i| {
-        (x[i][0] * PI).sin() * (x[i][1] * PI).cos() * (x[i][2] * 2.0 * PI).sin()
-    }).collect();
+    let f_orig: Vec<f64> = (0..total)
+        .map(|i| (x[i][0] * PI).sin() * (x[i][1] * PI).cos() * (x[i][2] * 2.0 * PI).sin())
+        .collect();
     let mut f = f_orig.clone();
     solver.solve_in_place(&mut f);
-    let err: f64 = f.iter().zip(f_orig.iter()).map(|(a, b)| (a - b).abs()).fold(0.0_f64, f64::max);
+    let err: f64 = f
+        .iter()
+        .zip(f_orig.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0_f64, f64::max);
     assert!(err < TOL, "3D round-trip error = {err:.2e}");
 }
 
@@ -431,16 +445,19 @@ fn convergence_3d() {
                 let x = solver.get_x();
                 let total = x.len();
 
-                let mut f: Vec<f64> = (0..total).map(|i| {
-                    let xi = (x[i][0] - xls[0]) / ls[0];
-                    let yi = (x[i][1] - xls[1]) / ls[1];
-                    let zi = (x[i][2] - xls[2]) / ls[2];
-                    let (ux, uy, uz) = (u1d(xi), u1d(yi), u1d(zi));
-                    let uxx = u1d_pp(xi) / ls[0].powi(2);
-                    let uyy = u1d_pp(yi) / ls[1].powi(2);
-                    let uzz = u1d_pp(zi) / ls[2].powi(2);
-                    alpha * ux * uy * uz - beta * (uxx * uy * uz + ux * uyy * uz + ux * uy * uzz)
-                }).collect();
+                let mut f: Vec<f64> = (0..total)
+                    .map(|i| {
+                        let xi = (x[i][0] - xls[0]) / ls[0];
+                        let yi = (x[i][1] - xls[1]) / ls[1];
+                        let zi = (x[i][2] - xls[2]) / ls[2];
+                        let (ux, uy, uz) = (u1d(xi), u1d(yi), u1d(zi));
+                        let uxx = u1d_pp(xi) / ls[0].powi(2);
+                        let uyy = u1d_pp(yi) / ls[1].powi(2);
+                        let uzz = u1d_pp(zi) / ls[2].powi(2);
+                        alpha * ux * uy * uz
+                            - beta * (uxx * uy * uz + ux * uyy * uz + ux * uy * uzz)
+                    })
+                    .collect();
                 solver.solve_in_place(&mut f);
 
                 let max_err = (0..total)
@@ -603,16 +620,18 @@ fn convergence_3d_eval() {
         let x = solver.get_x();
         let total = x.len();
 
-        let mut f: Vec<f64> = (0..total).map(|i| {
-            let xi = (x[i][0] - xls[0]) / ls[0];
-            let yi = (x[i][1] - xls[1]) / ls[1];
-            let zi = (x[i][2] - xls[2]) / ls[2];
-            let (ux, uy, uz) = (u1d(xi), u1d(yi), u1d(zi));
-            let uxx = u1d_pp(xi) / ls[0].powi(2);
-            let uyy = u1d_pp(yi) / ls[1].powi(2);
-            let uzz = u1d_pp(zi) / ls[2].powi(2);
-            alpha * ux * uy * uz - beta * (uxx * uy * uz + ux * uyy * uz + ux * uy * uzz)
-        }).collect();
+        let mut f: Vec<f64> = (0..total)
+            .map(|i| {
+                let xi = (x[i][0] - xls[0]) / ls[0];
+                let yi = (x[i][1] - xls[1]) / ls[1];
+                let zi = (x[i][2] - xls[2]) / ls[2];
+                let (ux, uy, uz) = (u1d(xi), u1d(yi), u1d(zi));
+                let uxx = u1d_pp(xi) / ls[0].powi(2);
+                let uyy = u1d_pp(yi) / ls[1].powi(2);
+                let uzz = u1d_pp(zi) / ls[2].powi(2);
+                alpha * ux * uy * uz - beta * (uxx * uy * uz + ux * uyy * uz + ux * uy * uzz)
+            })
+            .collect();
         solver.solve_in_place(&mut f);
 
         let vals = solver.eval(&pts, &f);
@@ -666,9 +685,9 @@ fn convect_4d_q6() {
     let q = |t: f64| t * t * (t - 1.0);
 
     // Build u at all DOF nodes.
-    let u: Vec<f64> = (0..total).map(|p| {
-        (0..4_usize).map(|d| q(x[p][d])).product::<f64>()
-    }).collect();
+    let u: Vec<f64> = (0..total)
+        .map(|p| (0..4_usize).map(|d| q(x[p][d])).product::<f64>())
+        .collect();
 
     // Q2 flow map vanishing at both endpoints.
     let phi = |t: f64| t + 0.3 * t * (1.0 - t);

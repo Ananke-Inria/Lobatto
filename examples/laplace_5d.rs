@@ -11,9 +11,9 @@
 //! Run with:
 //!   cargo run --example laplace_5d --release
 
-use gg_lobatto::hofft::HoFFTNDLaplaceSolver;
-use gg_lobatto::hot::HotNDLaplaceSolver;
 use nalgebra::DVector;
+use quadratix::hofft::HoFFTNDLaplaceSolver;
+use quadratix::hot::HotNDLaplaceSolver;
 use rayon::prelude::*;
 use std::f64::consts::PI;
 use std::time::Instant;

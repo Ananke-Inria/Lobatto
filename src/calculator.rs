@@ -25,7 +25,7 @@ use nalgebra::*;
 ///
 /// # Usage
 /// ```rust
-/// use gg_lobatto::calculator::Calculator;
+/// use quadratix::calculator::Calculator;
 /// // 2D Q4 element: 5×5 GLL nodes
 /// let calc = Calculator::new(vec![(5, true), (5, true)]);
 /// ```

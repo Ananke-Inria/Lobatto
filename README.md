@@ -1,4 +1,4 @@
-# gg-lobatto
+# quadratix
 
 High-order spectral-element solvers for the periodic Laplace equation on `[0, L]^N` using Gauss-Lobatto-Legendre (GLL) quadrature.
 
@@ -34,13 +34,13 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-gg-lobatto = { path = "path/to/gg-lobatto" }
+quadratix = { path = "path/to/quadratix" }
 ```
 
 ### Quick example
 
 ```rust
-use gg_lobatto::hofft::HoFFTNDLaplaceSolver;
+use quadratix::hofft::HoFFTNDLaplaceSolver;
 
 // 3-D solver: 8 elements × order 4, domain [0, 1]^3
 let alpha = 1.0;

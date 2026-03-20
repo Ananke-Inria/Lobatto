@@ -1,6 +1,6 @@
-use gg_lobatto::calculator::*;
-use gg_lobatto::hc_calculations::*;
 use nalgebra::DVector;
+use quadratix::calculator::*;
+use quadratix::hc_calculations::*;
 
 /// Xorshift64 with a fixed seed — same sequence as benchmarks.
 fn seeded_vec(n: usize) -> Vec<f64> {
@@ -70,7 +70,11 @@ fn gll_batch_ref(
     for i in 0..n {
         let s = dofs * i;
         let mut v = DVector::zeros(dofs);
-        gle.diff(dir, &DVector::from_row_slice(&v_in_aos[s..s + dofs]), &mut v);
+        gle.diff(
+            dir,
+            &DVector::from_row_slice(&v_in_aos[s..s + dofs]),
+            &mut v,
+        );
         out[s..s + dofs].copy_from_slice(v.as_slice());
     }
     out

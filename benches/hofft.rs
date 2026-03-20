@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use gg_lobatto::hofft::*;
 use nalgebra::DVector;
+use quadratix::hofft::*;
 use std::f64::consts::PI;
 use std::hint::black_box;
 
@@ -73,18 +73,20 @@ fn bench_solve_in_place_2d(c: &mut Criterion) {
                 HoFFTNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [n; 2], [r; 2], alpha, beta);
             let x = solver.get_x();
 
-            let f_init: Vec<f64> = (0..ndof).map(|i| {
-                let (xi, yi) = (x[i][0], x[i][1]);
-                let rhs_1d = |t: f64| {
-                    let s = (w * t).sin();
-                    let cv = (w * t).cos();
-                    let u = s.exp();
-                    alpha * u - beta * w * w * (cv * cv - s) * u
-                };
-                let ux = (w * xi).sin().exp();
-                let uy = (w * yi).sin().exp();
-                rhs_1d(xi) * uy + ux * rhs_1d(yi) - alpha * ux * uy
-            }).collect();
+            let f_init: Vec<f64> = (0..ndof)
+                .map(|i| {
+                    let (xi, yi) = (x[i][0], x[i][1]);
+                    let rhs_1d = |t: f64| {
+                        let s = (w * t).sin();
+                        let cv = (w * t).cos();
+                        let u = s.exp();
+                        alpha * u - beta * w * w * (cv * cv - s) * u
+                    };
+                    let ux = (w * xi).sin().exp();
+                    let uy = (w * yi).sin().exp();
+                    rhs_1d(xi) * uy + ux * rhs_1d(yi) - alpha * ux * uy
+                })
+                .collect();
 
             for &threads in thread_counts {
                 let pool = rayon::ThreadPoolBuilder::new()
@@ -128,22 +130,24 @@ fn bench_solve_in_place_3d(c: &mut Criterion) {
                 HoFFTNDLaplaceSolver::<3>::new([1.0; 3], [0.0; 3], [n; 3], [r; 3], alpha, beta);
             let x = solver.get_x();
 
-            let f_init: Vec<f64> = (0..ndof).map(|i| {
-                let (xi, yi, zi) = (x[i][0], x[i][1], x[i][2]);
-                let rhs_1d = |t: f64| {
-                    let s = (w * t).sin();
-                    let cv = (w * t).cos();
-                    let u = s.exp();
-                    alpha * u - beta * w * w * (cv * cv - s) * u
-                };
-                let (ux, uy, uz) = (
-                    (w * xi).sin().exp(),
-                    (w * yi).sin().exp(),
-                    (w * zi).sin().exp(),
-                );
-                rhs_1d(xi) * uy * uz + ux * rhs_1d(yi) * uz + ux * uy * rhs_1d(zi)
-                    - 2.0 * alpha * ux * uy * uz
-            }).collect();
+            let f_init: Vec<f64> = (0..ndof)
+                .map(|i| {
+                    let (xi, yi, zi) = (x[i][0], x[i][1], x[i][2]);
+                    let rhs_1d = |t: f64| {
+                        let s = (w * t).sin();
+                        let cv = (w * t).cos();
+                        let u = s.exp();
+                        alpha * u - beta * w * w * (cv * cv - s) * u
+                    };
+                    let (ux, uy, uz) = (
+                        (w * xi).sin().exp(),
+                        (w * yi).sin().exp(),
+                        (w * zi).sin().exp(),
+                    );
+                    rhs_1d(xi) * uy * uz + ux * rhs_1d(yi) * uz + ux * uy * rhs_1d(zi)
+                        - 2.0 * alpha * ux * uy * uz
+                })
+                .collect();
 
             for &threads in thread_counts {
                 let pool = rayon::ThreadPoolBuilder::new()

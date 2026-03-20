@@ -1,5 +1,5 @@
-use gg_lobatto::hot::*;
 use nalgebra::DVector;
+use quadratix::hot::*;
 use std::f64::consts::PI;
 
 // ── 1D p-convergence ─────────────────────────────────────────────────────────
@@ -245,16 +245,18 @@ fn convergence_3d() {
         let x = solver.get_x();
         let total = x.len();
 
-        let mut f: Vec<f64> = (0..total).map(|i| {
-            let xi = (x[i][0] - xls[0]) / ls[0];
-            let yi = (x[i][1] - xls[1]) / ls[1];
-            let zi = (x[i][2] - xls[2]) / ls[2];
-            let (ux, uy, uz) = (u1d(xi), u1d(yi), u1d(zi));
-            let uxx = u1d_pp(xi) / ls[0].powi(2);
-            let uyy = u1d_pp(yi) / ls[1].powi(2);
-            let uzz = u1d_pp(zi) / ls[2].powi(2);
-            alpha * ux * uy * uz - beta * (uxx * uy * uz + ux * uyy * uz + ux * uy * uzz)
-        }).collect();
+        let mut f: Vec<f64> = (0..total)
+            .map(|i| {
+                let xi = (x[i][0] - xls[0]) / ls[0];
+                let yi = (x[i][1] - xls[1]) / ls[1];
+                let zi = (x[i][2] - xls[2]) / ls[2];
+                let (ux, uy, uz) = (u1d(xi), u1d(yi), u1d(zi));
+                let uxx = u1d_pp(xi) / ls[0].powi(2);
+                let uyy = u1d_pp(yi) / ls[1].powi(2);
+                let uzz = u1d_pp(zi) / ls[2].powi(2);
+                alpha * ux * uy * uz - beta * (uxx * uy * uz + ux * uyy * uz + ux * uy * uzz)
+            })
+            .collect();
         solver.solve_in_place(&mut f);
 
         let err = (0..total)
@@ -339,16 +341,18 @@ fn convergence_3d_eval() {
         let x = solver.get_x();
         let total = x.len();
 
-        let mut f: Vec<f64> = (0..total).map(|i| {
-            let xi = (x[i][0] - xls[0]) / ls[0];
-            let yi = (x[i][1] - xls[1]) / ls[1];
-            let zi = (x[i][2] - xls[2]) / ls[2];
-            let (ux, uy, uz) = (u1d(xi), u1d(yi), u1d(zi));
-            let uxx = u1d_pp(xi) / ls[0].powi(2);
-            let uyy = u1d_pp(yi) / ls[1].powi(2);
-            let uzz = u1d_pp(zi) / ls[2].powi(2);
-            alpha * ux * uy * uz - beta * (uxx * uy * uz + ux * uyy * uz + ux * uy * uzz)
-        }).collect();
+        let mut f: Vec<f64> = (0..total)
+            .map(|i| {
+                let xi = (x[i][0] - xls[0]) / ls[0];
+                let yi = (x[i][1] - xls[1]) / ls[1];
+                let zi = (x[i][2] - xls[2]) / ls[2];
+                let (ux, uy, uz) = (u1d(xi), u1d(yi), u1d(zi));
+                let uxx = u1d_pp(xi) / ls[0].powi(2);
+                let uyy = u1d_pp(yi) / ls[1].powi(2);
+                let uzz = u1d_pp(zi) / ls[2].powi(2);
+                alpha * ux * uy * uz - beta * (uxx * uy * uz + ux * uyy * uz + ux * uy * uzz)
+            })
+            .collect();
         solver.solve_in_place(&mut f);
 
         let vals = solver.eval(&pts, &f);

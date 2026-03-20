@@ -1,4 +1,4 @@
-use gg_lobatto::quadrature::*;
+use quadratix::quadrature::*;
 
 #[test]
 fn test_gauss_quadrature() {

@@ -1,4 +1,4 @@
-//! # gg-lobatto
+//! # quadratix
 //!
 //! High-order spectral-element solvers for the periodic Laplace equation
 //!
