@@ -66,8 +66,8 @@ fn bench_hot_solve_in_place_2d(c: &mut Criterion) {
         let solver = HotNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [r; 2], alpha, beta);
         let x = solver.get_x();
 
-        let f_init = DVector::from_fn(ndof, |i, _| {
-            let (xi, yi) = (x[0][i], x[1][i]);
+        let f_init: Vec<f64> = (0..ndof).map(|i| {
+            let (xi, yi) = (x[i][0], x[i][1]);
             let rhs_1d = |t: f64| {
                 let s = (w * t).sin();
                 let cv = (w * t).cos();
@@ -77,7 +77,7 @@ fn bench_hot_solve_in_place_2d(c: &mut Criterion) {
             let ux = (w * xi).sin().exp();
             let uy = (w * yi).sin().exp();
             rhs_1d(xi) * uy + ux * rhs_1d(yi) - alpha * ux * uy
-        });
+        }).collect();
 
         for &threads in thread_counts {
             let pool = rayon::ThreadPoolBuilder::new()
@@ -114,8 +114,8 @@ fn bench_hot_solve_in_place_3d(c: &mut Criterion) {
         let solver = HotNDLaplaceSolver::<3>::new([1.0; 3], [0.0; 3], [r; 3], alpha, beta);
         let x = solver.get_x();
 
-        let f_init = DVector::from_fn(ndof, |i, _| {
-            let (xi, yi, zi) = (x[0][i], x[1][i], x[2][i]);
+        let f_init: Vec<f64> = (0..ndof).map(|i| {
+            let (xi, yi, zi) = (x[i][0], x[i][1], x[i][2]);
             let rhs_1d = |t: f64| {
                 let s = (w * t).sin();
                 let cv = (w * t).cos();
@@ -129,7 +129,7 @@ fn bench_hot_solve_in_place_3d(c: &mut Criterion) {
             );
             rhs_1d(xi) * uy * uz + ux * rhs_1d(yi) * uz + ux * uy * rhs_1d(zi)
                 - 2.0 * alpha * ux * uy * uz
-        });
+        }).collect();
 
         for &threads in thread_counts {
             let pool = rayon::ThreadPoolBuilder::new()

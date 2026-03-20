@@ -218,18 +218,15 @@ impl<const N: usize> HotNDLaplaceSolver<N> {
         }
     }
 
-    /// Return the tensor-product grid as `N` coordinate vectors, each of length
-    /// `∏_d r_d`.
+    /// Return the tensor-product grid as a `Vec<[f64; N]>` of length `∏_d r_d`.
     ///
-    /// Point `p` has coordinates `(result[0][p], …, result[N-1][p])`.
+    /// Point `p` has coordinates `result[p][d]` for `d in 0..N`.
     /// The first direction (x) varies fastest.
-    pub fn get_x(&self) -> [DVector<f64>; N] {
+    pub fn get_x(&self) -> Vec<[f64; N]> {
         let x1d: [DVector<f64>; N] = std::array::from_fn(|d| self.solvers[d].get_x());
-        std::array::from_fn(|d| {
-            DVector::from_fn(self.r_total, |p, _| {
-                x1d[d][(p / self.local_strides[d]) % self.rs[d]]
-            })
-        })
+        (0..self.r_total)
+            .map(|p| std::array::from_fn(|d| x1d[d][(p / self.local_strides[d]) % self.rs[d]]))
+            .collect()
     }
 
     /// Solve `(α M + β K) u = f` in place using the ND HoT algorithm.
@@ -243,7 +240,7 @@ impl<const N: usize> HotNDLaplaceSolver<N> {
     /// - Eigenvector transforms (steps a and c): parallel over independent fibers
     ///   via Rayon; fiber disjointness is guaranteed by the tensor-product structure
     ///   of `flat_base`, enabling safe use of raw-pointer aliasing.
-    pub fn solve_in_place(&self, f: &mut DVector<f64>) {
+    pub fn solve_in_place(&self, f: &mut Vec<f64>) {
         // Step 0: multiply by diagonal ND mass matrix (trivially parallel)
         f.as_mut_slice()
             .par_iter_mut()
@@ -323,7 +320,7 @@ impl<const N: usize> HotNDLaplaceSolver<N> {
     /// `r^N + r^{N-1} + …` against the contiguous `u` array (no gather step: HoT uses a single
     /// element so `u` is already a dense tensor-product array with dim 0 varying fastest).
     /// Points are processed in parallel with Rayon.
-    pub fn eval(&self, xs: &[[f64; N]], u: &DVector<f64>) -> Vec<f64> {
+    pub fn eval(&self, xs: &[[f64; N]], u: &Vec<f64>) -> Vec<f64> {
         let u_slice = u.as_slice();
 
         xs.par_iter()

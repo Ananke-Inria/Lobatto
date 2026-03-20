@@ -1,8 +1,16 @@
 //! High-order FFT (HoFFT) solver for the periodic Laplace equation.
 //!
+//! $n$ elements of polynomial order $r$ in $\[0,L\]$.
+//!
+//! Solves $$ \alpha u - \beta \Delta u = f $$ with periodic boundary conditions using:
+//!
 //! Solves (α M + β K) u = f` on `[0, L]^N` with periodic boundary conditions
 //! using a spectral-element discretisation: *n* elements of polynomial order *r*
 //! per direction, so each direction has `n·r` DOFs.
+//!
+//! Algorithm based on
+//!
+//! - \[1\] Caforio, F. and Imperiale, S. (2019). *High-order discrete fourier transform for the solution of the Poisson equation*. SIAM Journal of Scientific Computing, 41(5), 2747-2771
 //!
 //! ## Algorithm (1D outline)
 //!
@@ -31,9 +39,7 @@ use std::sync::Arc;
 use nalgebra::*;
 use rustfft::*;
 
-/// 1D HoFFT Laplace solver: $n$ elements of polynomial order $r$ in $\[0,L\]$.
-///
-/// Solves $$ \alpha u - \beta \Delta u = f $$ with periodic boundary conditions using:
+/// 1D HoFFT Laplace solver:
 /// - a GLL spectral-element discretisation with *n* elements of order *r*,
 /// - FFT diagonalisation over the *n* element-to-element coupling modes,
 /// - per-mode *r×r* Hermitian eigendecomposition for the local solve.
@@ -184,9 +190,9 @@ impl HoFFT1DLaplaceSolver {
 
     /// GLL nodes on `[xl, xl+l]`, length `n * r`, ordered by local node then element:
     /// `x[j * n + k]` = position of local node `j` in element `k`.
-    pub fn get_x(&self) -> DVector<f64> {
+    pub fn get_x(&self) -> Vec<f64> {
         let h = self.l / (self.n as f64);
-        let mut x = DVector::<f64>::zeros(self.n * self.r);
+        let mut x = vec![0.0_f64; self.n * self.r];
         for k in 0..self.n {
             for j in 0..self.r {
                 x[j * self.n + k] =
@@ -398,18 +404,16 @@ impl<const N: usize> HoFFTNDLaplaceSolver<N> {
         }
     }
 
-    /// Return the tensor-product grid as `N` coordinate vectors, each of length
+    /// Return the tensor-product grid as a `Vec<[f64; N]>` of length
     /// `total_ndof = ∏_d (n_d * r_d)`.
     ///
-    /// Point `p` has coordinates `(result[0][p], …, result[N-1][p])`.
+    /// Point `p` has coordinates `result[p][d]` for `d in 0..N`.
     /// The first direction (x) varies fastest.
-    pub fn get_x(&self) -> [DVector<f64>; N] {
-        let x1d: [DVector<f64>; N] = std::array::from_fn(|d| self.solvers[d].get_x());
-        std::array::from_fn(|d| {
-            DVector::from_fn(self.total, |p, _| {
-                x1d[d][(p / self.strides[d]) % self.ndofs[d]]
-            })
-        })
+    pub fn get_x(&self) -> Vec<[f64; N]> {
+        let x1d: [Vec<f64>; N] = std::array::from_fn(|d| self.solvers[d].get_x());
+        (0..self.total)
+            .map(|p| std::array::from_fn(|d| x1d[d][(p / self.strides[d]) % self.ndofs[d]]))
+            .collect()
     }
 
     /// Solve `(α M + β K) u = f` in place using the ND HoFFT algorithm.
@@ -418,7 +422,7 @@ impl<const N: usize> HoFFTNDLaplaceSolver<N> {
     /// returned by [`HoFFTNDLaplaceSolver::get_x`].
     /// On output, `f` contains the FEM solution `u` at the same grid.
     ///
-    pub fn solve_in_place(&self, f: &mut DVector<f64>) {
+    pub fn solve_in_place(&self, f: &mut Vec<f64>) {
         // Build g with mass scaling (parallel, no unsafe)
         let mut g: Vec<Complex<f64>> = f
             .as_slice()
@@ -568,7 +572,7 @@ impl<const N: usize> HoFFTNDLaplaceSolver<N> {
     ///    read the `(r_0+1)·…·(r_{N-1}+1)` scattered DOF values into a contiguous array **once**,
     ///    then all such points evaluate from the cache-hot local patch.
     /// 3. **Rayon**: element groups are processed in parallel.
-    pub fn eval(&self, xs: &[[f64; N]], u: &DVector<f64>) -> Vec<f64> {
+    pub fn eval(&self, xs: &[[f64; N]], u: &Vec<f64>) -> Vec<f64> {
         // Step 1: compute element index for each point (parallel).
         let k: Vec<usize> = xs.par_iter().map(|x| self.element_index(x)).collect();
 
@@ -653,16 +657,12 @@ impl<const N: usize> HoFFTNDLaplaceSolver<N> {
     /// Returns a `Vec<f64>` of length equal to the number of DOFs: entry `p`
     /// is `u(lambda(x_p))`, i.e. the interpolated value of `u` at the image
     /// of the `p`-th DOF node under the flow map.
-    pub fn convect<F>(&self, lambda: F, u: &DVector<f64>) -> Vec<f64>
+    pub fn convect<F>(&self, lambda: F, u: &Vec<f64>) -> Vec<f64>
     where
         F: Fn([f64; N]) -> [f64; N] + Sync,
     {
         // Build the full tensor-product grid as a Vec<[f64; N]>.
-        let x = self.get_x();
-        let total = x[0].len();
-        let xs: Vec<[f64; N]> = (0..total)
-            .map(|p| std::array::from_fn(|d| x[d][p]))
-            .collect();
+        let xs = self.get_x();
 
         // Apply the flow map to every node, then interpolate u at those positions.
         let shifted: Vec<[f64; N]> = xs.par_iter().map(|&pt| lambda(pt)).collect();

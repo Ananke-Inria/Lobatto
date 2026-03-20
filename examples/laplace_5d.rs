@@ -92,28 +92,20 @@ fn main() {
 
     let t = Instant::now();
     let x_hofft = solver_hofft.get_x();
-    let mut f_hofft = DVector::from_vec(
-        (0..ndof_hofft)
-            .into_par_iter()
-            .map(|i| {
-                let (x0, x1, x2, x3, x4) = (
-                    x_hofft[0][i],
-                    x_hofft[1][i],
-                    x_hofft[2][i],
-                    x_hofft[3][i],
-                    x_hofft[4][i],
-                );
-                let u = u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4);
-                alpha * u
-                    - beta
-                        * (u1d_pp(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4)
-                            + u1d(x0) * u1d_pp(x1) * u1d(x2) * u1d(x3) * u1d(x4)
-                            + u1d(x0) * u1d(x1) * u1d_pp(x2) * u1d(x3) * u1d(x4)
-                            + u1d(x0) * u1d(x1) * u1d(x2) * u1d_pp(x3) * u1d(x4)
-                            + u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d_pp(x4))
-            })
-            .collect::<Vec<_>>(),
-    );
+    let mut f_hofft: Vec<f64> = (0..ndof_hofft)
+        .into_par_iter()
+        .map(|i| {
+            let [x0, x1, x2, x3, x4] = x_hofft[i];
+            let u = u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4);
+            alpha * u
+                - beta
+                    * (u1d_pp(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4)
+                        + u1d(x0) * u1d_pp(x1) * u1d(x2) * u1d(x3) * u1d(x4)
+                        + u1d(x0) * u1d(x1) * u1d_pp(x2) * u1d(x3) * u1d(x4)
+                        + u1d(x0) * u1d(x1) * u1d(x2) * u1d_pp(x3) * u1d(x4)
+                        + u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d_pp(x4))
+        })
+        .collect();
     let hofft_rhs_ms = t.elapsed().as_secs_f64() * 1e3;
     println!("  RHS build  : {hofft_rhs_ms:.1} ms");
 
@@ -124,11 +116,8 @@ fn main() {
 
     let hofft_err = (0..ndof_hofft)
         .map(|i| {
-            let u_ex = u1d(x_hofft[0][i])
-                * u1d(x_hofft[1][i])
-                * u1d(x_hofft[2][i])
-                * u1d(x_hofft[3][i])
-                * u1d(x_hofft[4][i]);
+            let [x0, x1, x2, x3, x4] = x_hofft[i];
+            let u_ex = u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4);
             (f_hofft[i] - u_ex).abs()
         })
         .fold(0.0_f64, f64::max);
@@ -161,28 +150,20 @@ fn main() {
 
     let t = Instant::now();
     let x_hot = solver_hot.get_x();
-    let mut f_hot = DVector::from_vec(
-        (0..ndof_hot)
-            .into_par_iter()
-            .map(|i| {
-                let (x0, x1, x2, x3, x4) = (
-                    x_hot[0][i],
-                    x_hot[1][i],
-                    x_hot[2][i],
-                    x_hot[3][i],
-                    x_hot[4][i],
-                );
-                let u = u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4);
-                alpha * u
-                    - beta
-                        * (u1d_pp(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4)
-                            + u1d(x0) * u1d_pp(x1) * u1d(x2) * u1d(x3) * u1d(x4)
-                            + u1d(x0) * u1d(x1) * u1d_pp(x2) * u1d(x3) * u1d(x4)
-                            + u1d(x0) * u1d(x1) * u1d(x2) * u1d_pp(x3) * u1d(x4)
-                            + u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d_pp(x4))
-            })
-            .collect::<Vec<_>>(),
-    );
+    let mut f_hot: Vec<f64> = (0..ndof_hot)
+        .into_par_iter()
+        .map(|i| {
+            let [x0, x1, x2, x3, x4] = x_hot[i];
+            let u = u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4);
+            alpha * u
+                - beta
+                    * (u1d_pp(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4)
+                        + u1d(x0) * u1d_pp(x1) * u1d(x2) * u1d(x3) * u1d(x4)
+                        + u1d(x0) * u1d(x1) * u1d_pp(x2) * u1d(x3) * u1d(x4)
+                        + u1d(x0) * u1d(x1) * u1d(x2) * u1d_pp(x3) * u1d(x4)
+                        + u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d_pp(x4))
+        })
+        .collect();
     let hot_rhs_ms = t.elapsed().as_secs_f64() * 1e3;
     println!("  RHS build  : {hot_rhs_ms:.1} ms");
 
@@ -193,11 +174,8 @@ fn main() {
 
     let hot_err = (0..ndof_hot)
         .map(|i| {
-            let u_ex = u1d(x_hot[0][i])
-                * u1d(x_hot[1][i])
-                * u1d(x_hot[2][i])
-                * u1d(x_hot[3][i])
-                * u1d(x_hot[4][i]);
+            let [x0, x1, x2, x3, x4] = x_hot[i];
+            let u_ex = u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4);
             (f_hot[i] - u_ex).abs()
         })
         .fold(0.0_f64, f64::max);

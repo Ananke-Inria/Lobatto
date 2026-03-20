@@ -1,6 +1,51 @@
-//! Gauss and Gauss-Lobatto quadrature rules on [-1, 1] and [0, 1].
+//! Gauss–Legendre (GL) and Gauss–Lobatto–Legendre (GLL) quadrature rules on `[-1, 1]` and `[0, 1]`.
 //!
-//! Algorithms are based on:
+//! Both rules integrate polynomials exactly and are based on Legendre polynomials,
+//! but differ in whether the endpoints are included as nodes.
+//!
+//! # Gauss–Legendre (GL)
+//!
+//! An $n$-point GL rule integrates polynomials of degree up to $2n-1$ exactly — the
+//! maximum possible for $n$ free nodes.  The nodes are the roots of $P_n$, the Legendre
+//! polynomial of degree $n$, and the weights are:
+//! $$w_i = \frac{2}{(1 - x_i^2) [\frac{d}{dx} P_n(x_i)]^2}, \quad i = 1, \dots, n.$$
+//! No node coincides with an endpoint. Hard-coded exact values:
+//!
+//! | $n$ | nodes | weights |
+//! |-----|-------|---------|
+//! | 1 | $0$ | $2$ |
+//! | 2 | $\pm 1/\sqrt{3}$ | $1, 1$ |
+//! | 3 | $0,\ \pm\sqrt{3/5}$ | $8/9,\ 5/9,\ 8/9$ |
+//!
+//! # Gauss–Lobatto–Legendre (GLL)
+//!
+//! An $n$-point GLL rule ($n \ge 2$) integrates polynomials of degree up to $2n-3$ exactly —
+//! two less than GL for the same $n$, the price of forcing the endpoints $\pm 1$ as nodes.
+//! The interior nodes are the roots of $\frac{d}{dx} P_{n-1}$, the derivative of the Legendre polynomial
+//! of degree $n-1$, and the weights are:
+//! $$w_i = \frac{2}{n(n-1) [P_{n-1}(x_i)]^2}, \quad i = 1, \dots, n,$$
+//! with the endpoint weights simplifying to $w_1 = w_n = 2/[n(n-1)]$ since
+//! $P_{n-1}(\pm 1) = (\pm 1)^{n-1}$.  Hard-coded exact values:
+//!
+//! | $n$ | nodes | weights |
+//! |-----|-------|---------|
+//! | 2 | $\pm 1$ | $1, 1$ |
+//! | 3 | $-1,\ 0,\ 1$ | $1/3,\ 4/3,\ 1/3$ |
+//! | 4 | $-1,\ \pm\sqrt{1/5},\ 1$ | $1/6,\ 5/6,\ 5/6,\ 1/6$ |
+//!
+//! # Comparison
+//!
+//! | Property | GL ($n$ points) | GLL ($n$ points) |
+//! |----------|-----------------|------------------|
+//! | Exactness degree | $2n-1$ | $2n-3$ |
+//! | Endpoints included | No | Yes ($\pm 1$) |
+//! | Interior nodes | roots of $P_n$ | roots of $\frac{d}{dx}P_{n-1}$ |
+//! | Minimum $n$ | 1 | 2 |
+//!
+//! # Algorithms
+//!
+//! Node positions are computed via Newton's method on the Fourier–cosine representation
+//! $P_n(\cos\theta) = \sum_k a_{n,k} \cos(k\theta)$, following:
 //!
 //! - \[1\] Swarztrauber, P. N. (2002). *On computing the points and weights for
 //!   Gauss–Legendre quadrature*. SIAM Journal of Scientific Computing, 24(3), 945–954.
@@ -9,9 +54,7 @@
 
 /// Compute `n_quad_points`-point Gauss-Legendre quadrature on [-1, 1].
 ///
-/// Returns `(points, weights)` with `points` sorted in increasing order.
-/// Exact closed-form expressions are used for 1, 2, and 3 points; the general
-/// case uses Newton's method on the Fourier representation of Legendre polynomials.
+/// Returns `(points, weights)` with `points` sorted in increasing order. Exact closed-form expressions are used for 1, 2, and 3 points.
 ///
 /// # Panics
 /// Panics if `n_quad_points == 0`.
@@ -45,21 +88,8 @@ pub fn gauss(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
 }
 
 /// Compute `n_quad_points`-point Gauss-Lobatto-Legendre (GLL) quadrature on [-1, 1].
-///
-/// GLL quadrature includes the endpoints ±1 as nodes, which makes it well-suited
-/// for finite-element assembly (shared boundary DOFs). Returns `(points, weights)`
-/// with `points` sorted in increasing order.
-/// Exact closed-form expressions are used for 2, 3, and 4 points; the general
-/// case uses Newton's method on the derivative of the Legendre polynomial.
-///
-/// The nodes $x_1 = -1 < x_2 < \cdots < x_{n-1} < x_n = 1$ are the endpoints
-/// together with the roots of $P_{n-1}'$, the derivative of the Legendre polynomial
-/// of degree $n-1$.  The corresponding weights are:
-///
-/// $$w_i = \frac{2}{n(n-1) [P_{n-1}(x_i)]^2}, \quad i = 1, \dots, n$$
-///
-/// where the endpoint weights simplify to $w_1 = w_n = \dfrac{2}{n(n-1)}$
-/// since $P_{n-1}(\pm 1) = (\pm 1)^{n-1}$.
+/// `points` sorted in increasing order.
+/// Exact closed-form expressions are used for 2, 3, and 4 points.
 ///
 /// # Panics
 /// Panics if `n_quad_points < 2` (GLL requires at least the two endpoints).
@@ -97,7 +127,6 @@ pub fn gauss_lobatto(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
 /// GLL quadrature on the unit interval [0, 1].
 ///
 /// Equivalent to [`gauss_lobatto`] with the affine change of variable `x = (t+1)/2`.
-/// Returns `(points, weights)` with `points ∈ [0, 1]` and `sum(weights) == 1`.
 pub fn gauss_lobatto_on_unit_interval(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     let mut points: Vec<f64>;
     let mut weights: Vec<f64>;
@@ -113,7 +142,6 @@ pub fn gauss_lobatto_on_unit_interval(n_quad_points: usize) -> (Vec<f64>, Vec<f6
 /// Gauss-Legendre quadrature on the unit interval [0, 1].
 ///
 /// Equivalent to [`gauss`] with the affine change of variable `x = (t+1)/2`.
-/// Returns `(points, weights)` with `points ∈ (0, 1)` and `sum(weights) == 1`.
 pub fn gauss_on_unit_interval(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     let mut points: Vec<f64>;
     let mut weights: Vec<f64>;

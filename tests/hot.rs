@@ -128,11 +128,11 @@ fn convergence_2d() {
     for r in 2..=r_max {
         let solver = HotNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [r; 2], alpha, beta);
         let x = solver.get_x();
-        let total = x[0].len();
-        let mut f = DVector::from_fn(total, |i, _| rhs_f(x[0][i], x[1][i]));
+        let total = x.len();
+        let mut f: Vec<f64> = (0..total).map(|i| rhs_f(x[i][0], x[i][1])).collect();
         solver.solve_in_place(&mut f);
         let err = (0..total)
-            .map(|i| (f[i] - exact_u(x[0][i], x[1][i])).abs())
+            .map(|i| (f[i] - exact_u(x[i][0], x[i][1])).abs())
             .fold(0.0_f64, f64::max);
 
         println!("{r:>5} {total:>10} {err:>12.3e}");
@@ -177,11 +177,11 @@ fn convergence_2d_laplace() {
     for r in 2..=r_max {
         let solver = HotNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [r; 2], alpha, beta);
         let x = solver.get_x();
-        let total = x[0].len();
-        let mut f = DVector::from_fn(total, |i, _| rhs_f(x[0][i], x[1][i]));
+        let total = x.len();
+        let mut f: Vec<f64> = (0..total).map(|i| rhs_f(x[i][0], x[i][1])).collect();
         solver.solve_in_place(&mut f);
         let err = (0..total)
-            .map(|i| (f[i] - exact_u(x[0][i], x[1][i])).abs())
+            .map(|i| (f[i] - exact_u(x[i][0], x[i][1])).abs())
             .fold(0.0_f64, f64::max);
 
         println!("{r:>5} {total:>10} {err:>12.3e}");
@@ -243,25 +243,25 @@ fn convergence_3d() {
     for r in 2..=r_max {
         let solver = HotNDLaplaceSolver::<3>::new(ls, xls, [r; 3], alpha, beta);
         let x = solver.get_x();
-        let total = x[0].len();
+        let total = x.len();
 
-        let mut f = DVector::from_fn(total, |i, _| {
-            let xi = (x[0][i] - xls[0]) / ls[0];
-            let yi = (x[1][i] - xls[1]) / ls[1];
-            let zi = (x[2][i] - xls[2]) / ls[2];
+        let mut f: Vec<f64> = (0..total).map(|i| {
+            let xi = (x[i][0] - xls[0]) / ls[0];
+            let yi = (x[i][1] - xls[1]) / ls[1];
+            let zi = (x[i][2] - xls[2]) / ls[2];
             let (ux, uy, uz) = (u1d(xi), u1d(yi), u1d(zi));
             let uxx = u1d_pp(xi) / ls[0].powi(2);
             let uyy = u1d_pp(yi) / ls[1].powi(2);
             let uzz = u1d_pp(zi) / ls[2].powi(2);
             alpha * ux * uy * uz - beta * (uxx * uy * uz + ux * uyy * uz + ux * uy * uzz)
-        });
+        }).collect();
         solver.solve_in_place(&mut f);
 
         let err = (0..total)
             .map(|i| {
-                let xi = (x[0][i] - xls[0]) / ls[0];
-                let yi = (x[1][i] - xls[1]) / ls[1];
-                let zi = (x[2][i] - xls[2]) / ls[2];
+                let xi = (x[i][0] - xls[0]) / ls[0];
+                let yi = (x[i][1] - xls[1]) / ls[1];
+                let zi = (x[i][2] - xls[2]) / ls[2];
                 (f[i] - u1d(xi) * u1d(yi) * u1d(zi)).abs()
             })
             .fold(0.0_f64, f64::max);
@@ -337,18 +337,18 @@ fn convergence_3d_eval() {
     for r in 2..=r_max {
         let solver = HotNDLaplaceSolver::<3>::new(ls, xls, [r; 3], alpha, beta);
         let x = solver.get_x();
-        let total = x[0].len();
+        let total = x.len();
 
-        let mut f = DVector::from_fn(total, |i, _| {
-            let xi = (x[0][i] - xls[0]) / ls[0];
-            let yi = (x[1][i] - xls[1]) / ls[1];
-            let zi = (x[2][i] - xls[2]) / ls[2];
+        let mut f: Vec<f64> = (0..total).map(|i| {
+            let xi = (x[i][0] - xls[0]) / ls[0];
+            let yi = (x[i][1] - xls[1]) / ls[1];
+            let zi = (x[i][2] - xls[2]) / ls[2];
             let (ux, uy, uz) = (u1d(xi), u1d(yi), u1d(zi));
             let uxx = u1d_pp(xi) / ls[0].powi(2);
             let uyy = u1d_pp(yi) / ls[1].powi(2);
             let uzz = u1d_pp(zi) / ls[2].powi(2);
             alpha * ux * uy * uz - beta * (uxx * uy * uz + ux * uyy * uz + ux * uy * uzz)
-        });
+        }).collect();
         solver.solve_in_place(&mut f);
 
         let vals = solver.eval(&pts, &f);

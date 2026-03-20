@@ -38,33 +38,32 @@ fn test_nd_fft_roundtrip() {
     // 1D
     let solver = HoFFTNDLaplaceSolver::<1>::new([1.0], [0.0], [8], [3], 1.0, 0.0);
     let x = solver.get_x();
-    let f_orig: DVector<f64> = DVector::from_fn(x[0].len(), |i, _| (x[0][i] * PI).sin());
+    let f_orig: Vec<f64> = (0..x.len()).map(|i| (x[i][0] * PI).sin()).collect();
     let mut f = f_orig.clone();
     solver.solve_in_place(&mut f);
-    let err: f64 = (&f - &f_orig).amax();
+    let err: f64 = f.iter().zip(f_orig.iter()).map(|(a, b)| (a - b).abs()).fold(0.0_f64, f64::max);
     assert!(err < TOL, "1D round-trip error = {err:.2e}");
 
     // 2D
     let solver = HoFFTNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [4; 2], [2; 2], 1.0, 0.0);
     let x = solver.get_x();
-    let total = x[0].len();
-    let f_orig: DVector<f64> =
-        DVector::from_fn(total, |i, _| (x[0][i] * PI).sin() * (x[1][i] * PI).cos());
+    let total = x.len();
+    let f_orig: Vec<f64> = (0..total).map(|i| (x[i][0] * PI).sin() * (x[i][1] * PI).cos()).collect();
     let mut f = f_orig.clone();
     solver.solve_in_place(&mut f);
-    let err: f64 = (&f - &f_orig).amax();
+    let err: f64 = f.iter().zip(f_orig.iter()).map(|(a, b)| (a - b).abs()).fold(0.0_f64, f64::max);
     assert!(err < TOL, "2D round-trip error = {err:.2e}");
 
     // 3D
     let solver = HoFFTNDLaplaceSolver::<3>::new([1.0; 3], [0.0; 3], [4; 3], [2; 3], 1.0, 0.0);
     let x = solver.get_x();
-    let total = x[0].len();
-    let f_orig: DVector<f64> = DVector::from_fn(total, |i, _| {
-        (x[0][i] * PI).sin() * (x[1][i] * PI).cos() * (x[2][i] * 2.0 * PI).sin()
-    });
+    let total = x.len();
+    let f_orig: Vec<f64> = (0..total).map(|i| {
+        (x[i][0] * PI).sin() * (x[i][1] * PI).cos() * (x[i][2] * 2.0 * PI).sin()
+    }).collect();
     let mut f = f_orig.clone();
     solver.solve_in_place(&mut f);
-    let err: f64 = (&f - &f_orig).amax();
+    let err: f64 = f.iter().zip(f_orig.iter()).map(|(a, b)| (a - b).abs()).fold(0.0_f64, f64::max);
     assert!(err < TOL, "3D round-trip error = {err:.2e}");
 }
 
@@ -220,13 +219,13 @@ fn convergence_2d() {
             let solver =
                 HoFFTNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [n; 2], [r; 2], alpha, beta);
             let x = solver.get_x();
-            let total = x[0].len();
+            let total = x.len();
 
-            let mut f = DVector::<f64>::from_fn(total, |i, _| rhs_f(x[0][i], x[1][i]));
+            let mut f: Vec<f64> = (0..total).map(|i| rhs_f(x[i][0], x[i][1])).collect();
             solver.solve_in_place(&mut f);
 
             let max_err = (0..total)
-                .map(|i| (f[i] - exact_u(x[0][i], x[1][i])).abs())
+                .map(|i| (f[i] - exact_u(x[i][0], x[i][1])).abs())
                 .fold(0.0_f64, f64::max);
 
             let rate = match (prev_h, prev_err) {
@@ -264,11 +263,11 @@ fn convergence_2d_anisotropic() {
     let compute_err = |ns: [usize; 2], rs: [usize; 2]| -> f64 {
         let solver = HoFFTNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], ns, rs, alpha, beta);
         let x = solver.get_x();
-        let total = x[0].len();
-        let mut f = DVector::<f64>::from_fn(total, |i, _| rhs_f(x[0][i], x[1][i]));
+        let total = x.len();
+        let mut f: Vec<f64> = (0..total).map(|i| rhs_f(x[i][0], x[i][1])).collect();
         solver.solve_in_place(&mut f);
         (0..total)
-            .map(|i| (f[i] - exact_u(x[0][i], x[1][i])).abs())
+            .map(|i| (f[i] - exact_u(x[i][0], x[i][1])).abs())
             .fold(0.0_f64, f64::max)
     };
 
@@ -430,25 +429,25 @@ fn convergence_3d() {
                 let h = 1.0 / n as f64;
                 let solver = HoFFTNDLaplaceSolver::<3>::new(ls, xls, [n; 3], [r; 3], alpha, beta);
                 let x = solver.get_x();
-                let total = x[0].len();
+                let total = x.len();
 
-                let mut f = DVector::<f64>::from_fn(total, |i, _| {
-                    let xi = (x[0][i] - xls[0]) / ls[0];
-                    let yi = (x[1][i] - xls[1]) / ls[1];
-                    let zi = (x[2][i] - xls[2]) / ls[2];
+                let mut f: Vec<f64> = (0..total).map(|i| {
+                    let xi = (x[i][0] - xls[0]) / ls[0];
+                    let yi = (x[i][1] - xls[1]) / ls[1];
+                    let zi = (x[i][2] - xls[2]) / ls[2];
                     let (ux, uy, uz) = (u1d(xi), u1d(yi), u1d(zi));
                     let uxx = u1d_pp(xi) / ls[0].powi(2);
                     let uyy = u1d_pp(yi) / ls[1].powi(2);
                     let uzz = u1d_pp(zi) / ls[2].powi(2);
                     alpha * ux * uy * uz - beta * (uxx * uy * uz + ux * uyy * uz + ux * uy * uzz)
-                });
+                }).collect();
                 solver.solve_in_place(&mut f);
 
                 let max_err = (0..total)
                     .map(|i| {
-                        let xi = (x[0][i] - xls[0]) / ls[0];
-                        let yi = (x[1][i] - xls[1]) / ls[1];
-                        let zi = (x[2][i] - xls[2]) / ls[2];
+                        let xi = (x[i][0] - xls[0]) / ls[0];
+                        let yi = (x[i][1] - xls[1]) / ls[1];
+                        let zi = (x[i][2] - xls[2]) / ls[2];
                         (f[i] - u1d(xi) * u1d(yi) * u1d(zi)).abs()
                     })
                     .fold(0.0_f64, f64::max);
@@ -510,13 +509,13 @@ fn convergence_2d_laplace() {
             let solver =
                 HoFFTNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [n; 2], [r; 2], alpha, beta);
             let x = solver.get_x();
-            let total = x[0].len();
+            let total = x.len();
 
-            let mut f = DVector::<f64>::from_fn(total, |i, _| rhs_f(x[0][i], x[1][i]));
+            let mut f: Vec<f64> = (0..total).map(|i| rhs_f(x[i][0], x[i][1])).collect();
             solver.solve_in_place(&mut f);
 
             let max_err = (0..total)
-                .map(|i| (f[i] - exact_u(x[0][i], x[1][i])).abs())
+                .map(|i| (f[i] - exact_u(x[i][0], x[i][1])).abs())
                 .fold(0.0_f64, f64::max);
 
             let rate = match (prev_h, prev_err) {
@@ -602,18 +601,18 @@ fn convergence_3d_eval() {
         let h = 1.0 / n as f64;
         let solver = HoFFTNDLaplaceSolver::<3>::new(ls, xls, [n; 3], [r; 3], alpha, beta);
         let x = solver.get_x();
-        let total = x[0].len();
+        let total = x.len();
 
-        let mut f = DVector::from_fn(total, |i, _| {
-            let xi = (x[0][i] - xls[0]) / ls[0];
-            let yi = (x[1][i] - xls[1]) / ls[1];
-            let zi = (x[2][i] - xls[2]) / ls[2];
+        let mut f: Vec<f64> = (0..total).map(|i| {
+            let xi = (x[i][0] - xls[0]) / ls[0];
+            let yi = (x[i][1] - xls[1]) / ls[1];
+            let zi = (x[i][2] - xls[2]) / ls[2];
             let (ux, uy, uz) = (u1d(xi), u1d(yi), u1d(zi));
             let uxx = u1d_pp(xi) / ls[0].powi(2);
             let uyy = u1d_pp(yi) / ls[1].powi(2);
             let uzz = u1d_pp(zi) / ls[2].powi(2);
             alpha * ux * uy * uz - beta * (uxx * uy * uz + ux * uyy * uz + ux * uy * uzz)
-        });
+        }).collect();
         solver.solve_in_place(&mut f);
 
         let vals = solver.eval(&pts, &f);
@@ -659,7 +658,7 @@ fn convect_4d_q6() {
 
     let solver = HoFFTNDLaplaceSolver::<4>::new([1.0; 4], [0.0; 4], [n; 4], [r; 4], 1.0, 1.0);
     let x = solver.get_x();
-    let total = x[0].len();
+    let total = x.len();
 
     // Q3 factor: q(t) = t²·(t−1),  q(0)=q(1)=0  →  periodic value ✓
     // The periodic boundary wrap in flat_dof maps the right endpoint of the last
@@ -667,9 +666,9 @@ fn convect_4d_q6() {
     let q = |t: f64| t * t * (t - 1.0);
 
     // Build u at all DOF nodes.
-    let u = DVector::from_fn(total, |p, _| {
-        (0..4_usize).map(|d| q(x[d][p])).product::<f64>()
-    });
+    let u: Vec<f64> = (0..total).map(|p| {
+        (0..4_usize).map(|d| q(x[p][d])).product::<f64>()
+    }).collect();
 
     // Q2 flow map vanishing at both endpoints.
     let phi = |t: f64| t + 0.3 * t * (1.0 - t);
@@ -677,7 +676,7 @@ fn convect_4d_q6() {
 
     // Exact convected values at each DOF node (computed directly).
     let exact: Vec<f64> = (0..total)
-        .map(|p| (0..4_usize).map(|d| q(phi(x[d][p]))).product::<f64>())
+        .map(|p| (0..4_usize).map(|d| q(phi(x[p][d]))).product::<f64>())
         .collect();
 
     println!("\n{:=<62}", "");
