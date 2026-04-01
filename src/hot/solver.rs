@@ -20,8 +20,8 @@
 //! Steps 1 and 3 are trivially parallel; steps 2 and 4 are parallelised over
 //! independent fibers using Rayon with a small amount of localized `unsafe` code.
 
-use crate::calculator::*;
-use crate::lagrangian_interpolation::{barycentric_weights, lagrangian_interpolation_all};
+use crate::basis::*;
+use crate::utilities::{barycentric_weights, lagrangian_interpolation_all};
 use nalgebra::*;
 use rayon::prelude::*;
 
@@ -38,8 +38,8 @@ pub struct Hot1DLaplaceSolver {
     xl: f64,
     /// Polynomial order (number of interior + left-endpoint GLL nodes).
     r: usize,
-    /// GLL calculator for the single element.
-    lobatto_calculator: Calculator,
+    /// GLL Basis for the single element.
+    lobatto_basis: Basis,
     /// Pseudo-inverse of `(α M + β K)` for the single periodic element, size *r×r*, real symmetric pre-computed via eigendecomposition.
     symbol_pseudo_inv: DMatrix<f64>,
     /// Eigenvalues of the mass-normalised symbol `M^{-1/2} symbol M^{-1/2}`.
@@ -61,9 +61,9 @@ impl Hot1DLaplaceSolver {
     /// - `r`: polynomial order.
     /// - `alpha`, `beta`: coefficients of `α M + β K`.
     pub fn new(l: f64, xl: f64, r: usize, alpha: f64, beta: f64) -> Self {
-        let lobatto_calculator = Calculator::new(vec![(r + 1, true)]);
-        let mass_matrix = lobatto_calculator.mass_matrix();
-        let diff_matrix = lobatto_calculator.diff_matrix(0);
+        let lobatto_basis = Basis::new(vec![(r + 1, true)]);
+        let mass_matrix = lobatto_basis.mass_matrix();
+        let diff_matrix = lobatto_basis.diff_matrix(0);
         let stiffness_matrix = diff_matrix.transpose() * &mass_matrix * &diff_matrix;
         let h = l; // single element spans the whole domain
 
@@ -108,13 +108,13 @@ impl Hot1DLaplaceSolver {
         let symbol_pseudo_inv =
             &eigenvectors * DMatrix::from_diagonal(&lambda_pinv) * eigenvectors.transpose();
 
-        let bary_weights = barycentric_weights(&lobatto_calculator.points[0]);
+        let bary_weights = barycentric_weights(&lobatto_basis.points[0]);
 
         Self {
             l,
             xl,
             r,
-            lobatto_calculator,
+            lobatto_basis,
             symbol_pseudo_inv,
             eigenvalues,
             eigenvectors,
@@ -129,7 +129,7 @@ impl Hot1DLaplaceSolver {
     /// is not included.
     pub fn get_x(&self) -> DVector<f64> {
         DVector::from_fn(self.r, |i, _| {
-            self.l * self.lobatto_calculator.points[0][i] + self.xl
+            self.l * self.lobatto_basis.points[0][i] + self.xl
         })
     }
 
@@ -150,11 +150,8 @@ impl Hot1DLaplaceSolver {
     /// into DOF 0 since `u(L) = u(0)` by periodicity.
     pub fn eval(&self, x: f64, u: &DVector<f64>) -> f64 {
         let xi = (x - self.xl).rem_euclid(self.l) / self.l;
-        let phi = lagrangian_interpolation_all(
-            &self.lobatto_calculator.points[0],
-            &self.bary_weights,
-            xi,
-        );
+        let phi =
+            lagrangian_interpolation_all(&self.lobatto_basis.points[0], &self.bary_weights, xi);
         let mut val = u[0] * (phi[0] + phi[self.r]);
         for i in 1..self.r {
             val += u[i] * phi[i];
@@ -329,7 +326,7 @@ impl<const N: usize> HotNDLaplaceSolver<N> {
                 let phi: [Vec<f64>; N] = std::array::from_fn(|d| {
                     let xi = (x[d] - self.xls[d]).rem_euclid(self.ls[d]) / self.ls[d];
                     let phi_1d = lagrangian_interpolation_all(
-                        &self.solvers[d].lobatto_calculator.points[0],
+                        &self.solvers[d].lobatto_basis.points[0],
                         &self.solvers[d].bary_weights,
                         xi,
                     );

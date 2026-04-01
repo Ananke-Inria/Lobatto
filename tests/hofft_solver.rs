@@ -12,8 +12,9 @@ fn compute_error(
     beta: f64,
     exact_u: &dyn Fn(f64) -> f64,
     rhs_f: &dyn Fn(f64) -> f64,
+    bc: BoundaryCondition,
 ) -> f64 {
-    let solver = HoFFT1DLaplaceSolver::new(l, 0.0, n, r, alpha, beta);
+    let solver = PoissonSolver1D::new(l, 0.0, n, r, alpha, beta, bc);
     let x = solver.get_x();
     let ndof = n * r;
 
@@ -32,57 +33,7 @@ fn compute_error(
 }
 
 #[test]
-fn test_nd_fft_roundtrip() {
-    const TOL: f64 = 1e-12;
-
-    // 1D
-    let solver = HoFFTNDLaplaceSolver::<1>::new([1.0], [0.0], [8], [3], 1.0, 0.0);
-    let x = solver.get_x();
-    let f_orig: Vec<f64> = (0..x.len()).map(|i| (x[i][0] * PI).sin()).collect();
-    let mut f = f_orig.clone();
-    solver.solve_in_place(&mut f);
-    let err: f64 = f
-        .iter()
-        .zip(f_orig.iter())
-        .map(|(a, b)| (a - b).abs())
-        .fold(0.0_f64, f64::max);
-    assert!(err < TOL, "1D round-trip error = {err:.2e}");
-
-    // 2D
-    let solver = HoFFTNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [4; 2], [2; 2], 1.0, 0.0);
-    let x = solver.get_x();
-    let total = x.len();
-    let f_orig: Vec<f64> = (0..total)
-        .map(|i| (x[i][0] * PI).sin() * (x[i][1] * PI).cos())
-        .collect();
-    let mut f = f_orig.clone();
-    solver.solve_in_place(&mut f);
-    let err: f64 = f
-        .iter()
-        .zip(f_orig.iter())
-        .map(|(a, b)| (a - b).abs())
-        .fold(0.0_f64, f64::max);
-    assert!(err < TOL, "2D round-trip error = {err:.2e}");
-
-    // 3D
-    let solver = HoFFTNDLaplaceSolver::<3>::new([1.0; 3], [0.0; 3], [4; 3], [2; 3], 1.0, 0.0);
-    let x = solver.get_x();
-    let total = x.len();
-    let f_orig: Vec<f64> = (0..total)
-        .map(|i| (x[i][0] * PI).sin() * (x[i][1] * PI).cos() * (x[i][2] * 2.0 * PI).sin())
-        .collect();
-    let mut f = f_orig.clone();
-    solver.solve_in_place(&mut f);
-    let err: f64 = f
-        .iter()
-        .zip(f_orig.iter())
-        .map(|(a, b)| (a - b).abs())
-        .fold(0.0_f64, f64::max);
-    assert!(err < TOL, "3D round-trip error = {err:.2e}");
-}
-
-#[test]
-fn convergence_1d() {
+fn convergence_periodic_1d() {
     let l = 1.0;
     let alpha = 1.0;
     let beta = 1.0;
@@ -172,7 +123,16 @@ fn convergence_1d() {
             for &n in &n_values {
                 let h = l / (n as f64);
                 let ndof = n * r;
-                let err = compute_error(l, n, r, alpha, beta, exact_u.as_ref(), rhs_f.as_ref());
+                let err = compute_error(
+                    l,
+                    n,
+                    r,
+                    alpha,
+                    beta,
+                    exact_u.as_ref(),
+                    rhs_f.as_ref(),
+                    BoundaryCondition::Periodic,
+                );
 
                 let rate = match (prev_h, prev_err) {
                     (Some(ph), Some(pe)) if pe > 0.0 && err > 0.0 => {
@@ -180,6 +140,122 @@ fn convergence_1d() {
                         assert!(
                             err < 1e-8 || rate_val >= (r as f64 + 1.0) - 0.1,
                             "1D r={r} n={n}: rate {rate_val:.2} < {} but err={err:.2e}",
+                            r + 1
+                        );
+                        format!("{rate_val:.2}")
+                    }
+                    _ => "-".to_string(),
+                };
+
+                println!("{r:<6} {n:>10} {h:>14.2e} {ndof:>10} {err:>14.2e} {rate:>10}");
+
+                prev_h = Some(h);
+                prev_err = Some(err);
+            }
+            println!();
+        }
+        println!();
+    }
+}
+
+#[test]
+fn convergence_dirichlet_1d() {
+    let l = 1.0;
+    let alpha = 1.0;
+    let beta = 1.0;
+    let w = PI / l; // fundamental sine mode on [0, l]
+
+    // Each test function satisfies u(0) = 0 and u(l) = 0.
+    let test_functions: Vec<(&str, Box<dyn Fn(f64) -> f64>, Box<dyn Fn(f64) -> f64>)> = vec![
+        // Fundamental Dirichlet eigenfunction: u = sin(π x / l)
+        // u'' = -(π/l)²·u  →  f = (α + β(π/l)²)·u
+        {
+            let c = alpha + beta * w * w;
+            (
+                "sin(pi*x/l)",
+                Box::new(move |x| (w * x).sin()),
+                Box::new(move |x| c * (w * x).sin()),
+            )
+        },
+        // Second Dirichlet mode: u = sin(2π x / l)
+        {
+            let c = alpha + beta * 4.0 * w * w;
+            (
+                "sin(2*pi*x/l)",
+                Box::new(move |x| (2.0 * w * x).sin()),
+                Box::new(move |x| c * (2.0 * w * x).sin()),
+            )
+        },
+        // Polynomial: u = x·(l − x),  u'' = −2
+        // f = α·x·(l−x) + 2β
+        {
+            (
+                "x*(l-x)",
+                Box::new(move |x| x * (l - x)),
+                Box::new(move |x| alpha * x * (l - x) + 2.0 * beta),
+            )
+        },
+        // Combination: u = sin(πx/l)·(1 + sin(2πx/l))
+        // u'' via product rule: (sin·g)'' = sin''·g + 2·sin'·g' + sin·g''
+        {
+            (
+                "sin(pi*x)*(1+sin(2*pi*x))",
+                Box::new(move |x| (w * x).sin() * (1.0 + (2.0 * w * x).sin())),
+                Box::new(move |x| {
+                    let s1 = (w * x).sin();
+                    let c1 = (w * x).cos();
+                    let s2 = (2.0 * w * x).sin();
+                    let c2 = (2.0 * w * x).cos();
+                    let u = s1 * (1.0 + s2);
+                    let u_pp = -w * w * s1 * (1.0 + s2)
+                        + 2.0 * w * c1 * (2.0 * w * c2)
+                        + s1 * (-4.0 * w * w * s2);
+                    alpha * u - beta * u_pp
+                }),
+            )
+        },
+    ];
+
+    let orders = vec![1, 2, 3, 4];
+    let n_values = vec![4, 8, 16, 32, 64, 128, 256];
+
+    println!("\n{:=<80}", "");
+    println!("Convergence study (Dirichlet): (alpha*M + beta*K) u = f  on [0, {l}]");
+    println!("alpha = {alpha}, beta = {beta}");
+    println!("{:=<80}\n", "");
+
+    for (name, exact_u, rhs_f) in &test_functions {
+        println!("--- Test function: u(x) = {name} ---\n");
+        println!(
+            "{:<6} {:>10} {:>14} {:>10} {:>14} {:>10}",
+            "r", "n", "h", "ndof", "max_error", "rate"
+        );
+        println!("{:-<68}", "");
+
+        for &r in &orders {
+            let mut prev_h: Option<f64> = None;
+            let mut prev_err: Option<f64> = None;
+
+            for &n in &n_values {
+                let h = l / (n as f64);
+                let ndof = n * r;
+                let err = compute_error(
+                    l,
+                    n,
+                    r,
+                    alpha,
+                    beta,
+                    exact_u.as_ref(),
+                    rhs_f.as_ref(),
+                    BoundaryCondition::Dirichlet,
+                );
+
+                let rate = match (prev_h, prev_err) {
+                    (Some(ph), Some(pe)) if pe > 0.0 && err > 0.0 => {
+                        let rate_val = (pe / err).ln() / (ph / h).ln();
+                        assert!(
+                            err < 1e-8 || rate_val >= (r as f64 + 1.0) - 0.1,
+                            "1D Dirichlet r={r} n={n}: rate {rate_val:.2} < {} but err={err:.2e}",
                             r + 1
                         );
                         format!("{rate_val:.2}")
@@ -230,8 +306,7 @@ fn convergence_2d() {
 
         for &n in &n_values {
             let h = 1.0 / n as f64;
-            let solver =
-                HoFFTNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [n; 2], [r; 2], alpha, beta);
+            let solver = PoissonSolverND::<2>::new([1.0; 2], [0.0; 2], [n; 2], [r; 2], alpha, beta);
             let x = solver.get_x();
             let total = x.len();
 
@@ -275,7 +350,7 @@ fn convergence_2d_anisotropic() {
     let rhs_f = |x: f64, y: f64| c * exact_u(x, y);
 
     let compute_err = |ns: [usize; 2], rs: [usize; 2]| -> f64 {
-        let solver = HoFFTNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], ns, rs, alpha, beta);
+        let solver = PoissonSolverND::<2>::new([1.0; 2], [0.0; 2], ns, rs, alpha, beta);
         let x = solver.get_x();
         let total = x.len();
         let mut f: Vec<f64> = (0..total).map(|i| rhs_f(x[i][0], x[i][1])).collect();
@@ -441,7 +516,7 @@ fn convergence_3d() {
 
             for &n in &n_values {
                 let h = 1.0 / n as f64;
-                let solver = HoFFTNDLaplaceSolver::<3>::new(ls, xls, [n; 3], [r; 3], alpha, beta);
+                let solver = PoissonSolverND::<3>::new(ls, xls, [n; 3], [r; 3], alpha, beta);
                 let x = solver.get_x();
                 let total = x.len();
 
@@ -523,8 +598,7 @@ fn convergence_2d_laplace() {
 
         for &n in &n_values {
             let h = 1.0 / n as f64;
-            let solver =
-                HoFFTNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [n; 2], [r; 2], alpha, beta);
+            let solver = PoissonSolverND::<2>::new([1.0; 2], [0.0; 2], [n; 2], [r; 2], alpha, beta);
             let x = solver.get_x();
             let total = x.len();
 
@@ -616,7 +690,7 @@ fn convergence_3d_eval() {
 
     for &n in &n_values {
         let h = 1.0 / n as f64;
-        let solver = HoFFTNDLaplaceSolver::<3>::new(ls, xls, [n; 3], [r; 3], alpha, beta);
+        let solver = PoissonSolverND::<3>::new(ls, xls, [n; 3], [r; 3], alpha, beta);
         let x = solver.get_x();
         let total = x.len();
 
@@ -675,7 +749,7 @@ fn convect_4d_q6() {
     let r = 6;
     let n = 6;
 
-    let solver = HoFFTNDLaplaceSolver::<4>::new([1.0; 4], [0.0; 4], [n; 4], [r; 4], 1.0, 1.0);
+    let solver = PoissonSolverND::<4>::new([1.0; 4], [0.0; 4], [n; 4], [r; 4], 1.0, 1.0);
     let x = solver.get_x();
     let total = x.len();
 

@@ -3,16 +3,32 @@ name = "quadratix"
 version = "1.0.0"
 edition = "2021"
 
+[[bin]]
+name = "gen_q3"
+path = "src/hc/bin/gen_q3.rs"
+
+[[bin]]
+name = "gen_q4"
+path = "src/hc/bin/gen_q4.rs"
+
+[[bin]]
+name = "gen_q5"
+path = "src/hc/bin/gen_q5.rs"
+
+[[bin]]
+name = "gen_q6"
+path = "src/hc/bin/gen_q6.rs"
+
 [[bench]]
-name = "hc_calculations"
+name = "hc_kernels"
 harness = false
 
 [[bench]]
-name = "hofft"
+name = "hofft_solver"
 harness = false
 
 [[bench]]
-name = "hot"
+name = "hot_solver"
 harness = false
 
 [dependencies]

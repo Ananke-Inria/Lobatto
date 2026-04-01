@@ -31,7 +31,7 @@ fn bench_solve_in_place(c: &mut Criterion) {
             let ndof = n * r;
             group.throughput(Throughput::Elements(ndof as u64));
 
-            let solver = HoFFT1DLaplaceSolver::new(l, 0.0, n, r, alpha, beta);
+            let solver = PoissonSolver1D::new(l, 0.0, n, r, alpha, beta, BoundaryCondition::Periodic);
             let x = solver.get_x();
 
             let f_init: DVector<f64> = DVector::from_fn(ndof, |i, _| rhs_f(x[i]));
@@ -70,7 +70,7 @@ fn bench_solve_in_place_2d(c: &mut Criterion) {
             group.throughput(Throughput::Elements(ndof as u64));
 
             let solver =
-                HoFFTNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [n; 2], [r; 2], alpha, beta);
+                PoissonSolverND::<2>::new([1.0; 2], [0.0; 2], [n; 2], [r; 2], alpha, beta);
             let x = solver.get_x();
 
             let f_init: Vec<f64> = (0..ndof)
@@ -127,7 +127,7 @@ fn bench_solve_in_place_3d(c: &mut Criterion) {
             group.throughput(Throughput::Elements(ndof as u64));
 
             let solver =
-                HoFFTNDLaplaceSolver::<3>::new([1.0; 3], [0.0; 3], [n; 3], [r; 3], alpha, beta);
+                PoissonSolverND::<3>::new([1.0; 3], [0.0; 3], [n; 3], [r; 3], alpha, beta);
             let x = solver.get_x();
 
             let f_init: Vec<f64> = (0..ndof)

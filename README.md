@@ -1,31 +1,21 @@
 # quadratix
 
-High-order spectral-element solvers for the periodic Laplace equation on `[0, L]^N` using Gauss-Lobatto-Legendre (GLL) quadrature.
-
-Solves problems of the form:
-
-```
-(α M + β K) u = f
-```
-
-where `M` is the mass matrix and `K` is the stiffness matrix, in arbitrary dimension `N`.
+A Rust library for high-order numerical methods based on Gauss-Lobatto and Gauss-Legendre quadrature. 
 
 ## Features
 
-- **HoFFT** — High-order FFT solver: `n` elements × order `r` per direction, exploiting the tensor-product structure via FFT-based diagonalization.
-- **HoT** — High-order Tensor solver: single spectral element of order `r` per direction, fully tensorized.
-- N-dimensional solvers with compile-time dimension parameter.
-- Off-grid evaluation of the solution via Lagrange interpolation.
-- Parallel RHS assembly via [rayon](https://github.com/rayon-rs/rayon).
+- Computation of quadrature points and weights.
+- Differentiation and interpolation of functions in a Lagrangian basis on Gauss-Lobatto points.
+- High-order spectral-element solvers for the periodic Laplace equation on an N-dimensional unit hypercube.
 
 ## Modules
 
 | Module | Description |
 |---|---|
 | `quadrature` | Gauss and Gauss-Lobatto quadrature points and weights |
-| `calculator` | Multi-dimensional GLL differentiation and mass operators |
+| `Basis` | Multi-dimensional GLL differentiation and mass operators |
 | `hc_calculations` | Hard-coded, SIMD-friendly differentiation kernels for Q3–Q6 elements |
-| `hofft` | HoFFT solver: `n` elements × order `r` per direction |
+| `hofft_solver` | HoFFT solver: `n` elements × order `r` per direction |
 | `hot` | HoT solver: single spectral element, order `r` per direction |
 
 ## Getting started
@@ -40,12 +30,12 @@ quadratix = { path = "path/to/quadratix" }
 ### Quick example
 
 ```rust
-use quadratix::hofft::HoFFTNDLaplaceSolver;
+use quadratix::hofft::solver::PoissonSolverND;
 
 // 3-D solver: 8 elements × order 4, domain [0, 1]^3
 let alpha = 1.0;
 let beta  = 1.0;
-let solver = HoFFTNDLaplaceSolver::<3>::new(
+let solver = PoissonSolverND::<3>::new(
     [1.0; 3],   // domain lengths
     [0.0; 3],   // domain origins
     [8;   3],   // number of elements per direction

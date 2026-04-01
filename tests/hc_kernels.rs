@@ -1,6 +1,6 @@
 use nalgebra::DVector;
-use quadratix::calculator::*;
-use quadratix::hc_calculations::*;
+use quadratix::basis::*;
+use quadratix::hc::*;
 
 /// Xorshift64 with a fixed seed — same sequence as benchmarks.
 fn seeded_vec(n: usize) -> Vec<f64> {
@@ -59,13 +59,7 @@ fn assert_close(a: &[f64], b: &[f64], tol: f64) {
 }
 
 /// Apply GLE `diff(dir)` to each of `n` elements (AoS layout, `dofs` dofs each).
-fn gll_batch_ref(
-    v_in_aos: &[f64],
-    n: usize,
-    dofs: usize,
-    dir: usize,
-    gle: &Calculator,
-) -> Vec<f64> {
+fn gll_batch_ref(v_in_aos: &[f64], n: usize, dofs: usize, dir: usize, gle: &Basis) -> Vec<f64> {
     let mut out = vec![0.0_f64; n * dofs];
     for i in 0..n {
         let s = dofs * i;
@@ -80,7 +74,7 @@ fn gll_batch_ref(
     out
 }
 
-// ── N=1 tests vs GLE Calculator ─────────────────────────────────────────────
+// ── N=1 tests vs GLE Basis ─────────────────────────────────────────────
 //
 // With N=1 the SoA layout is identical to AoS, so the functions can be called
 // directly on the plain input vector and compared against the GLE reference.
@@ -92,7 +86,7 @@ fn test_dx_q3_q3() {
     dx_q3_q3::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(4);
-    Calculator::new(vec![(4, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
+    Basis::new(vec![(4, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
     assert_close(&v_out, ref_out.as_slice(), 1e-10);
 }
 
@@ -103,7 +97,7 @@ fn test_dx_q33_q33() {
     dx_q33_q33::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(16);
-    Calculator::new(vec![(4, true), (4, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
+    Basis::new(vec![(4, true), (4, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
     assert_close(&v_out, ref_out.as_slice(), 1e-10);
 }
 
@@ -114,7 +108,7 @@ fn test_dx_q333_q333() {
     dx_q333_q333::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(64);
-    Calculator::new(vec![(4, true), (4, true), (4, true)]).diff(
+    Basis::new(vec![(4, true), (4, true), (4, true)]).diff(
         0,
         &DVector::from_vec(v_in),
         &mut ref_out,
@@ -129,7 +123,7 @@ fn test_dy_q333_q333() {
     dy_q333_q333::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(64);
-    Calculator::new(vec![(4, true), (4, true), (4, true)]).diff(
+    Basis::new(vec![(4, true), (4, true), (4, true)]).diff(
         1,
         &DVector::from_vec(v_in),
         &mut ref_out,
@@ -144,7 +138,7 @@ fn test_dz_q333_q333() {
     dz_q333_q333::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(64);
-    Calculator::new(vec![(4, true), (4, true), (4, true)]).diff(
+    Basis::new(vec![(4, true), (4, true), (4, true)]).diff(
         2,
         &DVector::from_vec(v_in),
         &mut ref_out,
@@ -159,7 +153,7 @@ fn test_dx_q4_q4() {
     dx_q4_q4::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(5);
-    Calculator::new(vec![(5, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
+    Basis::new(vec![(5, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
     assert_close(&v_out, ref_out.as_slice(), 1e-10);
 }
 
@@ -170,7 +164,7 @@ fn test_dx_q44_q44() {
     dx_q44_q44::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(25);
-    Calculator::new(vec![(5, true), (5, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
+    Basis::new(vec![(5, true), (5, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
     assert_close(&v_out, ref_out.as_slice(), 1e-10);
 }
 
@@ -181,7 +175,7 @@ fn test_dx_q444_q444() {
     dx_q444_q444::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(125);
-    Calculator::new(vec![(5, true), (5, true), (5, true)]).diff(
+    Basis::new(vec![(5, true), (5, true), (5, true)]).diff(
         0,
         &DVector::from_vec(v_in),
         &mut ref_out,
@@ -196,7 +190,7 @@ fn test_dy_q444_q444() {
     dy_q444_q444::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(125);
-    Calculator::new(vec![(5, true), (5, true), (5, true)]).diff(
+    Basis::new(vec![(5, true), (5, true), (5, true)]).diff(
         1,
         &DVector::from_vec(v_in),
         &mut ref_out,
@@ -211,7 +205,7 @@ fn test_dz_q444_q444() {
     dz_q444_q444::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(125);
-    Calculator::new(vec![(5, true), (5, true), (5, true)]).diff(
+    Basis::new(vec![(5, true), (5, true), (5, true)]).diff(
         2,
         &DVector::from_vec(v_in),
         &mut ref_out,
@@ -229,7 +223,7 @@ fn test_dz_q444_q444() {
 fn test_dx_q3_q3_batch() {
     const N: usize = 8;
     let v_in_aos = seeded_vec(4 * N);
-    let gle = Calculator::new(vec![(4, true)]);
+    let gle = Basis::new(vec![(4, true)]);
     let ref_out = gll_batch_ref(&v_in_aos, N, 4, 0, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 1, 4);
@@ -244,7 +238,7 @@ fn test_dx_q3_q3_batch() {
 fn test_dx_q33_q33_batch() {
     const N: usize = 8;
     let v_in_aos = seeded_vec(16 * N);
-    let gle = Calculator::new(vec![(4, true), (4, true)]);
+    let gle = Basis::new(vec![(4, true), (4, true)]);
     let ref_out = gll_batch_ref(&v_in_aos, N, 16, 0, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 4, 4);
@@ -259,7 +253,7 @@ fn test_dx_q33_q33_batch() {
 fn test_dx_q333_q333_batch() {
     const N: usize = 4;
     let v_in_aos = seeded_vec(64 * N);
-    let gle = Calculator::new(vec![(4, true), (4, true), (4, true)]);
+    let gle = Basis::new(vec![(4, true), (4, true), (4, true)]);
     let ref_out = gll_batch_ref(&v_in_aos, N, 64, 0, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 16, 4);
@@ -274,7 +268,7 @@ fn test_dx_q333_q333_batch() {
 fn test_dy_q333_q333_batch() {
     const N: usize = 4;
     let v_in_aos = seeded_vec(64 * N);
-    let gle = Calculator::new(vec![(4, true), (4, true), (4, true)]);
+    let gle = Basis::new(vec![(4, true), (4, true), (4, true)]);
     let ref_out = gll_batch_ref(&v_in_aos, N, 64, 1, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 16, 4);
@@ -289,7 +283,7 @@ fn test_dy_q333_q333_batch() {
 fn test_dz_q333_q333_batch() {
     const N: usize = 4;
     let v_in_aos = seeded_vec(64 * N);
-    let gle = Calculator::new(vec![(4, true), (4, true), (4, true)]);
+    let gle = Basis::new(vec![(4, true), (4, true), (4, true)]);
     let ref_out = gll_batch_ref(&v_in_aos, N, 64, 2, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 16, 4);
@@ -304,7 +298,7 @@ fn test_dz_q333_q333_batch() {
 fn test_dx_q4_q4_batch() {
     const N: usize = 8;
     let v_in_aos = seeded_vec(5 * N);
-    let gle = Calculator::new(vec![(5, true)]);
+    let gle = Basis::new(vec![(5, true)]);
     let ref_out = gll_batch_ref(&v_in_aos, N, 5, 0, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 1, 5);
@@ -319,7 +313,7 @@ fn test_dx_q4_q4_batch() {
 fn test_dx_q44_q44_batch() {
     const N: usize = 8;
     let v_in_aos = seeded_vec(25 * N);
-    let gle = Calculator::new(vec![(5, true), (5, true)]);
+    let gle = Basis::new(vec![(5, true), (5, true)]);
     let ref_out = gll_batch_ref(&v_in_aos, N, 25, 0, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 5, 5);
@@ -334,7 +328,7 @@ fn test_dx_q44_q44_batch() {
 fn test_dx_q444_q444_batch() {
     const N: usize = 4;
     let v_in_aos = seeded_vec(125 * N);
-    let gle = Calculator::new(vec![(5, true), (5, true), (5, true)]);
+    let gle = Basis::new(vec![(5, true), (5, true), (5, true)]);
     let ref_out = gll_batch_ref(&v_in_aos, N, 125, 0, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 25, 5);
@@ -349,7 +343,7 @@ fn test_dx_q444_q444_batch() {
 fn test_dy_q444_q444_batch() {
     const N: usize = 4;
     let v_in_aos = seeded_vec(125 * N);
-    let gle = Calculator::new(vec![(5, true), (5, true), (5, true)]);
+    let gle = Basis::new(vec![(5, true), (5, true), (5, true)]);
     let ref_out = gll_batch_ref(&v_in_aos, N, 125, 1, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 25, 5);
@@ -364,7 +358,7 @@ fn test_dy_q444_q444_batch() {
 fn test_dz_q444_q444_batch() {
     const N: usize = 4;
     let v_in_aos = seeded_vec(125 * N);
-    let gle = Calculator::new(vec![(5, true), (5, true), (5, true)]);
+    let gle = Basis::new(vec![(5, true), (5, true), (5, true)]);
     let ref_out = gll_batch_ref(&v_in_aos, N, 125, 2, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 25, 5);
@@ -375,7 +369,7 @@ fn test_dz_q444_q444_batch() {
     assert_close(&v_out_aos, &ref_out, 1e-10);
 }
 
-// ── Q5 N=1 tests vs GLE Calculator ──────────────────────────────────────────
+// ── Q5 N=1 tests vs GLE Basis ──────────────────────────────────────────
 
 #[test]
 fn test_dx_q5_q5() {
@@ -384,7 +378,7 @@ fn test_dx_q5_q5() {
     dx_q5_q5::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(6);
-    Calculator::new(vec![(6, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
+    Basis::new(vec![(6, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
     assert_close(&v_out, ref_out.as_slice(), 1e-10);
 }
 
@@ -395,7 +389,7 @@ fn test_dx_q55_q55() {
     dx_q55_q55::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(36);
-    Calculator::new(vec![(6, true), (6, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
+    Basis::new(vec![(6, true), (6, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
     assert_close(&v_out, ref_out.as_slice(), 1e-10);
 }
 
@@ -406,7 +400,7 @@ fn test_dx_q555_q555() {
     dx_q555_q555::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(216);
-    Calculator::new(vec![(6, true), (6, true), (6, true)]).diff(
+    Basis::new(vec![(6, true), (6, true), (6, true)]).diff(
         0,
         &DVector::from_vec(v_in),
         &mut ref_out,
@@ -421,7 +415,7 @@ fn test_dy_q555_q555() {
     dy_q555_q555::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(216);
-    Calculator::new(vec![(6, true), (6, true), (6, true)]).diff(
+    Basis::new(vec![(6, true), (6, true), (6, true)]).diff(
         1,
         &DVector::from_vec(v_in),
         &mut ref_out,
@@ -436,7 +430,7 @@ fn test_dz_q555_q555() {
     dz_q555_q555::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(216);
-    Calculator::new(vec![(6, true), (6, true), (6, true)]).diff(
+    Basis::new(vec![(6, true), (6, true), (6, true)]).diff(
         2,
         &DVector::from_vec(v_in),
         &mut ref_out,
@@ -450,7 +444,7 @@ fn test_dz_q555_q555() {
 fn test_dx_q5_q5_batch() {
     const N: usize = 8;
     let v_in_aos = seeded_vec(6 * N);
-    let gle = Calculator::new(vec![(6, true)]);
+    let gle = Basis::new(vec![(6, true)]);
     let ref_out = gll_batch_ref(&v_in_aos, N, 6, 0, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 1, 6);
@@ -465,7 +459,7 @@ fn test_dx_q5_q5_batch() {
 fn test_dx_q555_q555_batch() {
     const N: usize = 4;
     let v_in_aos = seeded_vec(216 * N);
-    let gle = Calculator::new(vec![(6, true), (6, true), (6, true)]);
+    let gle = Basis::new(vec![(6, true), (6, true), (6, true)]);
     let ref_out = gll_batch_ref(&v_in_aos, N, 216, 0, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 36, 6);
@@ -480,7 +474,7 @@ fn test_dx_q555_q555_batch() {
 fn test_dy_q555_q555_batch() {
     const N: usize = 4;
     let v_in_aos = seeded_vec(216 * N);
-    let gle = Calculator::new(vec![(6, true), (6, true), (6, true)]);
+    let gle = Basis::new(vec![(6, true), (6, true), (6, true)]);
     let ref_out = gll_batch_ref(&v_in_aos, N, 216, 1, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 36, 6);
@@ -495,7 +489,7 @@ fn test_dy_q555_q555_batch() {
 fn test_dz_q555_q555_batch() {
     const N: usize = 4;
     let v_in_aos = seeded_vec(216 * N);
-    let gle = Calculator::new(vec![(6, true), (6, true), (6, true)]);
+    let gle = Basis::new(vec![(6, true), (6, true), (6, true)]);
     let ref_out = gll_batch_ref(&v_in_aos, N, 216, 2, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 36, 6);
@@ -506,7 +500,7 @@ fn test_dz_q555_q555_batch() {
     assert_close(&v_out_aos, &ref_out, 1e-10);
 }
 
-// ── Q6 N=1 tests vs GLE Calculator ──────────────────────────────────────────
+// ── Q6 N=1 tests vs GLE Basis ──────────────────────────────────────────
 
 #[test]
 fn test_dx_q6_q6() {
@@ -515,7 +509,7 @@ fn test_dx_q6_q6() {
     dx_q6_q6::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(7);
-    Calculator::new(vec![(7, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
+    Basis::new(vec![(7, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
     assert_close(&v_out, ref_out.as_slice(), 1e-10);
 }
 
@@ -526,7 +520,7 @@ fn test_dx_q66_q66() {
     dx_q66_q66::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(49);
-    Calculator::new(vec![(7, true), (7, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
+    Basis::new(vec![(7, true), (7, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
     assert_close(&v_out, ref_out.as_slice(), 1e-10);
 }
 
@@ -537,7 +531,7 @@ fn test_dx_q666_q666() {
     dx_q666_q666::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(343);
-    Calculator::new(vec![(7, true), (7, true), (7, true)]).diff(
+    Basis::new(vec![(7, true), (7, true), (7, true)]).diff(
         0,
         &DVector::from_vec(v_in),
         &mut ref_out,
@@ -552,7 +546,7 @@ fn test_dy_q666_q666() {
     dy_q666_q666::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(343);
-    Calculator::new(vec![(7, true), (7, true), (7, true)]).diff(
+    Basis::new(vec![(7, true), (7, true), (7, true)]).diff(
         1,
         &DVector::from_vec(v_in),
         &mut ref_out,
@@ -567,7 +561,7 @@ fn test_dz_q666_q666() {
     dz_q666_q666::<1>(&v_in, &mut v_out);
 
     let mut ref_out = DVector::zeros(343);
-    Calculator::new(vec![(7, true), (7, true), (7, true)]).diff(
+    Basis::new(vec![(7, true), (7, true), (7, true)]).diff(
         2,
         &DVector::from_vec(v_in),
         &mut ref_out,
@@ -581,7 +575,7 @@ fn test_dz_q666_q666() {
 fn test_dx_q6_q6_batch() {
     const N: usize = 8;
     let v_in_aos = seeded_vec(7 * N);
-    let gle = Calculator::new(vec![(7, true)]);
+    let gle = Basis::new(vec![(7, true)]);
     let ref_out = gll_batch_ref(&v_in_aos, N, 7, 0, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 1, 7);
@@ -596,7 +590,7 @@ fn test_dx_q6_q6_batch() {
 fn test_dx_q666_q666_batch() {
     const N: usize = 4;
     let v_in_aos = seeded_vec(343 * N);
-    let gle = Calculator::new(vec![(7, true), (7, true), (7, true)]);
+    let gle = Basis::new(vec![(7, true), (7, true), (7, true)]);
     let ref_out = gll_batch_ref(&v_in_aos, N, 343, 0, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 49, 7);
@@ -611,7 +605,7 @@ fn test_dx_q666_q666_batch() {
 fn test_dy_q666_q666_batch() {
     const N: usize = 4;
     let v_in_aos = seeded_vec(343 * N);
-    let gle = Calculator::new(vec![(7, true), (7, true), (7, true)]);
+    let gle = Basis::new(vec![(7, true), (7, true), (7, true)]);
     let ref_out = gll_batch_ref(&v_in_aos, N, 343, 1, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 49, 7);
@@ -626,7 +620,7 @@ fn test_dy_q666_q666_batch() {
 fn test_dz_q666_q666_batch() {
     const N: usize = 4;
     let v_in_aos = seeded_vec(343 * N);
-    let gle = Calculator::new(vec![(7, true), (7, true), (7, true)]);
+    let gle = Basis::new(vec![(7, true), (7, true), (7, true)]);
     let ref_out = gll_batch_ref(&v_in_aos, N, 343, 2, &gle);
 
     let v_in_soa = aos_to_soa(&v_in_aos, N, 49, 7);

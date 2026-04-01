@@ -11,8 +11,7 @@
 //! Run with:
 //!   cargo run --example laplace_5d --release
 
-use nalgebra::DVector;
-use quadratix::hofft::HoFFTNDLaplaceSolver;
+use quadratix::hofft::PoissonSolverND;
 use quadratix::hot::HotNDLaplaceSolver;
 use rayon::prelude::*;
 use std::f64::consts::PI;
@@ -85,8 +84,7 @@ fn main() {
     println!("── HoFFT (n={n}, r={r}) ──────────────────────────────────────────");
 
     let t = Instant::now();
-    let solver_hofft =
-        HoFFTNDLaplaceSolver::<5>::new([1.0; 5], [0.0; 5], [n; 5], [r; 5], alpha, beta);
+    let solver_hofft = PoissonSolverND::<5>::new([1.0; 5], [0.0; 5], [n; 5], [r; 5], alpha, beta);
     let hofft_setup_ms = t.elapsed().as_secs_f64() * 1e3;
     println!("  Setup time : {hofft_setup_ms:.1} ms");
 

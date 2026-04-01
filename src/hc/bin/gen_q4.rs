@@ -1,20 +1,20 @@
 //! Code generator for the Q4 (5-node Gauss-Lobatto) hard-coded differentiation kernel.
 //!
-//! Computes the 5×5 GLL differentiation matrix on [0,1] via `Calculator`,
+//! Computes the 5×5 GLL differentiation matrix on [0,1] via `Basis`,
 //! identifies the unique coefficients exploiting the antisymmetry
 //! D[4-i, 4-j] = -D[i, j], and prints the corresponding `_d_q4_q4` Rust kernel.
 //!
 //! Run with:
 //!   cargo run --bin gen_q4 --release
 
-use quadratix::calculator::Calculator;
+use quadratix::basis::Basis;
 
 fn main() {
     let n = 5usize; // Q4: 5 nodes
-    let calc = Calculator::new(vec![(n, true)]);
+    let calc = Basis::new(vec![(n, true)]);
     let pts = &calc.points[0];
 
-    // 5×5 differentiation matrix from the Calculator: d[(row, col)]
+    // 5×5 differentiation matrix from the Basis: d[(row, col)]
     let d = &calc.diff_matrices[0];
 
     // ── Print nodes ──────────────────────────────────────────────────────────

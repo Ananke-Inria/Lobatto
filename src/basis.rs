@@ -1,16 +1,16 @@
 //! Multi-dimensional GLL differentiation and mass-matrix operators.
 //!
-//! The [`Calculator`] struct assembles, for a tensor-product grid of
+//! The [`Basis`] struct assembles, for a tensor-product grid of
 //! Gauss or Gauss-Lobatto points, the 1D differentiation matrices and the
-//! diagonal mass matrix in each direction.  It exposes [`Calculator::diff`]
+//! diagonal mass matrix in each direction.  It exposes [`Basis::diff`]
 //! to apply the sum-factorised differentiation operator along any axis, and
-//! [`Calculator::mass_matrix`] / [`Calculator::diff_matrix`] to return the
+//! [`Basis::mass_matrix`] / [`Basis::diff_matrix`] to return the
 //! corresponding dense matrices (useful for building the stiffness matrix in
 //! the HoFFT and HoT solvers).
 
 use std::vec;
 
-use crate::lagrangian_interpolation::lagrangian_derivative_interpolation;
+use crate::utilities::lagrangian_derivative_interpolation;
 use crate::quadrature::*;
 use nalgebra::*;
 
@@ -25,17 +25,17 @@ use nalgebra::*;
 ///
 /// # Usage
 /// ```rust
-/// use quadratix::calculator::Calculator;
+/// use quadratix::basis::Basis;
 /// // 2D Q4 element: 5×5 GLL nodes
-/// let calc = Calculator::new(vec![(5, true), (5, true)]);
+/// let calc = Basis::new(vec![(5, true), (5, true)]);
 /// ```
 #[derive(Debug)]
-pub struct Calculator {
+pub struct Basis {
     /// Per-direction description: `(n_points, is_lobatto)`.
-    pub basis: Vec<(usize, bool)>,
+    basis: Vec<(usize, bool)>,
 
     /// Quadrature weights, one vector per direction.
-    pub weights: Vec<Vec<f64>>,
+    weights: Vec<Vec<f64>>,
     /// Quadrature nodes on [0, 1], one vector per direction.
     pub points: Vec<Vec<f64>>,
 
@@ -44,17 +44,17 @@ pub struct Calculator {
     pub diff_matrices: Vec<DMatrix<f64>>,
 
     /// Total number of DOFs: `∏_k n_k`.
-    pub n_points: usize,
+    n_points: usize,
     /// Accumulated product strides: `n_points_acc[k] = n_0 * n_1 * … * n_k`.
-    pub n_points_acc: Vec<usize>,
+    n_points_acc: Vec<usize>,
 
-    /// Stride step used by [`Calculator::diff`] for direction `k`.
-    pub step: Vec<usize>,
+    /// Stride step used by [`Basis::diff`] for direction `k`.
+    step: Vec<usize>,
     /// Starting flat indices of fibers in direction `k` (indices where `i_k == 0`).
-    pub start: Vec<Vec<usize>>,
+    start: Vec<Vec<usize>>,
 }
 
-impl Calculator {
+impl Basis {
     // Convert a flat index to a multi-index `(i_0, i_1, …, i_{d-1})`.
     fn _get_multi_index(n_points_acc: &Vec<usize>, index: usize) -> Vec<usize> {
         let n = n_points_acc.len();
@@ -90,7 +90,7 @@ impl Calculator {
         i
     }
 
-    /// Build a `Calculator` from a list of per-direction descriptions.
+    /// Build a `Basis` from a list of per-direction descriptions.
     ///
     /// Each entry `(n, is_lobatto)` specifies the number of quadrature points
     /// and whether to use Gauss-Lobatto (`true`) or Gauss (`false`) nodes.
@@ -236,7 +236,7 @@ impl Calculator {
     ///
     /// This is the block-diagonal lift of the 1D matrix `D_dim` to the full
     /// tensor-product space, assembled via the same fiber iteration used by
-    /// [`Calculator::diff`].  Useful for constructing the stiffness matrix
+    /// [`Basis::diff`].  Useful for constructing the stiffness matrix
     /// `K = D^T M D`.
     pub fn diff_matrix(&self, dim: usize) -> DMatrix<f64> {
         let mut diff_matrix = DMatrix::<f64>::zeros(self.n_points, self.n_points);
