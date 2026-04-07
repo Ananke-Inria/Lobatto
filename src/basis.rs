@@ -3,15 +3,13 @@
 //! The [`Basis`] struct assembles, for a tensor-product grid of
 //! Gauss or Gauss-Lobatto points, the 1D differentiation matrices and the
 //! diagonal mass matrix in each direction.  It exposes [`Basis::diff`]
-//! to apply the sum-factorised differentiation operator along any axis, and
+//! to apply the differentiation operator along any axis, and
 //! [`Basis::mass_matrix`] / [`Basis::diff_matrix`] to return the
 //! corresponding dense matrices (useful for building the stiffness matrix in
 //! the HoFFT and HoT solvers).
 
-use std::vec;
-
-use crate::utilities::lagrangian_derivative_interpolation;
 use crate::quadrature::*;
+use crate::utilities::lagrangian_derivative_interpolation;
 use nalgebra::*;
 
 /// Multi-dimensional spectral differentiation operator on a tensor-product GLL/Gauss grid.
@@ -37,15 +35,15 @@ pub struct Basis {
     /// Quadrature weights, one vector per direction.
     weights: Vec<Vec<f64>>,
     /// Quadrature nodes on [0, 1], one vector per direction.
-    pub points: Vec<Vec<f64>>,
+    points: Vec<Vec<f64>>,
 
     /// 1D differentiation matrices D, one per direction.
     /// `diff_matrices[k][j, i] = φ_i'(ξ_j)` where `ξ_j` are the nodes of direction `k`.
-    pub diff_matrices: Vec<DMatrix<f64>>,
+    diff_matrices: Vec<DMatrix<f64>>,
 
     /// Total number of DOFs: `∏_k n_k`.
     n_points: usize,
-    /// Accumulated product strides: `n_points_acc[k] = n_0 * n_1 * … * n_k`.
+    /// Prefix products of point counts: `n_points_acc[k] = n_0 * n_1 * … * n_k`.
     n_points_acc: Vec<usize>,
 
     /// Stride step used by [`Basis::diff`] for direction `k`.
@@ -56,37 +54,30 @@ pub struct Basis {
 
 impl Basis {
     // Convert a flat index to a multi-index `(i_0, i_1, …, i_{d-1})`.
-    fn _get_multi_index(n_points_acc: &Vec<usize>, index: usize) -> Vec<usize> {
+    fn flat_to_multi(n_points_acc: &[usize], index: usize) -> Vec<usize> {
         let n = n_points_acc.len();
-
         let mut multi_index = vec![0; n];
         let mut i = index;
-
         for k in (1..n).rev() {
             multi_index[k] = i / n_points_acc[k - 1];
             i -= n_points_acc[k - 1] * multi_index[k];
         }
         multi_index[0] = i;
-
         multi_index
     }
 
     /// Convert a flat index to a multi-index `(i_0, i_1, …, i_{d-1})`.
     pub fn get_multi_index(&self, index: usize) -> Vec<usize> {
-        Self::_get_multi_index(&self.n_points_acc, index)
+        Self::flat_to_multi(&self.n_points_acc, index)
     }
 
     /// Convert a multi-index `(i_0, i_1, …, i_{d-1})` to a flat index.
-    pub fn get_index(&self, multi_index: &Vec<usize>) -> usize {
+    pub fn get_index(&self, multi_index: &[usize]) -> usize {
         let n = self.n_points_acc.len();
-        let mut i = 0;
-
+        let mut i = multi_index[0];
         for k in 1..n {
             i += multi_index[k] * self.n_points_acc[k - 1];
         }
-
-        i += multi_index[0];
-
         i
     }
 
@@ -100,16 +91,15 @@ impl Basis {
 
         let mut weights = vec![vec![1.0]; n];
         let mut points = vec![vec![0.5]; n];
-
         let mut diff_matrices = vec![DMatrix::<f64>::zeros(1, 1); n];
 
         for k in 0..n {
             assert!(
-                (basis[k].0 > 1 && basis[k].1 == true) || (basis[k].0 > 0 && basis[k].1 == false),
+                (basis[k].0 > 1 && basis[k].1) || (basis[k].0 > 0 && !basis[k].1),
                 "not enough points to define the quadrature rule"
             );
 
-            if basis[k].1 == true {
+            if basis[k].1 {
                 (points[k], weights[k]) = gauss_lobatto_on_unit_interval(basis[k].0);
             } else {
                 (points[k], weights[k]) = gauss_on_unit_interval(basis[k].0);
@@ -150,8 +140,7 @@ impl Basis {
 
         for k in 0..n {
             for l in 0..n_points {
-                let multi_index = Self::_get_multi_index(&n_points_acc, l);
-
+                let multi_index = Self::flat_to_multi(&n_points_acc, l);
                 if multi_index[k] == 0 {
                     start[k].push(l);
                 }
@@ -170,42 +159,52 @@ impl Basis {
         }
     }
 
-    /// Apply the spectral differentiation operator along direction `dim` in place.
+    /// Quadrature nodes on `[0, 1]` for direction `dim`.
+    pub fn points(&self, dim: usize) -> &[f64] {
+        &self.points[dim]
+    }
+
+    /// Raw 1D differentiation matrix for direction `dim`.
+    ///
+    /// Entry `(j, i)` = `φ_i'(ξ_j)`. For the full tensor-product matrix see
+    /// [`Basis::diff_matrix`].
+    pub fn diff_matrix_1d(&self, dim: usize) -> &DMatrix<f64> {
+        &self.diff_matrices[dim]
+    }
+
+    /// Apply the differentiation operator along direction `dim` in place.
     ///
     /// Computes `sol_diff = D_dim · sol` where `D_dim` is the 1D differentiation
-    /// matrix in direction `dim`, applied to every fiber of the tensor-product grid
-    /// via sum factorisation.
+    /// matrix in direction `dim`, applied fiber-by-fiber over the tensor-product grid.
     ///
     /// # Panics
     /// Panics if `dim ≥ number of directions`, or if `sol`/`sol_diff` have the
     /// wrong length.
-    pub fn diff(&self, dim: usize, sol: &DVector<f64>, sol_diff: &mut DVector<f64>) {
+    pub fn diff(&self, dim: usize, sol: &[f64], sol_diff: &mut [f64]) {
         assert!(
             dim < self.basis.len(),
             "Differentiation is not defined in this direction"
         );
-
         assert!(
             self.n_points == sol.len(),
             "The input vector does not have the adequate size"
         );
-
         assert!(
             self.n_points == sol_diff.len(),
-            "The ouput vector does not have the adequate size"
+            "The output vector does not have the adequate size"
         );
 
         let step = self.step[dim];
         let start = &self.start[dim];
-
         let diff_matrix = &self.diff_matrices[dim];
         let n = self.basis[dim].0;
 
+        let sol_na = DVectorView::from_slice(sol, sol.len());
+        let mut sol_diff_na = DVectorViewMut::from_slice(sol_diff, sol_diff.len());
+
         for k in start {
-            let sol_view = sol.rows_with_step(*k, n, step);
-
-            let mut sol_diff_view = sol_diff.rows_with_step_mut(*k, n, step);
-
+            let sol_view = sol_na.rows_with_step(*k, n, step);
+            let mut sol_diff_view = sol_diff_na.rows_with_step_mut(*k, n, step);
             diff_matrix.mul_to(&sol_view, &mut sol_diff_view);
         }
     }
@@ -216,18 +215,13 @@ impl Basis {
     /// `w_{i_0} * w_{i_1} * … * w_{i_{d-1}}`.  Off-diagonal entries are zero.
     pub fn mass_matrix(&self) -> DMatrix<f64> {
         let mut mass_matrix = DMatrix::<f64>::zeros(self.n_points, self.n_points);
-
         for k in 0..self.n_points {
             let multi_index = self.get_multi_index(k);
-
-            let mut weight = 1.0;
-            for l in 0..self.basis.len() {
-                weight *= self.weights[l][multi_index[l]];
-            }
-
+            let weight = (0..self.basis.len())
+                .map(|l| self.weights[l][multi_index[l]])
+                .product();
             mass_matrix[(k, k)] = weight;
         }
-
         mass_matrix
     }
 
@@ -243,7 +237,6 @@ impl Basis {
 
         let step = self.step[dim];
         let start = &self.start[dim];
-
         let n = self.basis[dim].0;
 
         for k in start {

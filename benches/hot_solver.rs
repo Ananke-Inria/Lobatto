@@ -1,5 +1,4 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use nalgebra::DVector;
 use quadratix::hot::*;
 use std::f64::consts::PI;
 use std::hint::black_box;
@@ -28,10 +27,10 @@ fn bench_hot_solve_in_place(c: &mut Criterion) {
     for &r in r_values {
         group.throughput(Throughput::Elements(r as u64));
 
-        let solver = Hot1DLaplaceSolver::new(l, 0.0, r, alpha, beta);
+        let solver = PoissonSolver1D::new(l, 0.0, r, alpha, beta);
         let x = solver.get_x();
 
-        let f_init = DVector::from_fn(r, |i, _| rhs_f(x[i]));
+        let f_init: Vec<f64> = x.iter().map(|&xi| rhs_f(xi)).collect();
 
         group.bench_with_input(
             BenchmarkId::from_parameter(r),
@@ -63,7 +62,7 @@ fn bench_hot_solve_in_place_2d(c: &mut Criterion) {
         let ndof = r * r;
         group.throughput(Throughput::Elements(ndof as u64));
 
-        let solver = HotNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [r; 2], alpha, beta);
+        let solver = PoissonSolverND::<2>::new([1.0; 2], [0.0; 2], [r; 2], alpha, beta);
         let x = solver.get_x();
 
         let f_init: Vec<f64> = (0..ndof)
@@ -113,7 +112,7 @@ fn bench_hot_solve_in_place_3d(c: &mut Criterion) {
         let ndof = r * r * r;
         group.throughput(Throughput::Elements(ndof as u64));
 
-        let solver = HotNDLaplaceSolver::<3>::new([1.0; 3], [0.0; 3], [r; 3], alpha, beta);
+        let solver = PoissonSolverND::<3>::new([1.0; 3], [0.0; 3], [r; 3], alpha, beta);
         let x = solver.get_x();
 
         let f_init: Vec<f64> = (0..ndof)

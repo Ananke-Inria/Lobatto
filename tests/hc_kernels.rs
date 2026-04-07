@@ -1,4 +1,3 @@
-use nalgebra::DVector;
 use quadratix::basis::*;
 use quadratix::hc::*;
 
@@ -63,13 +62,7 @@ fn gll_batch_ref(v_in_aos: &[f64], n: usize, dofs: usize, dir: usize, gle: &Basi
     let mut out = vec![0.0_f64; n * dofs];
     for i in 0..n {
         let s = dofs * i;
-        let mut v = DVector::zeros(dofs);
-        gle.diff(
-            dir,
-            &DVector::from_row_slice(&v_in_aos[s..s + dofs]),
-            &mut v,
-        );
-        out[s..s + dofs].copy_from_slice(v.as_slice());
+        gle.diff(dir, &v_in_aos[s..s + dofs], &mut out[s..s + dofs]);
     }
     out
 }
@@ -85,9 +78,9 @@ fn test_dx_q3_q3() {
     let mut v_out = vec![0.0_f64; 4];
     dx_q3_q3::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(4);
-    Basis::new(vec![(4, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    let mut ref_out = vec![0.0_f64; 4];
+    Basis::new(vec![(4, true)]).diff(0, &v_in, &mut ref_out);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 #[test]
@@ -96,9 +89,9 @@ fn test_dx_q33_q33() {
     let mut v_out = vec![0.0_f64; 16];
     dx_q33_q33::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(16);
-    Basis::new(vec![(4, true), (4, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    let mut ref_out = vec![0.0_f64; 16];
+    Basis::new(vec![(4, true), (4, true)]).diff(0, &v_in, &mut ref_out);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 #[test]
@@ -107,13 +100,13 @@ fn test_dx_q333_q333() {
     let mut v_out = vec![0.0_f64; 64];
     dx_q333_q333::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(64);
+    let mut ref_out = vec![0.0_f64; 64];
     Basis::new(vec![(4, true), (4, true), (4, true)]).diff(
         0,
-        &DVector::from_vec(v_in),
+        &v_in,
         &mut ref_out,
     );
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 #[test]
@@ -122,13 +115,13 @@ fn test_dy_q333_q333() {
     let mut v_out = vec![0.0_f64; 64];
     dy_q333_q333::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(64);
+    let mut ref_out = vec![0.0_f64; 64];
     Basis::new(vec![(4, true), (4, true), (4, true)]).diff(
         1,
-        &DVector::from_vec(v_in),
+        &v_in,
         &mut ref_out,
     );
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 #[test]
@@ -137,13 +130,13 @@ fn test_dz_q333_q333() {
     let mut v_out = vec![0.0_f64; 64];
     dz_q333_q333::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(64);
+    let mut ref_out = vec![0.0_f64; 64];
     Basis::new(vec![(4, true), (4, true), (4, true)]).diff(
         2,
-        &DVector::from_vec(v_in),
+        &v_in,
         &mut ref_out,
     );
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 #[test]
@@ -152,9 +145,9 @@ fn test_dx_q4_q4() {
     let mut v_out = vec![0.0_f64; 5];
     dx_q4_q4::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(5);
-    Basis::new(vec![(5, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    let mut ref_out = vec![0.0_f64; 5];
+    Basis::new(vec![(5, true)]).diff(0, &v_in, &mut ref_out);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 #[test]
@@ -163,9 +156,9 @@ fn test_dx_q44_q44() {
     let mut v_out = vec![0.0_f64; 25];
     dx_q44_q44::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(25);
-    Basis::new(vec![(5, true), (5, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    let mut ref_out = vec![0.0_f64; 25];
+    Basis::new(vec![(5, true), (5, true)]).diff(0, &v_in, &mut ref_out);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 #[test]
@@ -174,13 +167,13 @@ fn test_dx_q444_q444() {
     let mut v_out = vec![0.0_f64; 125];
     dx_q444_q444::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(125);
+    let mut ref_out = vec![0.0_f64; 125];
     Basis::new(vec![(5, true), (5, true), (5, true)]).diff(
         0,
-        &DVector::from_vec(v_in),
+        &v_in,
         &mut ref_out,
     );
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 #[test]
@@ -189,13 +182,13 @@ fn test_dy_q444_q444() {
     let mut v_out = vec![0.0_f64; 125];
     dy_q444_q444::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(125);
+    let mut ref_out = vec![0.0_f64; 125];
     Basis::new(vec![(5, true), (5, true), (5, true)]).diff(
         1,
-        &DVector::from_vec(v_in),
+        &v_in,
         &mut ref_out,
     );
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 #[test]
@@ -204,13 +197,13 @@ fn test_dz_q444_q444() {
     let mut v_out = vec![0.0_f64; 125];
     dz_q444_q444::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(125);
+    let mut ref_out = vec![0.0_f64; 125];
     Basis::new(vec![(5, true), (5, true), (5, true)]).diff(
         2,
-        &DVector::from_vec(v_in),
+        &v_in,
         &mut ref_out,
     );
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 // ── Batch N=8 tests vs GLE ───────────────────────────────────────────────────
@@ -377,9 +370,9 @@ fn test_dx_q5_q5() {
     let mut v_out = vec![0.0_f64; 6];
     dx_q5_q5::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(6);
-    Basis::new(vec![(6, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    let mut ref_out = vec![0.0_f64; 6];
+    Basis::new(vec![(6, true)]).diff(0, &v_in, &mut ref_out);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 #[test]
@@ -388,9 +381,9 @@ fn test_dx_q55_q55() {
     let mut v_out = vec![0.0_f64; 36];
     dx_q55_q55::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(36);
-    Basis::new(vec![(6, true), (6, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    let mut ref_out = vec![0.0_f64; 36];
+    Basis::new(vec![(6, true), (6, true)]).diff(0, &v_in, &mut ref_out);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 #[test]
@@ -399,13 +392,13 @@ fn test_dx_q555_q555() {
     let mut v_out = vec![0.0_f64; 216];
     dx_q555_q555::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(216);
+    let mut ref_out = vec![0.0_f64; 216];
     Basis::new(vec![(6, true), (6, true), (6, true)]).diff(
         0,
-        &DVector::from_vec(v_in),
+        &v_in,
         &mut ref_out,
     );
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 #[test]
@@ -414,13 +407,13 @@ fn test_dy_q555_q555() {
     let mut v_out = vec![0.0_f64; 216];
     dy_q555_q555::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(216);
+    let mut ref_out = vec![0.0_f64; 216];
     Basis::new(vec![(6, true), (6, true), (6, true)]).diff(
         1,
-        &DVector::from_vec(v_in),
+        &v_in,
         &mut ref_out,
     );
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 #[test]
@@ -429,13 +422,13 @@ fn test_dz_q555_q555() {
     let mut v_out = vec![0.0_f64; 216];
     dz_q555_q555::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(216);
+    let mut ref_out = vec![0.0_f64; 216];
     Basis::new(vec![(6, true), (6, true), (6, true)]).diff(
         2,
-        &DVector::from_vec(v_in),
+        &v_in,
         &mut ref_out,
     );
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 // ── Q5 batch N=4/8 tests vs GLE ──────────────────────────────────────────────
@@ -508,9 +501,9 @@ fn test_dx_q6_q6() {
     let mut v_out = vec![0.0_f64; 7];
     dx_q6_q6::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(7);
-    Basis::new(vec![(7, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    let mut ref_out = vec![0.0_f64; 7];
+    Basis::new(vec![(7, true)]).diff(0, &v_in, &mut ref_out);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 #[test]
@@ -519,9 +512,9 @@ fn test_dx_q66_q66() {
     let mut v_out = vec![0.0_f64; 49];
     dx_q66_q66::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(49);
-    Basis::new(vec![(7, true), (7, true)]).diff(0, &DVector::from_vec(v_in), &mut ref_out);
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    let mut ref_out = vec![0.0_f64; 49];
+    Basis::new(vec![(7, true), (7, true)]).diff(0, &v_in, &mut ref_out);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 #[test]
@@ -530,13 +523,13 @@ fn test_dx_q666_q666() {
     let mut v_out = vec![0.0_f64; 343];
     dx_q666_q666::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(343);
+    let mut ref_out = vec![0.0_f64; 343];
     Basis::new(vec![(7, true), (7, true), (7, true)]).diff(
         0,
-        &DVector::from_vec(v_in),
+        &v_in,
         &mut ref_out,
     );
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 #[test]
@@ -545,13 +538,13 @@ fn test_dy_q666_q666() {
     let mut v_out = vec![0.0_f64; 343];
     dy_q666_q666::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(343);
+    let mut ref_out = vec![0.0_f64; 343];
     Basis::new(vec![(7, true), (7, true), (7, true)]).diff(
         1,
-        &DVector::from_vec(v_in),
+        &v_in,
         &mut ref_out,
     );
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 #[test]
@@ -560,13 +553,13 @@ fn test_dz_q666_q666() {
     let mut v_out = vec![0.0_f64; 343];
     dz_q666_q666::<1>(&v_in, &mut v_out);
 
-    let mut ref_out = DVector::zeros(343);
+    let mut ref_out = vec![0.0_f64; 343];
     Basis::new(vec![(7, true), (7, true), (7, true)]).diff(
         2,
-        &DVector::from_vec(v_in),
+        &v_in,
         &mut ref_out,
     );
-    assert_close(&v_out, ref_out.as_slice(), 1e-10);
+    assert_close(&v_out, &ref_out, 1e-10);
 }
 
 // ── Q6 batch N=4/8 tests vs GLE ──────────────────────────────────────────────

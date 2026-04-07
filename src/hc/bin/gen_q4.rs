@@ -12,10 +12,10 @@ use quadratix::basis::Basis;
 fn main() {
     let n = 5usize; // Q4: 5 nodes
     let calc = Basis::new(vec![(n, true)]);
-    let pts = &calc.points[0];
+    let pts = calc.points(0);
 
     // 5×5 differentiation matrix from the Basis: d[(row, col)]
-    let d = &calc.diff_matrices[0];
+    let d = calc.diff_matrix_1d(0);
 
     // ── Print nodes ──────────────────────────────────────────────────────────
     println!("// Q4 GLL nodes on [0,1]:");

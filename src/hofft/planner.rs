@@ -4,7 +4,7 @@
 //! which encapsulate only the **forward and inverse FFT steps** of the HoFFT algorithm
 //! (steps 2 and 4 from [`hofft::solver`]).
 //!
-//! //! Algorithm based on
+//! Algorithm based on
 //!
 //! - \[1\] Caforio, F. and Imperiale, S. (2019). *High-order discrete fourier transform for the solution of the Poisson equation*. SIAM Journal of Scientific Computing, 41(5), 2747-2771
 //!
@@ -56,7 +56,7 @@ impl HofftPlanner {
         let mut planner = FftPlanner::<f64>::new();
         let fw_fft = planner.plan_fft_forward(n);
         let i_fft = planner.plan_fft_inverse(n);
-        let gll_points = Basis::new(vec![(r + 1, true)]).points[0].clone();
+        let gll_points = Basis::new(vec![(r + 1, true)]).points(0).to_vec();
         Self {
             n,
             r,

@@ -1,12 +1,8 @@
-//! High-order FFT (HoFFT) solver for the periodic Laplace equation.
+//! HoFFT solver for the screened Poisson equation `(α M + β K) u = f`.
 //!
-//! $n$ elements of polynomial order $r$ in $\[0,L\]$.
-//!
-//! Solves $$ \alpha u - \beta \Delta u = f $$ with periodic boundary conditions using:
-//!
-//! Solves (α M + β K) u = f` on `[0, L]^N` with periodic boundary conditions
-//! using a spectral-element discretisation: *n* elements of polynomial order *r*
-//! per direction, so each direction has `n·r` DOFs.
+//! Solves `(α M + β K) u = f` on `[0, L]^N` using a spectral-element
+//! discretisation: *n* elements of polynomial order *r* per direction,
+//! so each direction has `n·r` DOFs.
 //!
 //! Algorithm based on
 //!
@@ -14,7 +10,7 @@
 //!
 //! ## Algorithm (1D outline)
 //!
-//! 1. **Mass scaling** — multiply the load vector `f` by the periodic diagonal
+//! 1. **Mass scaling** — multiply the load vector `f` by the diagonal
 //!    mass matrix `M` to convert from strong-form RHS to FEM RHS.
 //! 2. **Forward FFT** — apply a length-*n* FFT along each direction to decouple
 //!    the *n* Fourier modes.
@@ -23,7 +19,7 @@
 //!    pre-computed eigendecomposition.
 //! 4. **Inverse FFT** — transform back to physical space.
 //!
-//! The ND solver (`PoissonSolverND`) extends this by applying steps 2 and 4
+//! The ND solver ([`PoissonSolverND`]) extends this by applying steps 2 and 4
 //! direction by direction (sum factorisation) and solving the full `r^N × r^N`
 //! block-diagonal system in step 3 using tensor-product eigendecompositions.
 //! Steps 2 and 4 are parallelised with Rayon over independent fibers; step 3 is
@@ -88,13 +84,13 @@ pub struct PoissonSolver1D {
 }
 
 impl PoissonSolver1D {
-    /// Construct the 1D HoFFT solver.
+    /// Construct the 1D solver.
     ///
     /// - `l`: domain length.
     /// - `n`: number of elements.
     /// - `r`: polynomial order (GLL nodes per element, excluding the shared endpoint).
     /// - `alpha`, `beta`: operator coefficients for `α M + β K`.
-    /// - 'bc' type of boundary conditions (Periodic, Neumann or Dirichlet)
+    /// - `bc`: boundary condition type ([`BoundaryCondition::Periodic`], [`BoundaryCondition::Dirichlet`], or [`BoundaryCondition::Neumann`]).
     pub fn new(
         l: f64,
         xl: f64,
@@ -104,9 +100,15 @@ impl PoissonSolver1D {
         beta: f64,
         bc: BoundaryCondition,
     ) -> Self {
-        let planner = HofftPlanner::new(n, r, l, xl);
-
         let lobatto_basis = Basis::new(vec![(r + 1, true)]);
+
+        let h = l / (n as f64);
+
+        let planner = if bc == BoundaryCondition::Periodic {
+            HofftPlanner::new(n, r, l, xl)
+        } else {
+            HofftPlanner::new(2 * n, r, 2.0 * l, xl)
+        };
 
         let n_freq = if bc == BoundaryCondition::Periodic {
             n
@@ -123,7 +125,6 @@ impl PoissonSolver1D {
         let mut symbol = vec![DMatrix::<Complex::<f64>>::zeros(r, r); n_freq];
         let mass_matrix = lobatto_basis.mass_matrix();
         let periodic_mass_matrix = DVector::from_fn(r, |i, _| {
-            let h = l / (n as f64);
             if i == 0 {
                 h * 2.0 * mass_matrix[(0, 0)]
             } else {
@@ -138,7 +139,6 @@ impl PoissonSolver1D {
 
         //Compute the symbol of the operator for each frequency
         for k in 0..n_freq {
-            let h = l / (n as f64);
             let phase = -coeff_phase * PI * (k as f64) / (n as f64);
             let cos = phase.cos();
             let sin = phase.sin();
@@ -196,7 +196,7 @@ impl PoissonSolver1D {
             })
             .collect();
 
-        let bary_weights = barycentric_weights(&lobatto_basis.points[0]);
+        let bary_weights = barycentric_weights(&lobatto_basis.points(0));
 
         Self {
             l,
@@ -214,10 +214,53 @@ impl PoissonSolver1D {
         }
     }
 
-    /// GLL nodes on `[xl, xl+l]`, length `n * r`, ordered by local node then element:
-    /// `x[j * n + k]` = position of local node `j` in element `k`.
+    /// GLL nodes in increasing x order.
+    ///
+    /// - [`BoundaryCondition::Periodic`]:  `n*r` nodes — left endpoint `xl` included,
+    ///   right endpoint `xl+l` excluded (identified with `xl`).
+    /// - [`BoundaryCondition::Dirichlet`]: `n*r - 1` nodes — both endpoints excluded.
+    /// - [`BoundaryCondition::Neumann`]:   `n*r + 1` nodes — both endpoints included.
     pub fn get_x(&self) -> Vec<f64> {
-        self.planner.get_x()
+        let h = self.l / (self.n as f64);
+        let gll = &self.lobatto_basis.points(0); // length r+1, gll[0]=0, gll[r]=1
+        match self.bc {
+            BoundaryCondition::Periodic => {
+                // Each element k contributes j=0..r-1 (right endpoint = next element's left).
+                let mut x = Vec::with_capacity(self.n * self.r);
+                for k in 0..self.n {
+                    for j in 0..self.r {
+                        x.push(self.xl + h * ((k as f64) + gll[j]));
+                    }
+                }
+                x
+            }
+            BoundaryCondition::Dirichlet => {
+                // Skip xl (k=0, j=0) and xl+l (k=n-1, j=r).
+                let mut x = Vec::with_capacity(self.n * self.r - 1);
+                for j in 1..self.r {
+                    x.push(self.xl + h * gll[j]);
+                }
+                for k in 1..self.n {
+                    for j in 0..self.r {
+                        x.push(self.xl + h * ((k as f64) + gll[j]));
+                    }
+                }
+                x
+            }
+            BoundaryCondition::Neumann => {
+                // Element 0: all r+1 nodes; elements 1..n-1: skip shared left endpoint.
+                let mut x = Vec::with_capacity(self.n * self.r + 1);
+                for j in 0..=self.r {
+                    x.push(self.xl + h * gll[j]);
+                }
+                for k in 1..self.n {
+                    for j in 1..=self.r {
+                        x.push(self.xl + h * ((k as f64) + gll[j]));
+                    }
+                }
+                x
+            }
+        }
     }
 
     /// Solve `(α M + β K) u = f` in place.
@@ -225,50 +268,142 @@ impl PoissonSolver1D {
     /// On input, `f` contains the strong-form right-hand side evaluated at
     /// the GLL nodes returned by [`PoissonSolver1D::get_x`].
     /// On output, `f` contains the FEM solution `u` at the same nodes.
-    pub fn solve_in_place(&self, f: &mut DVector<f64>) {
-        if self.r == 1 {
-            let scale = self.periodic_mass_matrix[0];
-            let mut g: Vec<Complex<f64>> =
-                f.iter().map(|&v| Complex::new(scale * v, 0.0)).collect();
+    pub fn solve_in_place(&self, f: &mut [f64]) {
+        let n_dof = if self.bc == BoundaryCondition::Periodic {
+            self.n * self.r
+        } else {
+            2 * self.n * self.r
+        };
 
-            self.planner.forward(&mut g);
+        let mut g = DVector::<Complex<f64>>::zeros(n_dof);
 
-            for k in 0..self.n {
-                g[k] *= self.symbol_pseudo_inv[k][(0, 0)];
+        match self.bc {
+            BoundaryCondition::Periodic => {
+                for j in 0..self.r {
+                    for k in 0..self.n {
+                        g[j * self.n + k] = Complex {
+                            re: self.periodic_mass_matrix[j] * f[k * self.r + j],
+                            im: 0.0,
+                        };
+                    }
+                }
             }
-
-            self.planner.inverse(&mut g);
-
-            for i in 0..self.n {
-                f[i] = g[i].re;
+            BoundaryCondition::Dirichlet => {
+                // Odd extension on 2n elements: f[-1] = 0 (left BC), f[n*r] = 0 (right BC).
+                // First half  k ∈ [0, n): xl excluded → x-inc index = k*r + j - 1,
+                //             (k=0, j=0) is the left boundary → 0.
+                // Second half k ∈ [n, 2n): odd mirror → -f[(2n-k)*r - j - 1],
+                //             (k=n, j=0) is the right boundary → 0.
+                for j in 0..self.r {
+                    for k in 0..2 * self.n {
+                        g[j * (2 * self.n) + k] = Complex {
+                            re: if k < self.n {
+                                if k == 0 && j == 0 {
+                                    0.0
+                                } else {
+                                    self.periodic_mass_matrix[j] * f[k * self.r + j - 1]
+                                }
+                            } else {
+                                if k == self.n && j == 0 {
+                                    0.0
+                                } else {
+                                    -self.periodic_mass_matrix[j]
+                                        * f[(2 * self.n - k) * self.r - j - 1]
+                                }
+                            },
+                            im: 0.0,
+                        };
+                    }
+                }
             }
-            return;
-        }
-
-        let mut g = DVector::<Complex<f64>>::zeros(f.len());
-
-        for j in 0..self.r {
-            for k in 0..self.n {
-                let idx = j * self.n + k;
-                g[idx] = Complex {
-                    re: self.periodic_mass_matrix[j] * f[idx],
-                    im: 0.0,
-                };
+            BoundaryCondition::Neumann => {
+                // Even extension on 2n elements: f'(0) = 0, f'(l) = 0.
+                // First half  k ∈ [0, n): xl included → x-inc index = k*r + j.
+                // Second half k ∈ [n, 2n): even mirror → +f[(2n-k)*r - j].
+                for j in 0..self.r {
+                    for k in 0..2 * self.n {
+                        g[j * (2 * self.n) + k] = Complex {
+                            re: if k < self.n {
+                                self.periodic_mass_matrix[j] * f[k * self.r + j]
+                            } else {
+                                self.periodic_mass_matrix[j] * f[(2 * self.n - k) * self.r - j]
+                            },
+                            im: 0.0,
+                        };
+                    }
+                }
             }
-        }
+        };
 
         self.planner.forward(g.as_mut_slice());
 
-        for k in 0..self.n {
-            let x = &self.symbol_pseudo_inv[k] * g.rows_with_step(k, self.r, self.n - 1);
-            g.rows_with_step_mut(k, self.r, self.n - 1)
+        let n_elem = if self.bc == BoundaryCondition::Periodic {
+            self.n
+        } else {
+            2 * self.n
+        };
+
+        for k in 0..self.symbol_pseudo_inv.len() {
+            let x = &self.symbol_pseudo_inv[k] * g.rows_with_step(k, self.r, n_elem - 1);
+            g.rows_with_step_mut(k, self.r, n_elem - 1)
                 .set_column(0, &x);
+        }
+
+        // For Dirichlet/Neumann: recover frequencies k ∈ {n+1,...,2n-1}
+        // from the already-solved k ∈ {1,...,n-1} via Lemma 3.2 (Caforio & Imperiale 2019).
+        //   j = 0:   û_{2N-k, 0}   = ±û_{k, 0}
+        //   j > 0:   û_{2N-k, j}   = ±e^{-iπk/N} û_{k, R-j}
+        // where + = Neumann, − = Dirichlet.
+        if self.bc != BoundaryCondition::Periodic {
+            let sign = if self.bc == BoundaryCondition::Dirichlet {
+                -1.0_f64
+            } else {
+                1.0_f64
+            };
+            for k in 1..self.n {
+                let km = 2 * self.n - k;
+                let phase = Complex::new(0.0_f64, -PI * (k as f64) / (self.n as f64)).exp();
+                // j = 0
+                g[km] = sign * g[k];
+                // j in 1..r
+                for j in 1..self.r {
+                    g[j * (2 * self.n) + km] = sign * phase * g[(self.r - j) * (2 * self.n) + k];
+                }
+            }
         }
 
         self.planner.inverse(g.as_mut_slice());
 
-        for i in 0..f.len() {
-            f[i] = g[i].re;
+        match self.bc {
+            BoundaryCondition::Periodic => {
+                // Inverse of: g[j * n + k] ← f[k * r + j]
+                for j in 0..self.r {
+                    for k in 0..self.n {
+                        f[k * self.r + j] = g[j * self.n + k].re;
+                    }
+                }
+            }
+            BoundaryCondition::Dirichlet => {
+                // Inverse of first half only: g[j * 2n + k] ← f[k*r + j - 1]  (k<n, skip k=0,j=0)
+                for j in 0..self.r {
+                    for k in 0..self.n {
+                        if k == 0 && j == 0 {
+                            continue;
+                        }
+                        f[k * self.r + j - 1] = g[j * (2 * self.n) + k].re;
+                    }
+                }
+            }
+            BoundaryCondition::Neumann => {
+                // Inverse of first half: g[j * 2n + k] ← f[k*r + j]  (k<n)
+                for j in 0..self.r {
+                    for k in 0..self.n {
+                        f[k * self.r + j] = g[j * (2 * self.n) + k].re;
+                    }
+                }
+                // Right endpoint: mirror at k=n, j=0 → HoFFT index 0*(2*n) + n = n
+                f[self.n * self.r] = g[self.n].re;
+            }
         }
     }
 
@@ -278,14 +413,14 @@ impl PoissonSolver1D {
     /// element `k` is located in O(1).  Only the `r+1` basis functions of that
     /// element are evaluated (O(r)); the shared right endpoint (local node `r`)
     /// is DOF 0 of element `(k+1) % n`.
-    pub fn eval(&self, x: f64, u: &DVector<f64>) -> f64 {
+    pub fn eval(&self, x: f64, u: &[f64]) -> f64 {
         let h = self.l / (self.n as f64);
         let y = (x - self.xl).rem_euclid(self.l) + self.xl;
         let k = (((y - self.xl) / h) as usize).min(self.n - 1);
         let xi = (y - self.xl - (k as f64) * h) / h;
 
         let phi =
-            lagrangian_interpolation_all(&self.lobatto_basis.points[0], &self.bary_weights, xi);
+            lagrangian_interpolation_all(&self.lobatto_basis.points(0), &self.bary_weights, xi);
 
         let mut val = 0.0_f64;
         for j in 0..self.r {
@@ -294,9 +429,23 @@ impl PoissonSolver1D {
         val += u[(k + 1) % self.n] * phi[self.r];
         val
     }
+
+    /// Apply a flow map `lambda` to every grid node and interpolate `u` at the
+    /// resulting positions.
+    ///
+    /// `u` must be in the same layout as the output of [`PoissonSolver1D::solve_in_place`]
+    /// (i.e. the DOF vector indexed by [`PoissonSolver1D::get_x`]).
+    /// `lambda` maps a physical position to its image under the flow.
+    pub fn convect<F>(&self, lambda: F, u: &[f64]) -> Vec<f64>
+    where
+        F: Fn(f64) -> f64,
+    {
+        let xs = self.get_x();
+        xs.iter().map(|&x| self.eval(lambda(x), u)).collect()
+    }
 }
 
-/// N-dimensional HoFFT Laplace solver.
+/// N-dimensional HoFFT screened Poisson solver.
 ///
 /// Extends [`PoissonSolver1D`] to `N` spatial dimensions using sum
 /// factorisation: FFTs are applied direction by direction, and the symbol
@@ -444,10 +593,9 @@ impl<const N: usize> PoissonSolverND<N> {
     /// returned by [`PoissonSolverND::get_x`].
     /// On output, `f` contains the FEM solution `u` at the same grid.
     ///
-    pub fn solve_in_place(&self, f: &mut Vec<f64>) {
+    pub fn solve_in_place(&self, f: &mut [f64]) {
         // Build g with mass scaling (parallel, no unsafe)
         let mut g: Vec<Complex<f64>> = f
-            .as_slice()
             .par_iter()
             .enumerate()
             .map(|(p, &fp)| {
@@ -557,7 +705,7 @@ impl<const N: usize> PoissonSolverND<N> {
     ///    read the `(r_0+1)·…·(r_{N-1}+1)` scattered DOF values into a contiguous array **once**,
     ///    then all such points evaluate from the cache-hot local patch.
     /// 3. **Rayon**: element groups are processed in parallel.
-    pub fn eval(&self, xs: &[[f64; N]], u: &Vec<f64>) -> Vec<f64> {
+    pub fn eval(&self, xs: &[[f64; N]], u: &[f64]) -> Vec<f64> {
         // Step 1: compute element index for each point (parallel).
         let k: Vec<usize> = xs.par_iter().map(|x| self.element_index(x)).collect();
 
@@ -588,7 +736,7 @@ impl<const N: usize> PoissonSolverND<N> {
                             let y = (xs[i][d] - self.xls[d]).rem_euclid(self.ls[d]) + self.xls[d];
                             let xi = (y - self.xls[d] - (ks[d] as f64) * self.hs[d]) / self.hs[d];
                             lagrangian_interpolation_all(
-                                &self.solvers[d].lobatto_basis.points[0],
+                                &self.solvers[d].lobatto_basis.points(0),
                                 &self.solvers[d].bary_weights,
                                 xi,
                             )
@@ -642,7 +790,7 @@ impl<const N: usize> PoissonSolverND<N> {
     /// Returns a `Vec<f64>` of length equal to the number of DOFs: entry `p`
     /// is `u(lambda(x_p))`, i.e. the interpolated value of `u` at the image
     /// of the `p`-th DOF node under the flow map.
-    pub fn convect<F>(&self, lambda: F, u: &Vec<f64>) -> Vec<f64>
+    pub fn convect<F>(&self, lambda: F, u: &[f64]) -> Vec<f64>
     where
         F: Fn([f64; N]) -> [f64; N] + Sync,
     {

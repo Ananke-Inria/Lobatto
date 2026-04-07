@@ -1,4 +1,3 @@
-use nalgebra::DVector;
 use quadratix::hot::*;
 use std::f64::consts::PI;
 
@@ -63,9 +62,9 @@ fn convergence_1d() {
         let mut prev_err: Option<f64> = None;
 
         for r in 2..=*r_max {
-            let solver = Hot1DLaplaceSolver::new(1.0, 0.0, r, alpha, beta);
+            let solver = PoissonSolver1D::new(1.0, 0.0, r, alpha, beta);
             let x = solver.get_x();
-            let mut f = DVector::from_fn(r, |i, _| rhs_f(x[i]));
+            let mut f: Vec<f64> = x.iter().map(|&xi| rhs_f(xi)).collect();
             solver.solve_in_place(&mut f);
             let err = (0..r)
                 .map(|i| (f[i] - exact_u(x[i])).abs())
@@ -126,7 +125,7 @@ fn convergence_2d() {
 
     let mut prev_err: Option<f64> = None;
     for r in 2..=r_max {
-        let solver = HotNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [r; 2], alpha, beta);
+        let solver = PoissonSolverND::<2>::new([1.0; 2], [0.0; 2], [r; 2], alpha, beta);
         let x = solver.get_x();
         let total = x.len();
         let mut f: Vec<f64> = (0..total).map(|i| rhs_f(x[i][0], x[i][1])).collect();
@@ -175,7 +174,7 @@ fn convergence_2d_laplace() {
 
     let mut prev_err: Option<f64> = None;
     for r in 2..=r_max {
-        let solver = HotNDLaplaceSolver::<2>::new([1.0; 2], [0.0; 2], [r; 2], alpha, beta);
+        let solver = PoissonSolverND::<2>::new([1.0; 2], [0.0; 2], [r; 2], alpha, beta);
         let x = solver.get_x();
         let total = x.len();
         let mut f: Vec<f64> = (0..total).map(|i| rhs_f(x[i][0], x[i][1])).collect();
@@ -241,7 +240,7 @@ fn convergence_3d() {
 
     let mut prev_err: Option<f64> = None;
     for r in 2..=r_max {
-        let solver = HotNDLaplaceSolver::<3>::new(ls, xls, [r; 3], alpha, beta);
+        let solver = PoissonSolverND::<3>::new(ls, xls, [r; 3], alpha, beta);
         let x = solver.get_x();
         let total = x.len();
 
@@ -337,7 +336,7 @@ fn convergence_3d_eval() {
 
     let mut prev_err: Option<f64> = None;
     for r in 2..=r_max {
-        let solver = HotNDLaplaceSolver::<3>::new(ls, xls, [r; 3], alpha, beta);
+        let solver = PoissonSolverND::<3>::new(ls, xls, [r; 3], alpha, beta);
         let x = solver.get_x();
         let total = x.len();
 

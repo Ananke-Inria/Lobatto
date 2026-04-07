@@ -7,7 +7,7 @@
 /// Evaluate the `i`-th Lagrange basis function at `p`.
 ///
 /// The basis is built on the nodes `pos`.  `i` must be in `0..pos.len()`.
-pub fn lagrangian_interpolation(pos: &Vec<f64>, p: f64, i: usize) -> f64 {
+pub fn lagrangian_interpolation(pos: &[f64], p: f64, i: usize) -> f64 {
     let mut res: f64 = 1.0;
     let mut w = 1.0;
 
@@ -31,7 +31,7 @@ pub fn lagrangian_interpolation(pos: &Vec<f64>, p: f64, i: usize) -> f64 {
 /// Evaluate the derivative of the `i`-th Lagrange basis function at `p`.
 ///
 /// The basis is built on the nodes `pos`.  `i` must be in `0..pos.len()`.
-pub fn lagrangian_derivative_interpolation(pos: &Vec<f64>, p: f64, i: usize) -> f64 {
+pub fn lagrangian_derivative_interpolation(pos: &[f64], p: f64, i: usize) -> f64 {
     let mut s = 0.0;
     let mut w = 1.0;
 
@@ -83,7 +83,7 @@ pub fn barycentric_weights(x: &[f64]) -> Vec<f64> {
 /// Returns a vector of length `pos.len()` where entry `i` is `L_i(p)`.
 /// The basis is built on the nodes `pos`; `w` must be the precomputed barycentric
 /// weights from [`barycentric_weights`].  Cost: O(r) after the O(r²) precomputation.
-pub fn lagrangian_interpolation_all(pos: &Vec<f64>, w: &Vec<f64>, p: f64) -> Vec<f64> {
+pub fn lagrangian_interpolation_all(pos: &[f64], w: &[f64], p: f64) -> Vec<f64> {
     let n = pos.len();
 
     // Build diffs[r] = p - pos[r], tracking the index of the smallest |diff|.

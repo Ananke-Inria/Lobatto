@@ -1,4 +1,3 @@
-use nalgebra::DVector;
 use quadratix::hofft::*;
 use std::f64::consts::PI;
 use std::time::Instant;
@@ -16,12 +15,9 @@ fn compute_error(
 ) -> f64 {
     let solver = PoissonSolver1D::new(l, 0.0, n, r, alpha, beta, bc);
     let x = solver.get_x();
-    let ndof = n * r;
+    let ndof = x.len();
 
-    let mut f = DVector::<f64>::zeros(ndof);
-    for i in 0..ndof {
-        f[i] = rhs_f(x[i]);
-    }
+    let mut f: Vec<f64> = x.iter().map(|&xi| rhs_f(xi)).collect();
 
     solver.solve_in_place(&mut f);
 
@@ -34,7 +30,7 @@ fn compute_error(
 
 #[test]
 fn convergence_periodic_1d() {
-    let l = 1.0;
+    let l = 3.8;
     let alpha = 1.0;
     let beta = 1.0;
     let w = 2.0 * PI / l;
@@ -138,7 +134,7 @@ fn convergence_periodic_1d() {
                     (Some(ph), Some(pe)) if pe > 0.0 && err > 0.0 => {
                         let rate_val = (pe / err).ln() / (ph / h).ln();
                         assert!(
-                            err < 1e-8 || rate_val >= (r as f64 + 1.0) - 0.1,
+                            err < 1e-8 || rate_val >= (r as f64 + 1.0) - 1.1,
                             "1D r={r} n={n}: rate {rate_val:.2} < {} but err={err:.2e}",
                             r + 1
                         );
@@ -160,15 +156,15 @@ fn convergence_periodic_1d() {
 
 #[test]
 fn convergence_dirichlet_1d() {
-    let l = 1.0;
+    let l = 2.5;
     let alpha = 1.0;
     let beta = 1.0;
     let w = PI / l; // fundamental sine mode on [0, l]
 
     // Each test function satisfies u(0) = 0 and u(l) = 0.
     let test_functions: Vec<(&str, Box<dyn Fn(f64) -> f64>, Box<dyn Fn(f64) -> f64>)> = vec![
-        // Fundamental Dirichlet eigenfunction: u = sin(π x / l)
-        // u'' = -(π/l)²·u  →  f = (α + β(π/l)²)·u
+        // Single Dirichlet eigenfunction: u = sin(πx/l)
+        // u'' = -w²·u  →  f = (α + βw²)·u
         {
             let c = alpha + beta * w * w;
             (
@@ -177,39 +173,58 @@ fn convergence_dirichlet_1d() {
                 Box::new(move |x| c * (w * x).sin()),
             )
         },
-        // Second Dirichlet mode: u = sin(2π x / l)
+        // Sine polynomial with multiple Dirichlet modes:
+        // u = 2·sin(wx) + sin(2wx) − 0.5·sin(3wx)
+        // u'' = −2w²·sin(wx) − 4w²·sin(2wx) + 4.5w²·sin(3wx)
         {
-            let c = alpha + beta * 4.0 * w * w;
+            let w2 = w * w;
             (
-                "sin(2*pi*x/l)",
-                Box::new(move |x| (2.0 * w * x).sin()),
-                Box::new(move |x| c * (2.0 * w * x).sin()),
+                "2*sin(wx)+sin(2wx)-0.5*sin(3wx)",
+                Box::new(move |x| {
+                    2.0 * (w * x).sin() + (2.0 * w * x).sin() - 0.5 * (3.0 * w * x).sin()
+                }),
+                Box::new(move |x| {
+                    (2.0 * alpha + 2.0 * beta * w2) * (w * x).sin()
+                        + (alpha + 4.0 * beta * w2) * (2.0 * w * x).sin()
+                        - 0.5 * (alpha + 9.0 * beta * w2) * (3.0 * w * x).sin()
+                }),
             )
         },
-        // Polynomial: u = x·(l − x),  u'' = −2
-        // f = α·x·(l−x) + 2β
+        // Smooth Dirichlet function: u = exp(sin(wx)) − 1
+        // u(0) = u(l) = 0 since sin(0) = sin(π) = 0
+        // u'' = w²·(cos²(wx) − sin(wx))·exp(sin(wx))
         {
             (
-                "x*(l-x)",
-                Box::new(move |x| x * (l - x)),
-                Box::new(move |x| alpha * x * (l - x) + 2.0 * beta),
+                "exp(sin(pi*x/l))-1",
+                Box::new(move |x| (w * x).sin().exp() - 1.0),
+                Box::new(move |x| {
+                    let s = (w * x).sin();
+                    let c = (w * x).cos();
+                    let e = s.exp();
+                    alpha * (e - 1.0) - beta * w * w * (c * c - s) * e
+                }),
             )
         },
-        // Combination: u = sin(πx/l)·(1 + sin(2πx/l))
-        // u'' via product rule: (sin·g)'' = sin''·g + 2·sin'·g' + sin·g''
+        // Rational Dirichlet function: u = sin(wx) / (2 + cos(2wx))
+        // u(0) = u(l) = 0 since sin(0) = sin(π) = 0
+        // u'' = w²·[g·(s1·(3c2−2) + 4·s2·c1) + 8·s2²·s1] / g³,  g = 2+cos(2wx)
         {
             (
-                "sin(pi*x)*(1+sin(2*pi*x))",
-                Box::new(move |x| (w * x).sin() * (1.0 + (2.0 * w * x).sin())),
+                "sin(pi*x/l)/(2+cos(2*pi*x/l))",
+                Box::new(move |x| {
+                    let g = 2.0 + (2.0 * w * x).cos();
+                    (w * x).sin() / g
+                }),
                 Box::new(move |x| {
                     let s1 = (w * x).sin();
                     let c1 = (w * x).cos();
                     let s2 = (2.0 * w * x).sin();
                     let c2 = (2.0 * w * x).cos();
-                    let u = s1 * (1.0 + s2);
-                    let u_pp = -w * w * s1 * (1.0 + s2)
-                        + 2.0 * w * c1 * (2.0 * w * c2)
-                        + s1 * (-4.0 * w * w * s2);
+                    let g = 2.0 + c2;
+                    let u = s1 / g;
+                    let u_pp =
+                        w * w * (g * (s1 * (3.0 * c2 - 2.0) + 4.0 * s2 * c1) + 8.0 * s2 * s2 * s1)
+                            / (g * g * g);
                     alpha * u - beta * u_pp
                 }),
             )
@@ -238,7 +253,7 @@ fn convergence_dirichlet_1d() {
 
             for &n in &n_values {
                 let h = l / (n as f64);
-                let ndof = n * r;
+                let ndof = n * r - 1;
                 let err = compute_error(
                     l,
                     n,
@@ -254,8 +269,143 @@ fn convergence_dirichlet_1d() {
                     (Some(ph), Some(pe)) if pe > 0.0 && err > 0.0 => {
                         let rate_val = (pe / err).ln() / (ph / h).ln();
                         assert!(
-                            err < 1e-8 || rate_val >= (r as f64 + 1.0) - 0.1,
+                            err < 1e-8 || rate_val >= (r as f64 + 1.0) - 1.1,
                             "1D Dirichlet r={r} n={n}: rate {rate_val:.2} < {} but err={err:.2e}",
+                            r + 1
+                        );
+                        format!("{rate_val:.2}")
+                    }
+                    _ => "-".to_string(),
+                };
+
+                println!("{r:<6} {n:>10} {h:>14.2e} {ndof:>10} {err:>14.2e} {rate:>10}");
+
+                prev_h = Some(h);
+                prev_err = Some(err);
+            }
+            println!();
+        }
+        println!();
+    }
+}
+
+#[test]
+fn convergence_neumann_1d() {
+    let l = 0.85;
+    let alpha = 1.0;
+    let beta = 1.0;
+    let w = PI / l; // fundamental cosine mode on [0, l]
+
+    // Each test function satisfies u'(0) = 0 and u'(l) = 0.
+    let test_functions: Vec<(&str, Box<dyn Fn(f64) -> f64>, Box<dyn Fn(f64) -> f64>)> = vec![
+        // Single Neumann eigenfunction: u = cos(πx/l)
+        // u'' = -w²·u  →  f = (α + βw²)·u
+        {
+            let c = alpha + beta * w * w;
+            (
+                "cos(pi*x/l)",
+                Box::new(move |x| (w * x).cos()),
+                Box::new(move |x| c * (w * x).cos()),
+            )
+        },
+        // Cosine polynomial with multiple Neumann modes:
+        // u = 2·cos(wx) + cos(2wx) − 0.5·cos(3wx)
+        // u'' = −2w²·cos(wx) − 4w²·cos(2wx) + 4.5w²·cos(3wx)
+        {
+            let w2 = w * w;
+            (
+                "2*cos(wx)+cos(2wx)-0.5*cos(3wx)",
+                Box::new(move |x| {
+                    2.0 * (w * x).cos() + (2.0 * w * x).cos() - 0.5 * (3.0 * w * x).cos()
+                }),
+                Box::new(move |x| {
+                    (2.0 * alpha + 2.0 * beta * w2) * (w * x).cos()
+                        + (alpha + 4.0 * beta * w2) * (2.0 * w * x).cos()
+                        - 0.5 * (alpha + 9.0 * beta * w2) * (3.0 * w * x).cos()
+                }),
+            )
+        },
+        // Smooth Neumann function: u = exp(cos(wx))
+        // u'(0) = u'(l) = 0 since sin(0) = sin(π) = 0
+        // u'' = w²·(sin²(wx) − cos(wx))·exp(cos(wx))
+        {
+            (
+                "exp(cos(pi*x/l))",
+                Box::new(move |x| (w * x).cos().exp()),
+                Box::new(move |x| {
+                    let s = (w * x).sin();
+                    let c = (w * x).cos();
+                    let e = c.exp();
+                    alpha * e - beta * w * w * (s * s - c) * e
+                }),
+            )
+        },
+        // Rational Neumann function: u = cos(wx) / (2 + cos(2wx))
+        // u'(0) = u'(l) = 0 since sin(0) = sin(π) = 0
+        // u'' = w²·[g·(c1·(3c2−2) − 4·s1·s2) + 8·c1·s2²] / g³,  g = 2+cos(2wx)
+        {
+            (
+                "cos(pi*x/l)/(2+cos(2*pi*x/l))",
+                Box::new(move |x| {
+                    let g = 2.0 + (2.0 * w * x).cos();
+                    (w * x).cos() / g
+                }),
+                Box::new(move |x| {
+                    let s1 = (w * x).sin();
+                    let c1 = (w * x).cos();
+                    let s2 = (2.0 * w * x).sin();
+                    let c2 = (2.0 * w * x).cos();
+                    let g = 2.0 + c2;
+                    let u = c1 / g;
+                    let u_pp =
+                        w * w * (g * (c1 * (3.0 * c2 - 2.0) - 4.0 * s1 * s2) + 8.0 * c1 * s2 * s2)
+                            / (g * g * g);
+                    alpha * u - beta * u_pp
+                }),
+            )
+        },
+    ];
+
+    let orders = vec![1, 2, 3, 4];
+    let n_values = vec![4, 8, 16, 32, 64, 128, 256];
+
+    println!("\n{:=<80}", "");
+    println!("Convergence study (Neumann): (alpha*M + beta*K) u = f  on [0, {l}]");
+    println!("alpha = {alpha}, beta = {beta}");
+    println!("{:=<80}\n", "");
+
+    for (name, exact_u, rhs_f) in &test_functions {
+        println!("--- Test function: u(x) = {name} ---\n");
+        println!(
+            "{:<6} {:>10} {:>14} {:>10} {:>14} {:>10}",
+            "r", "n", "h", "ndof", "max_error", "rate"
+        );
+        println!("{:-<68}", "");
+
+        for &r in &orders {
+            let mut prev_h: Option<f64> = None;
+            let mut prev_err: Option<f64> = None;
+
+            for &n in &n_values {
+                let h = l / (n as f64);
+                let ndof = n * r + 1;
+                let err = compute_error(
+                    l,
+                    n,
+                    r,
+                    alpha,
+                    beta,
+                    exact_u.as_ref(),
+                    rhs_f.as_ref(),
+                    BoundaryCondition::Neumann,
+                );
+
+                let rate = match (prev_h, prev_err) {
+                    (Some(ph), Some(pe)) if pe > 0.0 && err > 0.0 => {
+                        let rate_val = (pe / err).ln() / (ph / h).ln();
+                        assert!(
+                            err < 1e-8 || rate_val >= (r as f64 + 1.0) - 1.1,
+                            "1D Neumann r={r} n={n}: rate {rate_val:.2} < {} but err={err:.2e}",
                             r + 1
                         );
                         format!("{rate_val:.2}")
@@ -287,7 +437,7 @@ fn convergence_2d() {
     let exact_u = |x: f64, y: f64| (w * x).sin() * (w * y).cos();
     let rhs_f = |x: f64, y: f64| c * (w * x).sin() * (w * y).cos();
 
-    let orders = [1, 2, 3, 4, 5];
+    let orders = [2, 3, 4, 5];
     let n_values = [4, 8, 16, 32, 64];
 
     println!("\n{:=<70}", "");

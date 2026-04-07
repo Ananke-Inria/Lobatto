@@ -1,7 +1,6 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::hint::black_box;
 
-use nalgebra::DVector;
 use quadratix::basis::*;
 use quadratix::hc::*;
 
@@ -50,8 +49,8 @@ fn bench_dx_q3(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("hc", 1), |b| {
         b.iter(|| dx_q3_q3::<1>(black_box(&v_in_1), &mut v_out_1))
     });
-    let v_in_gle: DVector<f64> = DVector::from_vec(seeded_vec(4));
-    let mut v_out_gle: DVector<f64> = DVector::from_vec(vec![0.0; 4]);
+    let v_in_gle: Vec<f64> = seeded_vec(4);
+    let mut v_out_gle: Vec<f64> = vec![0.0; 4];
     let gle = Basis::new(vec![(4, true)]);
     group.bench_function(BenchmarkId::new("Basis::diff", 1), |b| {
         b.iter(|| gle.diff(0, black_box(&v_in_gle), &mut v_out_gle))
@@ -88,8 +87,8 @@ fn bench_dx_q33(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("hc", 1), |b| {
         b.iter(|| dx_q33_q33::<1>(black_box(&v_in_1), &mut v_out_1))
     });
-    let v_in_gle: DVector<f64> = DVector::from_vec(seeded_vec(16));
-    let mut v_out_gle: DVector<f64> = DVector::from_vec(vec![0.0; 16]);
+    let v_in_gle: Vec<f64> = seeded_vec(16);
+    let mut v_out_gle: Vec<f64> = vec![0.0; 16];
     let gle = Basis::new(vec![(4, true), (4, true)]);
     group.bench_function(BenchmarkId::new("Basis::diff", 1), |b| {
         b.iter(|| gle.diff(0, black_box(&v_in_gle), &mut v_out_gle))
@@ -126,8 +125,8 @@ fn bench_dx_q4(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("hc", 1), |b| {
         b.iter(|| dx_q4_q4::<1>(black_box(&v_in_1), &mut v_out_1))
     });
-    let v_in_gle: DVector<f64> = DVector::from_vec(seeded_vec(5));
-    let mut v_out_gle: DVector<f64> = DVector::from_vec(vec![0.0; 5]);
+    let v_in_gle: Vec<f64> = seeded_vec(5);
+    let mut v_out_gle: Vec<f64> = vec![0.0; 5];
     let gle = Basis::new(vec![(5, true)]);
     group.bench_function(BenchmarkId::new("Basis::diff", 1), |b| {
         b.iter(|| gle.diff(0, black_box(&v_in_gle), &mut v_out_gle))
@@ -165,8 +164,8 @@ fn bench_dx_q44(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("hc", 1), |b| {
         b.iter(|| dx_q44_q44::<1>(black_box(&v_in_1), &mut v_out_1))
     });
-    let v_in_gle: DVector<f64> = DVector::from_vec(seeded_vec(25));
-    let mut v_out_gle: DVector<f64> = DVector::from_vec(vec![0.0; 25]);
+    let v_in_gle: Vec<f64> = seeded_vec(25);
+    let mut v_out_gle: Vec<f64> = vec![0.0; 25];
     let gle = Basis::new(vec![(5, true), (5, true)]);
     group.bench_function(BenchmarkId::new("Basis::diff", 1), |b| {
         b.iter(|| gle.diff(0, black_box(&v_in_gle), &mut v_out_gle))
@@ -204,8 +203,8 @@ fn bench_dx_q5(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("hc", 1), |b| {
         b.iter(|| dx_q5_q5::<1>(black_box(&v_in_1), &mut v_out_1))
     });
-    let v_in_gle: DVector<f64> = DVector::from_vec(seeded_vec(6));
-    let mut v_out_gle: DVector<f64> = DVector::from_vec(vec![0.0; 6]);
+    let v_in_gle: Vec<f64> = seeded_vec(6);
+    let mut v_out_gle: Vec<f64> = vec![0.0; 6];
     let gle = Basis::new(vec![(6, true)]);
     group.bench_function(BenchmarkId::new("Basis::diff", 1), |b| {
         b.iter(|| gle.diff(0, black_box(&v_in_gle), &mut v_out_gle))
@@ -243,8 +242,8 @@ fn bench_dx_q55(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("hc", 1), |b| {
         b.iter(|| dx_q55_q55::<1>(black_box(&v_in_1), &mut v_out_1))
     });
-    let v_in_gle: DVector<f64> = DVector::from_vec(seeded_vec(36));
-    let mut v_out_gle: DVector<f64> = DVector::from_vec(vec![0.0; 36]);
+    let v_in_gle: Vec<f64> = seeded_vec(36);
+    let mut v_out_gle: Vec<f64> = vec![0.0; 36];
     let gle = Basis::new(vec![(6, true), (6, true)]);
     group.bench_function(BenchmarkId::new("Basis::diff", 1), |b| {
         b.iter(|| gle.diff(0, black_box(&v_in_gle), &mut v_out_gle))
@@ -282,8 +281,8 @@ fn bench_dx_q6(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("hc", 1), |b| {
         b.iter(|| dx_q6_q6::<1>(black_box(&v_in_1), &mut v_out_1))
     });
-    let v_in_gle: DVector<f64> = DVector::from_vec(seeded_vec(7));
-    let mut v_out_gle: DVector<f64> = DVector::from_vec(vec![0.0; 7]);
+    let v_in_gle: Vec<f64> = seeded_vec(7);
+    let mut v_out_gle: Vec<f64> = vec![0.0; 7];
     let gle = Basis::new(vec![(7, true)]);
     group.bench_function(BenchmarkId::new("Basis::diff", 1), |b| {
         b.iter(|| gle.diff(0, black_box(&v_in_gle), &mut v_out_gle))
@@ -321,8 +320,8 @@ fn bench_dx_q66(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("hc", 1), |b| {
         b.iter(|| dx_q66_q66::<1>(black_box(&v_in_1), &mut v_out_1))
     });
-    let v_in_gle: DVector<f64> = DVector::from_vec(seeded_vec(49));
-    let mut v_out_gle: DVector<f64> = DVector::from_vec(vec![0.0; 49]);
+    let v_in_gle: Vec<f64> = seeded_vec(49);
+    let mut v_out_gle: Vec<f64> = vec![0.0; 49];
     let gle = Basis::new(vec![(7, true), (7, true)]);
     group.bench_function(BenchmarkId::new("Basis::diff", 1), |b| {
         b.iter(|| gle.diff(0, black_box(&v_in_gle), &mut v_out_gle))

@@ -1,4 +1,4 @@
-//! High-order Tensor (HoT) solver for the periodic Laplace equation.
+//! High-order Tensor (HoT) solver for the screened Poisson equation `(α M + β K) u = f`.
 //!
 //! Solves `(α M + β K) u = f` on `[0, L]^N` with periodic boundary conditions
 //! using a **single spectral element** of polynomial order *r* per direction
@@ -25,13 +25,13 @@ use crate::utilities::{barycentric_weights, lagrangian_interpolation_all};
 use nalgebra::*;
 use rayon::prelude::*;
 
-/// 1D HoT Laplace solver: a single element of polynomial order *r* on `[0, L]`.
+/// 1D HoT screened Poisson solver: a single element of polynomial order *r* on `[0, L]`.
 ///
 /// Solves `(α M + β K) u = f` with periodic boundary conditions using a single
 /// GLL spectral element.  Because `n = 1` the only Fourier mode is `k = 0`, so
 /// the symbol is a real symmetric *r×r* matrix and the solve reduces to a
 /// generalised eigendecomposition.
-pub struct Hot1DLaplaceSolver {
+pub struct PoissonSolver1D {
     /// Domain length.
     l: f64,
     /// The domain is [xl, xl+l].
@@ -53,7 +53,7 @@ pub struct Hot1DLaplaceSolver {
     bary_weights: Vec<f64>,
 }
 
-impl Hot1DLaplaceSolver {
+impl PoissonSolver1D {
     /// Construct the 1D HoT solver.
     ///
     /// - `l`: domain length.
@@ -108,7 +108,7 @@ impl Hot1DLaplaceSolver {
         let symbol_pseudo_inv =
             &eigenvectors * DMatrix::from_diagonal(&lambda_pinv) * eigenvectors.transpose();
 
-        let bary_weights = barycentric_weights(&lobatto_basis.points[0]);
+        let bary_weights = barycentric_weights(&lobatto_basis.points(0));
 
         Self {
             l,
@@ -127,19 +127,22 @@ impl Hot1DLaplaceSolver {
     ///
     /// The *r*-th node (`x = xl+l`) is identified with `x = xl` by periodicity and
     /// is not included.
-    pub fn get_x(&self) -> DVector<f64> {
-        DVector::from_fn(self.r, |i, _| {
-            self.l * self.lobatto_basis.points[0][i] + self.xl
-        })
+    pub fn get_x(&self) -> Vec<f64> {
+        (0..self.r)
+            .map(|i| self.l * self.lobatto_basis.points(0)[i] + self.xl)
+            .collect()
     }
 
     /// Solve `(α M + β K) u = f` in place.
     ///
     /// On input, `f` contains the strong-form RHS at the GLL nodes.
     /// On output, `f` contains the FEM solution `u`.
-    pub fn solve_in_place(&self, f: &mut DVector<f64>) {
+    pub fn solve_in_place(&self, f: &mut Vec<f64>) {
         let g = DVector::from_fn(self.r, |i, _| self.periodic_mass_matrix[i] * f[i]);
-        f.copy_from(&(&self.symbol_pseudo_inv * &g));
+        let x = &self.symbol_pseudo_inv * &g;
+        for i in 0..self.r {
+            f[i] = x[i];
+        }
     }
 
     /// Evaluate the interpolant of `u` at position `x`.
@@ -148,10 +151,10 @@ impl Hot1DLaplaceSolver {
     /// periodicity.  The degree-*r* Lagrange interpolant is evaluated using the
     /// precomputed nodes and barycentric weights; `phi[r]` (at `x_r = L`) is folded
     /// into DOF 0 since `u(L) = u(0)` by periodicity.
-    pub fn eval(&self, x: f64, u: &DVector<f64>) -> f64 {
+    pub fn eval(&self, x: f64, u: &[f64]) -> f64 {
         let xi = (x - self.xl).rem_euclid(self.l) / self.l;
         let phi =
-            lagrangian_interpolation_all(&self.lobatto_basis.points[0], &self.bary_weights, xi);
+            lagrangian_interpolation_all(&self.lobatto_basis.points(0), &self.bary_weights, xi);
         let mut val = u[0] * (phi[0] + phi[self.r]);
         for i in 1..self.r {
             val += u[i] * phi[i];
@@ -162,7 +165,7 @@ impl Hot1DLaplaceSolver {
 
 /// N-dimensional HoT Laplace solver: one element per direction, polynomial order *r_d*.
 ///
-/// Extends [`Hot1DLaplaceSolver`] to `N` spatial dimensions using a tensor-product
+/// Extends [`PoissonSolver1D`] to `N` spatial dimensions using a tensor-product
 /// eigendecomposition.  Each direction is solved with its own 1D eigenvector matrix
 /// `Q_d`, and the solve is:
 ///
@@ -172,9 +175,9 @@ impl Hot1DLaplaceSolver {
 /// f ← diag(α + Σ_d β λ^{(d)}_{j_d})^{-1} · f
 /// for d in 0..N: f ← (Q_d ⊗ I_others) · f
 /// ```
-pub struct HotNDLaplaceSolver<const N: usize> {
+pub struct PoissonSolverND<const N: usize> {
     /// One 1D solver per spatial direction.
-    pub solvers: [Hot1DLaplaceSolver; N],
+    pub solvers: [PoissonSolver1D; N],
     /// Coefficient of the mass term α.
     pub alpha: f64,
     /// Coefficient of the stiffness term β.
@@ -191,7 +194,7 @@ pub struct HotNDLaplaceSolver<const N: usize> {
     pub local_strides: [usize; N],
 }
 
-impl<const N: usize> HotNDLaplaceSolver<N> {
+impl<const N: usize> PoissonSolverND<N> {
     /// Construct the ND HoT solver.
     ///
     /// - `ls[d]`: domain length in direction `d`.
@@ -199,8 +202,7 @@ impl<const N: usize> HotNDLaplaceSolver<N> {
     /// - `rs[d]`: polynomial order in direction `d`.
     /// - `alpha`, `beta`: coefficients of `α M + β K`.
     pub fn new(ls: [f64; N], xls: [f64; N], rs: [usize; N], alpha: f64, beta: f64) -> Self {
-        let solvers =
-            std::array::from_fn(|d| Hot1DLaplaceSolver::new(ls[d], xls[d], rs[d], 0.0, 1.0));
+        let solvers = std::array::from_fn(|d| PoissonSolver1D::new(ls[d], xls[d], rs[d], 0.0, 1.0));
         let r_total = rs.iter().product();
         let local_strides = Self::compute_strides(&rs);
         Self {
@@ -220,7 +222,7 @@ impl<const N: usize> HotNDLaplaceSolver<N> {
     /// Point `p` has coordinates `result[p][d]` for `d in 0..N`.
     /// The first direction (x) varies fastest.
     pub fn get_x(&self) -> Vec<[f64; N]> {
-        let x1d: [DVector<f64>; N] = std::array::from_fn(|d| self.solvers[d].get_x());
+        let x1d: [Vec<f64>; N] = std::array::from_fn(|d| self.solvers[d].get_x());
         (0..self.r_total)
             .map(|p| std::array::from_fn(|d| x1d[d][(p / self.local_strides[d]) % self.rs[d]]))
             .collect()
@@ -229,7 +231,7 @@ impl<const N: usize> HotNDLaplaceSolver<N> {
     /// Solve `(α M + β K) u = f` in place using the ND HoT algorithm.
     ///
     /// On input, `f` contains the strong-form RHS at the tensor-product GLL grid
-    /// returned by [`HotNDLaplaceSolver::get_x`].
+    /// returned by [`PoissonSolverND::get_x`].
     /// On output, `f` contains the FEM solution `u` at the same grid.
     ///
     /// # Parallelism
@@ -317,8 +319,8 @@ impl<const N: usize> HotNDLaplaceSolver<N> {
     /// `r^N + r^{N-1} + …` against the contiguous `u` array (no gather step: HoT uses a single
     /// element so `u` is already a dense tensor-product array with dim 0 varying fastest).
     /// Points are processed in parallel with Rayon.
-    pub fn eval(&self, xs: &[[f64; N]], u: &Vec<f64>) -> Vec<f64> {
-        let u_slice = u.as_slice();
+    pub fn eval(&self, xs: &[[f64; N]], u: &[f64]) -> Vec<f64> {
+        let u_slice = u;
 
         xs.par_iter()
             .map(|x| {
@@ -326,7 +328,7 @@ impl<const N: usize> HotNDLaplaceSolver<N> {
                 let phi: [Vec<f64>; N] = std::array::from_fn(|d| {
                     let xi = (x[d] - self.xls[d]).rem_euclid(self.ls[d]) / self.ls[d];
                     let phi_1d = lagrangian_interpolation_all(
-                        &self.solvers[d].lobatto_basis.points[0],
+                        &self.solvers[d].lobatto_basis.points(0),
                         &self.solvers[d].bary_weights,
                         xi,
                     );
@@ -402,7 +404,7 @@ mod tests {
         const RECON_TOL: f64 = 1e-10;
 
         for &r in &[2, 3, 4, 5, 6] {
-            let solver = Hot1DLaplaceSolver::new(1.0, 0.0, r, 1.0, 1.0);
+            let solver = PoissonSolver1D::new(1.0, 0.0, r, 1.0, 1.0);
             let m = DMatrix::from_diagonal(&solver.periodic_mass_matrix);
             let id = DMatrix::<f64>::identity(r, r);
             let v = &solver.eigenvectors;

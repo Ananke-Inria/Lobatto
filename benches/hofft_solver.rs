@@ -1,5 +1,4 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use nalgebra::DVector;
 use quadratix::hofft::*;
 use std::f64::consts::PI;
 use std::hint::black_box;
@@ -34,7 +33,7 @@ fn bench_solve_in_place(c: &mut Criterion) {
             let solver = PoissonSolver1D::new(l, 0.0, n, r, alpha, beta, BoundaryCondition::Periodic);
             let x = solver.get_x();
 
-            let f_init: DVector<f64> = DVector::from_fn(ndof, |i, _| rhs_f(x[i]));
+            let f_init: Vec<f64> = x.iter().map(|&xi| rhs_f(xi)).collect();
 
             group.bench_with_input(
                 BenchmarkId::new(format!("r={r}"), format!("n={n}")),

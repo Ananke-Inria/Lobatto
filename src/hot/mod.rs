@@ -1,3 +1,3 @@
 pub mod solver;
 
-pub use solver::{Hot1DLaplaceSolver, HotNDLaplaceSolver};
+pub use solver::{PoissonSolver1D, PoissonSolverND};
