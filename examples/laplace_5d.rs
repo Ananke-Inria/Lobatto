@@ -2,16 +2,20 @@
 //!
 //!   (α M + β K) u = f   on [0, 1]^5
 //!
-//! using two methods with the same number of DOFs per direction:
-//!   - HoFFT: n=8 elements × r=5 polynomial order  → 40 DOF/direction
-//!   - HOT:   r_hot=40 (single element, spectral)   → 40 DOF/direction
+//! using three methods:
+//!   - HoFFT:    n=10 elements × r=4 polynomial order  → 40 DOF/direction
+//!   - HoFFT-1:  n=1  element  × r=20                  → 20 DOF/direction  (should match HoT)
+//!   - HoT:      r=20 (single element, spectral)        → 20 DOF/direction
+//!
+//! HoFFT-1 and HoT solve the same mathematical problem; comparing them validates
+//! that both implementations agree and benchmarks any overhead difference.
 //!
 //! Exact solution: u = exp(sin(2π x_1)) · … · exp(sin(2π x_5))
 //!
 //! Run with:
 //!   cargo run --example laplace_5d --release
 
-use quadratix::hofft::PoissonSolverND as HofftPoissonSolverND;
+use quadratix::hofft::{BoundaryCondition, PoissonSolverND as HofftPoissonSolverND};
 use quadratix::hot::PoissonSolverND as HotPoissonSolverND;
 use rayon::prelude::*;
 use std::f64::consts::PI;
@@ -63,46 +67,57 @@ fn main() {
 
     // HoFFT parameters
     let n = 10; // elements per direction
-    let r = 4; // polynomial order per direction
+    let r = 4;  // polynomial order per direction
     let ndof_1d: usize = n * r;
 
-    // HOT parameters: same DOF/direction
+    // HoFFT-1 / HoT parameters: single element, same DOF/direction
     let r_hot = 20_usize;
 
     let ndof_hofft: usize = ndof_1d.pow(5);
-    let ndof_hot: usize = r_hot.pow(5);
+    let ndof_1: usize = r_hot.pow(5); // HoFFT-1 and HoT share the same DOF count
 
     println!("╔══════════════════════════════════════════════════════════╗");
-    println!("║      5-D Laplace solver comparison: HoFFT vs HoT         ║");
+    println!("║    5-D Laplace solver comparison: HoFFT / HoFFT-1 / HoT  ║");
     println!("╚══════════════════════════════════════════════════════════╝");
     println!();
-    println!("  DOF per direction : {ndof_1d}  (HoFFT: n={n}×r={r},  HoT: r_hot={r_hot})");
-    println!("  Total DOF         : (HoFFT: {ndof_hofft}, HoT: {ndof_hot})");
+    println!("  HoFFT   : n={n}×r={r} → {ndof_1d} DOF/direction, {ndof_hofft} total");
+    println!("  HoFFT-1 : n=1×r={r_hot} → {r_hot} DOF/direction, {ndof_1} total");
+    println!("  HoT     : r={r_hot}     → {r_hot} DOF/direction, {ndof_1} total");
     println!();
 
     // ── HoFFT ─────────────────────────────────────────────────────────────────
     println!("── HoFFT (n={n}, r={r}) ──────────────────────────────────────────");
 
     let t = Instant::now();
-    let solver_hofft =
-        HofftPoissonSolverND::<5>::new([1.0; 5], [0.0; 5], [n; 5], [r; 5], alpha, beta);
+    let solver_hofft = HofftPoissonSolverND::<5>::new(
+        [1.0; 5],
+        [0.0; 5],
+        [n; 5],
+        [r; 5],
+        [BoundaryCondition::Periodic; 5],
+        alpha,
+        beta,
+    );
     let hofft_setup_ms = t.elapsed().as_secs_f64() * 1e3;
     println!("  Setup time : {hofft_setup_ms:.1} ms");
 
     let t = Instant::now();
     let x_hofft = solver_hofft.get_x();
-    let mut f_hofft: Vec<f64> = (0..ndof_hofft)
+    let mut f_hofft: Vec<rustfft::num_complex::Complex<f64>> = (0..ndof_hofft)
         .into_par_iter()
         .map(|i| {
             let [x0, x1, x2, x3, x4] = x_hofft[i];
             let u = u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4);
-            alpha * u
-                - beta
-                    * (u1d_pp(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4)
-                        + u1d(x0) * u1d_pp(x1) * u1d(x2) * u1d(x3) * u1d(x4)
-                        + u1d(x0) * u1d(x1) * u1d_pp(x2) * u1d(x3) * u1d(x4)
-                        + u1d(x0) * u1d(x1) * u1d(x2) * u1d_pp(x3) * u1d(x4)
-                        + u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d_pp(x4))
+            rustfft::num_complex::Complex::new(
+                alpha * u
+                    - beta
+                        * (u1d_pp(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4)
+                            + u1d(x0) * u1d_pp(x1) * u1d(x2) * u1d(x3) * u1d(x4)
+                            + u1d(x0) * u1d(x1) * u1d_pp(x2) * u1d(x3) * u1d(x4)
+                            + u1d(x0) * u1d(x1) * u1d(x2) * u1d_pp(x3) * u1d(x4)
+                            + u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d_pp(x4)),
+                0.0,
+            )
         })
         .collect();
     let hofft_rhs_ms = t.elapsed().as_secs_f64() * 1e3;
@@ -117,18 +132,22 @@ fn main() {
         .map(|i| {
             let [x0, x1, x2, x3, x4] = x_hofft[i];
             let u_ex = u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4);
-            (f_hofft[i] - u_ex).abs()
+            (f_hofft[i].re - u_ex).abs()
         })
         .fold(0.0_f64, f64::max);
     println!("  Max error  : {hofft_err:.3e}");
 
     let t = Instant::now();
-    let hofft_vals = solver_hofft.eval(&eval_hofft_pts, &f_hofft);
+    let mut hofft_vals =
+        vec![rustfft::num_complex::Complex::new(0.0_f64, 0.0); eval_hofft_pts.len()];
+    solver_hofft
+        .fft
+        .eval(&eval_hofft_pts, &f_hofft, &mut hofft_vals);
     let hofft_eval_err = eval_hofft_pts
         .iter()
         .zip(hofft_vals.iter())
-        .map(|(&[p0, p1, p2, p3, p4], &v)| {
-            (v - u1d(p0) * u1d(p1) * u1d(p2) * u1d(p3) * u1d(p4)).abs()
+        .map(|(&[p0, p1, p2, p3, p4], v)| {
+            (v.re - u1d(p0) * u1d(p1) * u1d(p2) * u1d(p3) * u1d(p4)).abs()
         })
         .fold(0.0_f64, f64::max);
     let hofft_eval_ms = t.elapsed().as_secs_f64() * 1e3;
@@ -139,18 +158,88 @@ fn main() {
     );
     println!();
 
+    // ── HoFFT-1 (n=1, r=r_hot — equivalent to HoT) ───────────────────────────
+    println!("── HoFFT-1 (n=1, r={r_hot}) ────────────────────────────────────────");
+
+    let t = Instant::now();
+    let solver_hofft1 = HofftPoissonSolverND::<5>::new(
+        [1.0; 5],
+        [0.0; 5],
+        [1; 5],
+        [r_hot; 5],
+        [BoundaryCondition::Periodic; 5],
+        alpha,
+        beta,
+    );
+    let hofft1_setup_ms = t.elapsed().as_secs_f64() * 1e3;
+    println!("  Setup time : {hofft1_setup_ms:.1} ms");
+
+    let t = Instant::now();
+    let x_hofft1 = solver_hofft1.get_x();
+    let mut f_hofft1: Vec<rustfft::num_complex::Complex<f64>> = (0..ndof_1)
+        .into_par_iter()
+        .map(|i| {
+            let [x0, x1, x2, x3, x4] = x_hofft1[i];
+            let u = u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4);
+            rustfft::num_complex::Complex::new(
+                alpha * u
+                    - beta
+                        * (u1d_pp(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4)
+                            + u1d(x0) * u1d_pp(x1) * u1d(x2) * u1d(x3) * u1d(x4)
+                            + u1d(x0) * u1d(x1) * u1d_pp(x2) * u1d(x3) * u1d(x4)
+                            + u1d(x0) * u1d(x1) * u1d(x2) * u1d_pp(x3) * u1d(x4)
+                            + u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d_pp(x4)),
+                0.0,
+            )
+        })
+        .collect();
+    let hofft1_rhs_ms = t.elapsed().as_secs_f64() * 1e3;
+    println!("  RHS build  : {hofft1_rhs_ms:.1} ms");
+
+    let t = Instant::now();
+    solver_hofft1.solve_in_place(&mut f_hofft1);
+    let hofft1_solve_ms = t.elapsed().as_secs_f64() * 1e3;
+    println!("  Solve time : {hofft1_solve_ms:.1} ms");
+
+    let hofft1_err = (0..ndof_1)
+        .map(|i| {
+            let [x0, x1, x2, x3, x4] = x_hofft1[i];
+            let u_ex = u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4);
+            (f_hofft1[i].re - u_ex).abs()
+        })
+        .fold(0.0_f64, f64::max);
+    println!("  Max error  : {hofft1_err:.3e}");
+
+    let t = Instant::now();
+    let mut hofft1_vals =
+        vec![rustfft::num_complex::Complex::new(0.0_f64, 0.0); eval_hot_pts.len()];
+    solver_hofft1.fft.eval(&eval_hot_pts, &f_hofft1, &mut hofft1_vals);
+    let hofft1_eval_err = eval_hot_pts
+        .iter()
+        .zip(hofft1_vals.iter())
+        .map(|(&[p0, p1, p2, p3, p4], v)| {
+            (v.re - u1d(p0) * u1d(p1) * u1d(p2) * u1d(p3) * u1d(p4)).abs()
+        })
+        .fold(0.0_f64, f64::max);
+    let hofft1_eval_ms = t.elapsed().as_secs_f64() * 1e3;
+    println!("  Eval error : {hofft1_eval_err:.3e}  ({hofft1_eval_ms:.2} ms for 1000 pts)");
+    println!(
+        "  Total time : {:.1} ms",
+        hofft1_setup_ms + hofft1_rhs_ms + hofft1_solve_ms
+    );
+    println!();
+
     // ── HoT ───────────────────────────────────────────────────────────────────
-    println!("── HoT (r_hot={r_hot}, single element) ────────────────────────────");
+    println!("── HoT (r={r_hot}, single element) ─────────────────────────────────");
 
     let t = Instant::now();
     let solver_hot = HotPoissonSolverND::<5>::new([1.0; 5], [0.0; 5], [r_hot; 5], alpha, beta);
-    //let solver_hot = HofftPoissonSolverND::<5>::new([1.0; 5], [0.0; 5], [1; 5], [r_hot; 5], alpha, beta);
     let hot_setup_ms = t.elapsed().as_secs_f64() * 1e3;
     println!("  Setup time : {hot_setup_ms:.1} ms");
 
     let t = Instant::now();
     let x_hot = solver_hot.get_x();
-    let mut f_hot: Vec<f64> = (0..ndof_hot)
+    let mut f_hot: Vec<f64> = (0..ndof_1)
         .into_par_iter()
         .map(|i| {
             let [x0, x1, x2, x3, x4] = x_hot[i];
@@ -172,7 +261,7 @@ fn main() {
     let hot_solve_ms = t.elapsed().as_secs_f64() * 1e3;
     println!("  Solve time : {hot_solve_ms:.1} ms");
 
-    let hot_err = (0..ndof_hot)
+    let hot_err = (0..ndof_1)
         .map(|i| {
             let [x0, x1, x2, x3, x4] = x_hot[i];
             let u_ex = u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4);
@@ -217,6 +306,16 @@ fn main() {
         hofft_err,
         hofft_eval_err,
         hofft_eval_ms / 1000.0
+    );
+    println!(
+        "  {:>10}  {:>12.1}  {:>12.1}  {:>12.1}  {:>12.3e}  {:>12.3e}  {:>14.2}",
+        "HoFFT-1",
+        hofft1_setup_ms,
+        hofft1_rhs_ms,
+        hofft1_solve_ms,
+        hofft1_err,
+        hofft1_eval_err,
+        hofft1_eval_ms
     );
     println!(
         "  {:>10}  {:>12.1}  {:>12.1}  {:>12.1}  {:>12.3e}  {:>12.3e}  {:>14.2}",
