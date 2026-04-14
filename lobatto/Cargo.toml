@@ -2,11 +2,12 @@
 name = "lobatto"
 version = "0.1.0"
 edition = "2021"
-description = "Gauss–Lobatto–Legendre quadrature, spectral-element basis operators, and hardcoded differentiation kernels."
+description = "Gauss–Lobatto quadrature and interpolation points, spectral finite-element lagrangian basis operations with efficient hardcoded versions for low order low dimensions cases."
 license = "LGPL-3.0-only"
 repository = "https://github.com/OndoMathX/QuadratiX/tree/main/lobatto"
 keywords = ["quadrature", "gauss-lobatto", "spectral-element", "finite-element", "numerics"]
 categories = ["mathematics", "science"]
+exclude = ["src/bin/*"]
 
 [[bin]]
 name = "gen_q3"
