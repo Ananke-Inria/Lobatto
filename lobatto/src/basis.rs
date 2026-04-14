@@ -38,12 +38,12 @@ use nalgebra::*;
 ///
 /// # Example
 /// ```rust
-/// use quadratix::basis::Basis;
+/// use lobatto::LagrangianBasis;
 /// // 2D Q4 element: 5×5 GLL nodes
-/// let basis = Basis::new(vec![(5, true), (5, true)]);
+/// let basis = LagrangianBasis::new(vec![(5, true), (5, true)]);
 /// ```
 #[derive(Debug)]
-pub struct Basis {
+pub struct LagrangianBasis {
     /// Per-direction description: `(n_points, is_lobatto)`.
     basis: Vec<(usize, bool)>,
 
@@ -68,7 +68,7 @@ pub struct Basis {
     start: Vec<Vec<usize>>,
 }
 
-impl Basis {
+impl LagrangianBasis {
     // Convert a flat DOF index to the multi-index $(i_0, \ldots, i_{d-1})$.
     fn flat_to_multi(n_points_acc: &[usize], index: usize) -> Vec<usize> {
         let n = n_points_acc.len();

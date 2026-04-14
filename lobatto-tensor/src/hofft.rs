@@ -63,8 +63,8 @@
 //! Steps 2/4 are parallelised over independent fibres; step 3 is parallelised
 //! over independent Fourier-mode tuples.
 
-use crate::basis::Basis;
-use crate::utilities::{barycentric_weights, lagrangian_interpolation_all};
+use lobatto::utilities::{barycentric_weights, lagrangian_interpolation_all};
+use lobatto::LagrangianBasis;
 use nalgebra::*;
 use rayon::prelude::*;
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
@@ -152,7 +152,7 @@ impl RawPlanner {
         let mut planner = FftPlanner::<f64>::new();
         let fw_fft = planner.plan_fft_forward(n);
         let i_fft = planner.plan_fft_inverse(n);
-        let gll_points = Basis::new(vec![(r + 1, true)]).points(0).to_vec();
+        let gll_points = LagrangianBasis::new(vec![(r + 1, true)]).points(0).to_vec();
         Self {
             n,
             r,
@@ -276,8 +276,8 @@ impl HofftPlanner {
         let mut fft_planner = FftPlanner::<f64>::new();
         let fw_fft = fft_planner.plan_fft_forward(n_fft);
         let i_fft = fft_planner.plan_fft_inverse(n_fft);
-        let gll_points = Basis::new(vec![(r + 1, true)]).points(0).to_vec();
-        let bary_weights = barycentric_weights(&gll_points);
+        let gll_points = LagrangianBasis::new(vec![(r + 1, true)]).points(0).to_vec();
+        let bary_weights: Vec<f64> = barycentric_weights(&gll_points);
         let mut s = Self {
             n,
             n_fft,
@@ -1303,7 +1303,7 @@ impl PoissonSolver1D {
         beta: f64,
         bc: BoundaryCondition,
     ) -> Self {
-        let lobatto_basis = Basis::new(vec![(r + 1, true)]);
+        let lobatto_basis = LagrangianBasis::new(vec![(r + 1, true)]);
 
         let h = l / (n as f64);
 
@@ -1445,7 +1445,12 @@ impl PoissonSolver1D {
                 }
             }
             // Q · v
-            col.gemv(Complex::new(1.0, 0.0), &self.eigenvectors[k], &v, Complex::new(0.0, 0.0));
+            col.gemv(
+                Complex::new(1.0, 0.0),
+                &self.eigenvectors[k],
+                &v,
+                Complex::new(0.0, 0.0),
+            );
             self.planner.set_values(k, f, col.as_slice());
         }
 

@@ -15,9 +15,9 @@
 //! Run with:
 //!   cargo run --example laplace_5d --release
 
-use quadratix::hofft::{BoundaryCondition, PoissonSolverND as HofftPoissonSolverND};
-use quadratix::hot::BoundaryCondition as HotBoundaryCondition;
-use quadratix::hot::PoissonSolverND as HotPoissonSolverND;
+use lobatto_tensor::hofft::{BoundaryCondition, PoissonSolverND as HofftPoissonSolverND};
+use lobatto_tensor::hot::BoundaryCondition as HotBoundaryCondition;
+use lobatto_tensor::hot::PoissonSolverND as HotPoissonSolverND;
 use rayon::prelude::*;
 use std::f64::consts::PI;
 use std::time::Instant;

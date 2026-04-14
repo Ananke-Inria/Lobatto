@@ -1,31 +1,31 @@
-//! Code generator for the Q4 (5-node Gauss-Lobatto) hard-coded differentiation kernel.
+//! Code generator for the Q5 (6-node Gauss-Lobatto) hard-coded differentiation kernel.
 //!
-//! Computes the 5×5 GLL differentiation matrix on [0,1] via `Basis`,
+//! Computes the 6×6 GLL differentiation matrix on [0,1] via `Basis`,
 //! identifies the unique coefficients exploiting the antisymmetry
-//! D[4-i, 4-j] = -D[i, j], and prints the corresponding `_d_q4_q4` Rust kernel.
+//! D[5-i, 5-j] = -D[i, j], and prints the corresponding `_d_q5_q5` Rust kernel.
 //!
 //! Run with:
-//!   cargo run --bin gen_q4 --release
+//!   cargo run --bin gen_q5 --release
 
-use quadratix::basis::Basis;
+use lobatto::LagrangianBasis;
 
 fn main() {
-    let n = 5usize; // Q4: 5 nodes
-    let calc = Basis::new(vec![(n, true)]);
+    let n = 6usize; // Q5: 6 nodes
+    let calc = LagrangianBasis::new(vec![(n, true)]);
     let pts = calc.points(0);
 
-    // 5×5 differentiation matrix from the Basis: d[(row, col)]
+    // 6×6 differentiation matrix from the Basis: d[(row, col)]
     let d = calc.diff_matrix_1d(0);
 
     // ── Print nodes ──────────────────────────────────────────────────────────
-    println!("// Q4 GLL nodes on [0,1]:");
+    println!("// Q5 GLL nodes on [0,1]:");
     for (i, x) in pts.iter().enumerate() {
         println!("//   x[{i}] = {x:.20}");
     }
     println!();
 
     // ── Print full matrix ────────────────────────────────────────────────────
-    println!("// Full 5×5 differentiation matrix D[(row, col)]:");
+    println!("// Full 6×6 differentiation matrix D[(row, col)]:");
     for row in 0..n {
         print!("//  row {row}: [");
         for col in 0..n {
@@ -38,8 +38,8 @@ fn main() {
     }
     println!();
 
-    // ── Verify antisymmetry D[4-i, 4-j] = -D[i, j] ─────────────────────────
-    println!("// Antisymmetry check  max|D[(4-i, 4-j)] + D[(i, j)]|:");
+    // ── Verify antisymmetry D[5-i, 5-j] = -D[i, j] ─────────────────────────
+    println!("// Antisymmetry check  max|D[(5-i, 5-j)] + D[(i, j)]|:");
     let mut max_err = 0.0f64;
     for i in 0..n {
         for j in 0..n {
@@ -49,15 +49,14 @@ fn main() {
     println!("//   {max_err:.3e}");
     println!();
 
-    // ── Unique coefficients (rows 0, 1, 2 — upper half + middle) ─────────────
-    let n_unique = (n + 1) / 2; // = 3 for n=5
-    println!("// Unique entries (rows 0..{n_unique}):");
+    // ── Unique coefficients (rows 0, 1, 2 — upper half) ─────────────────────
+    println!("// Unique entries (rows 0,1,2):");
     let labels = [
-        ["D00", "D01", "D02", "D03", "D04"],
-        ["D10", "D11", "D12", "D13", "D14"],
-        ["D20", "D21", "D22", "D23", "D24"],
+        ["D00", "D01", "D02", "D03", "D04", "D05"],
+        ["D10", "D11", "D12", "D13", "D14", "D15"],
+        ["D20", "D21", "D22", "D23", "D24", "D25"],
     ];
-    for row in 0..n_unique {
+    for row in 0..3 {
         for col in 0..n {
             println!("//   {} = {:+.20}", labels[row][col], d[(row, col)]);
         }
@@ -66,13 +65,12 @@ fn main() {
 
     // ── Generated kernel (comment form) ─────────────────────────────────────
     println!("// ── Generated Rust kernel ───────────────────────────────────────────");
-    println!("// Rows 3,4 use antisymmetry: out[4-k] = -out[k](a↔e, b↔d)");
+    println!("// Rows 3,4,5 use antisymmetry: out[5-k] = -out[k](a↔f, b↔e, c↔d)");
     println!();
 
-    let node_names = ["a", "b", "c", "d", "e"];
-    let n_half = n / 2; // = 2 for n=5
+    let node_names = ["a", "b", "c", "d", "e", "f"];
     for row in 0..n {
-        let coeffs: Vec<f64> = if row < n_half {
+        let coeffs: Vec<f64> = if row < 3 {
             (0..n).map(|col| d[(row, col)]).collect()
         } else {
             (0..n).map(|col| -d[(n - 1 - row, n - 1 - col)]).collect()
@@ -99,9 +97,9 @@ fn main() {
     println!();
 
     // ── Compact unique constants (skip near-integers) ────────────────────────
-    println!("// Compact unique absolute values for DX4 (rows 0..{n_unique}, skip near-integers):");
+    println!("// Compact unique absolute values for DX5 (rows 0,1,2, skip near-integers):");
     let mut seen: Vec<f64> = Vec::new();
-    for row in 0..n_unique {
+    for row in 0..3 {
         for col in 0..n {
             let av = d[(row, col)].abs();
             if av < 1e-12 {
@@ -123,8 +121,8 @@ fn main() {
     }
     println!();
 
-    // ── Print DX4 array and full kernel ─────────────────────────────────────
-    println!("const DX4: [f64; {}] = [", seen.len());
+    // ── Print DX5 array and full kernel ─────────────────────────────────────
+    println!("const DX5: [f64; {}] = [", seen.len());
     for v in &seen {
         println!("    {v:.20},");
     }
@@ -140,26 +138,27 @@ fn main() {
             return format!("{:.1}", av);
         }
         if let Some(idx) = seen.iter().position(|&s| (s - av).abs() < 1e-12) {
-            return format!("DX4[{idx}]");
+            return format!("DX5[{idx}]");
         }
         format!("{av:.20}")
     };
 
     println!(
-        "pub fn _d_q4_q4<const N: usize, const M: usize>(in_q4: &[f64], out_q4: &mut [f64]) {{"
+        "pub fn _d_q5_q5<const N: usize, const M: usize>(in_q5: &[f64], out_q5: &mut [f64]) {{"
     );
-    println!("    assert!(in_q4.len() >= N * (4 * M + 1));");
-    println!("    assert!(out_q4.len() >= N * (4 * M + 1));");
+    println!("    assert!(in_q5.len() >= N * (5 * M + 1));");
+    println!("    assert!(out_q5.len() >= N * (5 * M + 1));");
     println!();
-    println!("    let a = &in_q4[0..N];");
-    println!("    let b = &in_q4[M * N..M * N + N];");
-    println!("    let c = &in_q4[2 * M * N..2 * M * N + N];");
-    println!("    let d = &in_q4[3 * M * N..3 * M * N + N];");
-    println!("    let e = &in_q4[4 * M * N..4 * M * N + N];");
+    println!("    let a = &in_q5[0..N];");
+    println!("    let b = &in_q5[M * N..M * N + N];");
+    println!("    let c = &in_q5[2 * M * N..2 * M * N + N];");
+    println!("    let d = &in_q5[3 * M * N..3 * M * N + N];");
+    println!("    let e = &in_q5[4 * M * N..4 * M * N + N];");
+    println!("    let f = &in_q5[5 * M * N..5 * M * N + N];");
     println!();
 
     for row in 0..n {
-        let coeffs: Vec<f64> = if row < n_half {
+        let coeffs: Vec<f64> = if row < 3 {
             (0..n).map(|col| d[(row, col)]).collect()
         } else {
             (0..n).map(|col| -d[(n - 1 - row, n - 1 - col)]).collect()
@@ -170,7 +169,7 @@ fn main() {
         } else {
             format!("{row} * M * N + i")
         };
-        print!("    for i in 0..N {{ out_q4[{offset}] =");
+        print!("    for i in 0..N {{ out_q5[{offset}] =");
         let mut first = true;
         for col in 0..n {
             let v = coeffs[col];

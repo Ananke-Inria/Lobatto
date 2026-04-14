@@ -1,0 +1,30 @@
+[package]
+name = "lobatto-tensor"
+version = "0.1.0"
+edition = "2021"
+description = "High-order tensor-product screened Poisson solvers (HoT and HoFFT) on GLL grids."
+license = "LGPL-3.0-only"
+repository = "https://github.com/OndoMathX/QuadratiX/tree/main/lobatto-tensor"
+keywords = ["gauss-lobatto", "spectral-element", "poisson", "tensor-product", "fft"]
+categories = ["mathematics", "science"]
+
+[[bench]]
+name = "hofft_solver"
+harness = false
+
+[[bench]]
+name = "hot_solver"
+harness = false
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--html-in-header", "katex.html"]
+
+[dependencies]
+lobatto = { path = "../lobatto", version = "0.1.0" }
+nalgebra = "0.34.1"
+rustfft = "6.3.0"
+rayon = "1"
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }
+rayon = "1"

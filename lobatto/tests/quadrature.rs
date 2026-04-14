@@ -1,5 +1,5 @@
-use quadratix::hc::gauss_lobatto_hardcoded;
-use quadratix::quadrature::*;
+use lobatto::quadrature::*;
+use lobatto::quadrature_hc::gauss_lobatto_hardcoded;
 
 #[test]
 fn test_gauss_quadrature() {
@@ -248,20 +248,32 @@ fn test_gauss_lobatto_hardcoded_accuracy() {
                 assert!(
                     (analytical - numerical).abs() < tolerance,
                     "Failed for n={}, p={}: analytical={}, numerical={}",
-                    n, p, analytical, numerical
+                    n,
+                    p,
+                    analytical,
+                    numerical
                 );
             } else {
                 assert!(
                     numerical.abs() < tolerance,
                     "Failed for n={}, p={}: analytical={}, numerical={}",
-                    n, p, analytical, numerical
+                    n,
+                    p,
+                    analytical,
+                    numerical
                 );
             }
         }
 
         // Positive weights
         for (i, &w) in weights.iter().enumerate() {
-            assert!(w > 0.0, "Non-positive weight for n={}, index={}: weight={}", n, i, w);
+            assert!(
+                w > 0.0,
+                "Non-positive weight for n={}, index={}: weight={}",
+                n,
+                i,
+                w
+            );
         }
 
         // Strictly increasing order
@@ -269,7 +281,10 @@ fn test_gauss_lobatto_hardcoded_accuracy() {
             assert!(
                 points[i] > points[i - 1],
                 "Points not in increasing order for n={}, index={}: {} > {}",
-                n, i, points[i - 1], points[i]
+                n,
+                i,
+                points[i - 1],
+                points[i]
             );
         }
 
@@ -279,12 +294,18 @@ fn test_gauss_lobatto_hardcoded_accuracy() {
             assert!(
                 (points[i] + points[m - 1 - i]).abs() < tolerance,
                 "Points not symmetric for n={}, i={}: left={}, right={}",
-                n, i, points[i], points[m - 1 - i]
+                n,
+                i,
+                points[i],
+                points[m - 1 - i]
             );
             assert!(
                 (weights[i] - weights[m - 1 - i]).abs() < tolerance,
                 "Weights not symmetric for n={}, i={}: left={}, right={}",
-                n, i, weights[i], weights[m - 1 - i]
+                n,
+                i,
+                weights[i],
+                weights[m - 1 - i]
             );
         }
 
@@ -293,7 +314,8 @@ fn test_gauss_lobatto_hardcoded_accuracy() {
             assert!(
                 points[m / 2].abs() < tolerance,
                 "Middle point not zero for n={}: mid={}",
-                n, points[m / 2]
+                n,
+                points[m / 2]
             );
         }
 
@@ -301,7 +323,8 @@ fn test_gauss_lobatto_hardcoded_accuracy() {
         assert!(
             (points[0] + 1.0).abs() < tolerance,
             "Left endpoint not -1 for n={}: leftmost={}",
-            n, points[0]
+            n,
+            points[0]
         );
     }
 }
@@ -316,20 +339,28 @@ fn test_gauss_lobatto_hardcoded_matches_computed() {
         let (pts_gl, wts_gl) = gauss_lobatto(n);
 
         assert_eq!(
-            pts_hc.len(), pts_gl.len(),
-            "Point count mismatch for n={}", n
+            pts_hc.len(),
+            pts_gl.len(),
+            "Point count mismatch for n={}",
+            n
         );
 
         for i in 0..pts_hc.len() {
             assert!(
                 (pts_hc[i] - pts_gl[i]).abs() <= tolerance,
                 "Point mismatch for n={}, i={}: hardcoded={}, computed={}",
-                n, i, pts_hc[i], pts_gl[i]
+                n,
+                i,
+                pts_hc[i],
+                pts_gl[i]
             );
             assert!(
                 (wts_hc[i] - wts_gl[i]).abs() <= tolerance,
                 "Weight mismatch for n={}, i={}: hardcoded={}, computed={}",
-                n, i, wts_hc[i], wts_gl[i]
+                n,
+                i,
+                wts_hc[i],
+                wts_gl[i]
             );
         }
     }

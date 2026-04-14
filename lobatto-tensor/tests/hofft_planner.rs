@@ -1,5 +1,5 @@
+use lobatto_tensor::hofft::*;
 use nalgebra::Complex;
-use quadratix::hofft::*;
 use std::f64::consts::PI;
 
 // ── Lemma 3.2 symmetry check (Even extension) ────────────────────────────────
@@ -484,7 +484,10 @@ fn test_hofft_planner_roundtrip() {
     let p = HofftPlanner::new(8, 3, 1.0, 0.0, Extension::Periodic);
     let f: Vec<Complex<f64>> = p.get_x().iter().map(|&x| cplx(x)).collect();
     let err = roundtrip_error_1d(&p, &f);
-    assert!(err < TOL, "HofftPlanner Periodic round-trip error = {err:.2e}");
+    assert!(
+        err < TOL,
+        "HofftPlanner Periodic round-trip error = {err:.2e}"
+    );
 
     // Odd (Dirichlet) — imaginary part must vanish at boundaries for odd extension.
     // Use the same generic complex function; the extension enforces the BC internally.
@@ -528,13 +531,27 @@ fn test_nd_fft_roundtrip() {
 
     // Periodic
     let p = HofftPlannerND::<2>::new([4; 2], [2; 2], [1.0; 2], [0.0; 2], [Extension::Periodic; 2]);
-    let f: Vec<Complex<f64>> = p.get_x().iter().map(|pt| cplx(pt[0]) * cplx(pt[1])).collect();
+    let f: Vec<Complex<f64>> = p
+        .get_x()
+        .iter()
+        .map(|pt| cplx(pt[0]) * cplx(pt[1]))
+        .collect();
     let err = roundtrip_error_nd(&p, &f);
     assert!(err < TOL, "ND<2> Periodic round-trip error = {err:.2e}");
 
     // Mixed Odd / Even
-    let p = HofftPlannerND::<2>::new([4; 2], [2; 2], [1.0; 2], [0.0; 2], [Extension::Odd, Extension::Even]);
-    let f: Vec<Complex<f64>> = p.get_x().iter().map(|pt| cplx(pt[0]) * cplx(pt[1])).collect();
+    let p = HofftPlannerND::<2>::new(
+        [4; 2],
+        [2; 2],
+        [1.0; 2],
+        [0.0; 2],
+        [Extension::Odd, Extension::Even],
+    );
+    let f: Vec<Complex<f64>> = p
+        .get_x()
+        .iter()
+        .map(|pt| cplx(pt[0]) * cplx(pt[1]))
+        .collect();
     let err = roundtrip_error_nd(&p, &f);
     assert!(err < TOL, "ND<2> Odd/Even round-trip error = {err:.2e}");
 
@@ -542,19 +559,31 @@ fn test_nd_fft_roundtrip() {
 
     // Periodic
     let p = HofftPlannerND::<3>::new([4; 3], [2; 3], [1.0; 3], [0.0; 3], [Extension::Periodic; 3]);
-    let f: Vec<Complex<f64>> = p.get_x().iter().map(|pt| cplx(pt[0]) * cplx(pt[1]) * cplx(pt[2])).collect();
+    let f: Vec<Complex<f64>> = p
+        .get_x()
+        .iter()
+        .map(|pt| cplx(pt[0]) * cplx(pt[1]) * cplx(pt[2]))
+        .collect();
     let err = roundtrip_error_nd(&p, &f);
     assert!(err < TOL, "ND<3> Periodic round-trip error = {err:.2e}");
 
     // All Odd
     let p = HofftPlannerND::<3>::new([4; 3], [2; 3], [1.0; 3], [0.0; 3], [Extension::Odd; 3]);
-    let f: Vec<Complex<f64>> = p.get_x().iter().map(|pt| cplx(pt[0]) * cplx(pt[1]) * cplx(pt[2])).collect();
+    let f: Vec<Complex<f64>> = p
+        .get_x()
+        .iter()
+        .map(|pt| cplx(pt[0]) * cplx(pt[1]) * cplx(pt[2]))
+        .collect();
     let err = roundtrip_error_nd(&p, &f);
     assert!(err < TOL, "ND<3> Odd round-trip error = {err:.2e}");
 
     // All Even
     let p = HofftPlannerND::<3>::new([4; 3], [2; 3], [1.0; 3], [0.0; 3], [Extension::Even; 3]);
-    let f: Vec<Complex<f64>> = p.get_x().iter().map(|pt| cplx(pt[0]) * cplx(pt[1]) * cplx(pt[2])).collect();
+    let f: Vec<Complex<f64>> = p
+        .get_x()
+        .iter()
+        .map(|pt| cplx(pt[0]) * cplx(pt[1]) * cplx(pt[2]))
+        .collect();
     let err = roundtrip_error_nd(&p, &f);
     assert!(err < TOL, "ND<3> Even round-trip error = {err:.2e}");
 }

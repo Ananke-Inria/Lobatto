@@ -1,31 +1,31 @@
-//! Code generator for the Q6 (7-node Gauss-Lobatto) hard-coded differentiation kernel.
+//! Code generator for the Q4 (5-node Gauss-Lobatto) hard-coded differentiation kernel.
 //!
-//! Computes the 7×7 GLL differentiation matrix on [0,1] via `Basis`,
+//! Computes the 5×5 GLL differentiation matrix on [0,1] via `Basis`,
 //! identifies the unique coefficients exploiting the antisymmetry
-//! D[6-i, 6-j] = -D[i, j], and prints the corresponding `_d_q6_q6` Rust kernel.
+//! D[4-i, 4-j] = -D[i, j], and prints the corresponding `_d_q4_q4` Rust kernel.
 //!
 //! Run with:
-//!   cargo run --bin gen_q6 --release
+//!   cargo run --bin gen_q4 --release
 
-use quadratix::basis::Basis;
+use lobatto::LagrangianBasis;
 
 fn main() {
-    let n = 7usize; // Q6: 7 nodes
-    let calc = Basis::new(vec![(n, true)]);
+    let n = 5usize; // Q4: 5 nodes
+    let calc = LagrangianBasis::new(vec![(n, true)]);
     let pts = calc.points(0);
 
-    // 7×7 differentiation matrix from the Basis: d[(row, col)]
+    // 5×5 differentiation matrix from the Basis: d[(row, col)]
     let d = calc.diff_matrix_1d(0);
 
     // ── Print nodes ──────────────────────────────────────────────────────────
-    println!("// Q6 GLL nodes on [0,1]:");
+    println!("// Q4 GLL nodes on [0,1]:");
     for (i, x) in pts.iter().enumerate() {
         println!("//   x[{i}] = {x:.20}");
     }
     println!();
 
     // ── Print full matrix ────────────────────────────────────────────────────
-    println!("// Full 7×7 differentiation matrix D[(row, col)]:");
+    println!("// Full 5×5 differentiation matrix D[(row, col)]:");
     for row in 0..n {
         print!("//  row {row}: [");
         for col in 0..n {
@@ -38,8 +38,8 @@ fn main() {
     }
     println!();
 
-    // ── Verify antisymmetry D[6-i, 6-j] = -D[i, j] ─────────────────────────
-    println!("// Antisymmetry check  max|D[(6-i, 6-j)] + D[(i, j)]|:");
+    // ── Verify antisymmetry D[4-i, 4-j] = -D[i, j] ─────────────────────────
+    println!("// Antisymmetry check  max|D[(4-i, 4-j)] + D[(i, j)]|:");
     let mut max_err = 0.0f64;
     for i in 0..n {
         for j in 0..n {
@@ -49,14 +49,13 @@ fn main() {
     println!("//   {max_err:.3e}");
     println!();
 
-    // ── Unique coefficients (rows 0..n_unique — upper half + middle) ─────────
-    let n_unique = (n + 1) / 2; // = 4 for n=7
+    // ── Unique coefficients (rows 0, 1, 2 — upper half + middle) ─────────────
+    let n_unique = (n + 1) / 2; // = 3 for n=5
     println!("// Unique entries (rows 0..{n_unique}):");
     let labels = [
-        ["D00", "D01", "D02", "D03", "D04", "D05", "D06"],
-        ["D10", "D11", "D12", "D13", "D14", "D15", "D16"],
-        ["D20", "D21", "D22", "D23", "D24", "D25", "D26"],
-        ["D30", "D31", "D32", "D33", "D34", "D35", "D36"],
+        ["D00", "D01", "D02", "D03", "D04"],
+        ["D10", "D11", "D12", "D13", "D14"],
+        ["D20", "D21", "D22", "D23", "D24"],
     ];
     for row in 0..n_unique {
         for col in 0..n {
@@ -67,11 +66,11 @@ fn main() {
 
     // ── Generated kernel (comment form) ─────────────────────────────────────
     println!("// ── Generated Rust kernel ───────────────────────────────────────────");
-    println!("// Rows 4,5,6 use antisymmetry: out[6-k] = -out[k](a↔g, b↔f, c↔e)");
+    println!("// Rows 3,4 use antisymmetry: out[4-k] = -out[k](a↔e, b↔d)");
     println!();
 
-    let node_names = ["a", "b", "c", "d", "e", "f", "g"];
-    let n_half = n / 2; // = 3 for n=7
+    let node_names = ["a", "b", "c", "d", "e"];
+    let n_half = n / 2; // = 2 for n=5
     for row in 0..n {
         let coeffs: Vec<f64> = if row < n_half {
             (0..n).map(|col| d[(row, col)]).collect()
@@ -100,7 +99,7 @@ fn main() {
     println!();
 
     // ── Compact unique constants (skip near-integers) ────────────────────────
-    println!("// Compact unique absolute values for DX6 (rows 0..{n_unique}, skip near-integers):");
+    println!("// Compact unique absolute values for DX4 (rows 0..{n_unique}, skip near-integers):");
     let mut seen: Vec<f64> = Vec::new();
     for row in 0..n_unique {
         for col in 0..n {
@@ -108,7 +107,7 @@ fn main() {
             if av < 1e-12 {
                 continue;
             }
-            let is_near_int = (av.round() - av).abs() < 1e-10 && av.round() <= 30.0;
+            let is_near_int = (av.round() - av).abs() < 1e-10 && av.round() <= 20.0;
             if is_near_int {
                 continue;
             }
@@ -124,8 +123,8 @@ fn main() {
     }
     println!();
 
-    // ── Print DX6 array and full kernel ─────────────────────────────────────
-    println!("const DX6: [f64; {}] = [", seen.len());
+    // ── Print DX4 array and full kernel ─────────────────────────────────────
+    println!("const DX4: [f64; {}] = [", seen.len());
     for v in &seen {
         println!("    {v:.20},");
     }
@@ -137,28 +136,26 @@ fn main() {
         if av < 1e-12 {
             return "0.0".to_string();
         }
-        if (av.round() - av).abs() < 1e-10 && av.round() <= 30.0 {
+        if (av.round() - av).abs() < 1e-10 && av.round() <= 20.0 {
             return format!("{:.1}", av);
         }
         if let Some(idx) = seen.iter().position(|&s| (s - av).abs() < 1e-12) {
-            return format!("DX6[{idx}]");
+            return format!("DX4[{idx}]");
         }
         format!("{av:.20}")
     };
 
     println!(
-        "pub fn _d_q6_q6<const N: usize, const M: usize>(in_q6: &[f64], out_q6: &mut [f64]) {{"
+        "pub fn _d_q4_q4<const N: usize, const M: usize>(in_q4: &[f64], out_q4: &mut [f64]) {{"
     );
-    println!("    assert!(in_q6.len() >= N * (6 * M + 1));");
-    println!("    assert!(out_q6.len() >= N * (6 * M + 1));");
+    println!("    assert!(in_q4.len() >= N * (4 * M + 1));");
+    println!("    assert!(out_q4.len() >= N * (4 * M + 1));");
     println!();
-    println!("    let a = &in_q6[0..N];");
-    println!("    let b = &in_q6[M * N..M * N + N];");
-    println!("    let c = &in_q6[2 * M * N..2 * M * N + N];");
-    println!("    let d = &in_q6[3 * M * N..3 * M * N + N];");
-    println!("    let e = &in_q6[4 * M * N..4 * M * N + N];");
-    println!("    let f = &in_q6[5 * M * N..5 * M * N + N];");
-    println!("    let g = &in_q6[6 * M * N..6 * M * N + N];");
+    println!("    let a = &in_q4[0..N];");
+    println!("    let b = &in_q4[M * N..M * N + N];");
+    println!("    let c = &in_q4[2 * M * N..2 * M * N + N];");
+    println!("    let d = &in_q4[3 * M * N..3 * M * N + N];");
+    println!("    let e = &in_q4[4 * M * N..4 * M * N + N];");
     println!();
 
     for row in 0..n {
@@ -173,7 +170,7 @@ fn main() {
         } else {
             format!("{row} * M * N + i")
         };
-        print!("    for i in 0..N {{ out_q6[{offset}] =");
+        print!("    for i in 0..N {{ out_q4[{offset}] =");
         let mut first = true;
         for col in 0..n {
             let v = coeffs[col];

@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use quadratix::hot::*;
+use lobatto_tensor::hot::*;
 use std::f64::consts::PI;
 use std::hint::black_box;
 

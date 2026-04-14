@@ -40,8 +40,8 @@
 //! so steps 2–4 are applied direction by direction (sum factorisation), parallelised
 //! with Rayon over independent fibres.
 
-use crate::basis::*;
-use crate::utilities::{barycentric_weights, lagrangian_interpolation_all};
+use lobatto::utilities::{barycentric_weights, lagrangian_interpolation_all};
+use lobatto::LagrangianBasis;
 use nalgebra::*;
 use rayon::prelude::*;
 
@@ -86,7 +86,7 @@ pub struct PoissonSolver1D {
     /// Boundary condition type.
     bc: BoundaryCondition,
     /// GLL basis with $r+1$ nodes on $[0,1]$.
-    lobatto_basis: Basis,
+    lobatto_basis: LagrangianBasis,
     /// Pre-computed pseudo-inverse $A^+ = V \Lambda^+ V^T M$ of the local symbol.
     symbol_pseudo_inv: DMatrix<f64>,
     /// Eigenvalues $\lambda_j$ of the mass-normalised symbol
@@ -115,7 +115,7 @@ impl PoissonSolver1D {
     /// - `alpha`, `beta`: operator coefficients.
     /// - `bc`: boundary condition type.
     pub fn new(l: f64, xl: f64, r: usize, alpha: f64, beta: f64, bc: BoundaryCondition) -> Self {
-        let lobatto_basis = Basis::new(vec![(r + 1, true)]);
+        let lobatto_basis = LagrangianBasis::new(vec![(r + 1, true)]);
         let mass_matrix = lobatto_basis.mass_matrix();
         let diff_matrix = lobatto_basis.diff_matrix(0);
         let stiffness_matrix = diff_matrix.transpose() * &mass_matrix * &diff_matrix;

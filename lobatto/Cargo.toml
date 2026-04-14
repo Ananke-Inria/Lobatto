@@ -1,0 +1,42 @@
+[package]
+name = "lobatto"
+version = "0.1.0"
+edition = "2021"
+description = "Gauss–Lobatto–Legendre quadrature, spectral-element basis operators, and hardcoded differentiation kernels."
+license = "LGPL-3.0-only"
+repository = "https://github.com/OndoMathX/QuadratiX/tree/main/lobatto"
+keywords = ["quadrature", "gauss-lobatto", "spectral-element", "finite-element", "numerics"]
+categories = ["mathematics", "science"]
+
+[[bin]]
+name = "gen_q3"
+path = "src/bin/gen_q3.rs"
+
+[[bin]]
+name = "gen_q4"
+path = "src/bin/gen_q4.rs"
+
+[[bin]]
+name = "gen_q5"
+path = "src/bin/gen_q5.rs"
+
+[[bin]]
+name = "gen_q6"
+path = "src/bin/gen_q6.rs"
+
+[[bin]]
+name = "gen_lobatto"
+path = "src/bin/gen_lobatto.rs"
+
+[[bench]]
+name = "basis_hc"
+harness = false
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--html-in-header", "katex.html"]
+
+[dependencies]
+nalgebra = "0.34.1"
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }

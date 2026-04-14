@@ -9,7 +9,7 @@
 //! Run with:
 //!   cargo run --bin gen_lobatto --release
 
-use quadratix::quadrature::gauss_lobatto;
+use lobatto::quadrature::gauss_lobatto;
 
 const TOLERANCE: f64 = 1e-15;
 const MAX_ORDER: usize = 14;
