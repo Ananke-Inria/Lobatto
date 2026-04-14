@@ -1,12 +1,24 @@
-//! Lagrange interpolation utilities.
+//! Lagrange interpolation in barycentric form.
 //!
-//! Provides both the direct O(r) single-basis evaluation and the barycentric
-//! form that evaluates all r basis values at once in O(r) after an O(r²)
-//! weight precomputation — faster and more numerically stable for repeated use.
+//! Given $n$ distinct nodes $x_0 < x_1 < \cdots < x_{n-1}$, the $i$-th Lagrange
+//! basis polynomial is
+//! $$L_i(p) = \prod_{k \ne i} \frac{p - x_k}{x_i - x_k}.$$
+//!
+//! The **barycentric form** rewrites this as
+//! $$L_i(p) = w_i \prod_{k=0}^{n-1}(p - x_k) \Big/ (p - x_i),
+//! \quad w_i = \frac{1}{\displaystyle\prod_{k \ne i}(x_i - x_k)},$$
+//! allowing all $n$ values $L_0(p), \ldots, L_{n-1}(p)$ to be evaluated in
+//! $O(n)$ time once the weights $w_i$ have been precomputed in $O(n^2)$.
+//!
+//! [`barycentric_weights`] computes the weights; [`lagrangian_interpolation_all`]
+//! evaluates all basis functions simultaneously using a numerically stable
+//! product that avoids dividing by the smallest difference term.
 
-/// Evaluate the `i`-th Lagrange basis function at `p`.
+/// Evaluate the $i$-th Lagrange basis function at `p`.
 ///
-/// The basis is built on the nodes `pos`.  `i` must be in `0..pos.len()`.
+/// Computes $L_i(p) = \prod_{k \ne i}(p - x_k) / (x_i - x_k)$
+/// directly in $O(n)$ using the node set `pos`.  `i` must be in `0..pos.len()`.
+#[allow(dead_code)]
 pub fn lagrangian_interpolation(pos: &[f64], p: f64, i: usize) -> f64 {
     let mut res: f64 = 1.0;
     let mut w = 1.0;
@@ -28,9 +40,12 @@ pub fn lagrangian_interpolation(pos: &[f64], p: f64, i: usize) -> f64 {
     res / w
 }
 
-/// Evaluate the derivative of the `i`-th Lagrange basis function at `p`.
+/// Evaluate the derivative $L_i'(p)$ of the $i$-th Lagrange basis function at `p`.
 ///
-/// The basis is built on the nodes `pos`.  `i` must be in `0..pos.len()`.
+/// Uses the formula
+/// $$L_i'(p) = \frac{1}{\displaystyle\prod_{k \ne i}(x_i - x_k)}
+///   \sum_{r \ne i} \prod_{s \ne i,\, s \ne r}(p - x_s).$$
+/// `i` must be in `0..pos.len()`.
 pub fn lagrangian_derivative_interpolation(pos: &[f64], p: f64, i: usize) -> f64 {
     let mut s = 0.0;
     let mut w = 1.0;
@@ -58,9 +73,13 @@ pub fn lagrangian_derivative_interpolation(pos: &[f64], p: f64, i: usize) -> f64
     s / w
 }
 
-/// Compute barycentric weights `w[j] = 1 / Π_{k≠j}(x[j] - x[k])` for nodes `x`.
+/// Precompute barycentric weights $w_i = 1 / \prod_{k \ne i}(x_i - x_k)$ for nodes `x`.
 ///
-/// Cost: O(r²).  Compute once per node set and reuse across many evaluation points.
+/// These weights are independent of the evaluation point and need only be computed
+/// once per node set.  Pass them to [`lagrangian_interpolation_all`] to evaluate
+/// all $n$ basis functions at any point in $O(n)$.
+///
+/// Cost: $O(n^2)$.
 pub fn barycentric_weights(x: &[f64]) -> Vec<f64> {
     let n = x.len();
     let mut w = vec![1.0_f64; n];
@@ -78,15 +97,22 @@ pub fn barycentric_weights(x: &[f64]) -> Vec<f64> {
     w
 }
 
-/// Evaluate all Lagrange basis functions at `p`.
+/// Evaluate all $n$ Lagrange basis functions at `p` using the barycentric form.
 ///
-/// Returns a vector of length `pos.len()` where entry `i` is `L_i(p)`.
-/// The basis is built on the nodes `pos`; `w` must be the precomputed barycentric
-/// weights from [`barycentric_weights`].  Cost: O(r) after the O(r²) precomputation.
+/// Returns the vector $(L_0(p), \ldots, L_{n-1}(p))$ where
+/// $$L_i(p) = w_i \prod_{k=0}^{n-1}(p - x_k) \Big/ (p - x_i).$$
+///
+/// `pos` are the nodes, `w` the precomputed weights from [`barycentric_weights`].
+///
+/// **Numerical stability**: the common product $\prod_k(p - x_k)$ is computed
+/// with the term nearest to $p$ excluded, avoiding division by the smallest
+/// (and most cancellation-prone) factor.
+///
+/// Cost: $O(n)$ after the $O(n^2)$ weight precomputation.
 pub fn lagrangian_interpolation_all(pos: &[f64], w: &[f64], p: f64) -> Vec<f64> {
     let n = pos.len();
 
-    // Build diffs[r] = p - pos[r], tracking the index of the smallest |diff|.
+    // diffs[r] = p - pos[r]; i_min is the index of the closest node.
     let mut diffs = vec![0.0_f64; n];
     let mut i_min = 0;
     for r in 0..n {
@@ -96,7 +122,7 @@ pub fn lagrangian_interpolation_all(pos: &[f64], w: &[f64], p: f64) -> Vec<f64> 
         }
     }
 
-    // Product excluding the closest node — never divides by the smallest term.
+    // Common factor: Π_{r ≠ i_min}(p - pos[r])  (never contains the smallest term).
     let mut prod_skip = 1.0_f64;
     for r in 0..n {
         if r != i_min {
@@ -105,7 +131,7 @@ pub fn lagrangian_interpolation_all(pos: &[f64], w: &[f64], p: f64) -> Vec<f64> 
     }
 
     // L_i(p) = w[i] * Π_{r≠i}(p - pos[r]).
-    //   i = i_min : Π_{r≠i} = prod_skip                         (no division)
+    //   i = i_min : Π_{r≠i} = prod_skip                      (no division by small term)
     //   i ≠ i_min : Π_{r≠i} = prod_skip * diffs[i_min] / diffs[i]
     let mut res = vec![0.0_f64; n];
     for i in 0..n {

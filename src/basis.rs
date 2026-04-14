@@ -1,59 +1,75 @@
 //! Multi-dimensional GLL differentiation and mass-matrix operators.
 //!
-//! The [`Basis`] struct assembles, for a tensor-product grid of
-//! Gauss or Gauss-Lobatto points, the 1D differentiation matrices and the
-//! diagonal mass matrix in each direction.  It exposes [`Basis::diff`]
-//! to apply the differentiation operator along any axis, and
-//! [`Basis::mass_matrix`] / [`Basis::diff_matrix`] to return the
-//! corresponding dense matrices (useful for building the stiffness matrix in
-//! the HoFFT and HoT solvers).
+//! [`Basis`] assembles, for a tensor-product grid of Gauss or Gauss–Lobatto–Legendre
+//! nodes, the per-direction **differentiation matrices** and the **diagonal mass
+//! matrix**.
+//!
+//! ## Differentiation matrix
+//!
+//! For direction $k$ with $n_k$ nodes $\xi_0 < \cdots < \xi_{n_k-1}$, the 1D
+//! differentiation matrix $D^{(k)}$ is defined by
+//! $$D^{(k)}_{ji} = L_i'(\xi_j), \quad i,j = 0, \ldots, n_k - 1,$$
+//! where $L_i$ is the $i$-th Lagrange basis polynomial.
+//! [`Basis::diff`] applies the resulting operator fibre-by-fibre over the full
+//! tensor-product grid; [`Basis::diff_matrix`] returns it as a dense matrix.
+//!
+//! ## Mass matrix
+//!
+//! The mass matrix is diagonal with entries
+//! $$M_{pp} = \prod_{k=0}^{d-1} w^{(k)}_{i_k(p)},$$
+//! where $w^{(k)}_j$ is the $j$-th quadrature weight in direction $k$ and
+//! $(i_0(p), \ldots, i_{d-1}(p))$ is the multi-index of DOF $p$.
+//!
+//! ## DOF ordering
+//!
+//! The global DOF ordering is **row-major** (last direction varies fastest):
+//! $$p = i_0 \cdot (n_1 n_2 \cdots) + i_1 \cdot (n_2 \cdots) + \cdots + i_{d-1}.$$
 
 use crate::quadrature::*;
 use crate::utilities::lagrangian_derivative_interpolation;
 use nalgebra::*;
 
-/// Multi-dimensional spectral differentiation operator on a tensor-product GLL/Gauss grid.
+/// Multi-dimensional spectral differentiation and mass-matrix operator on a
+/// tensor-product GLL or GL grid.
 ///
-/// Each direction `k` is described by a pair `(n_k, is_lobatto)`:
-/// - `n_k`: number of quadrature points in direction `k`.
-/// - `is_lobatto`: if `true`, use Gauss-Lobatto points; otherwise use Gauss points.
+/// Each direction $k$ is described by a pair `(n_k, is_lobatto)`:
+/// - `n_k`: number of quadrature nodes in direction $k$.
+/// - `is_lobatto`: `true` for Gauss–Lobatto–Legendre nodes, `false` for Gauss nodes.
 ///
-/// The global DOF ordering is *row-major* (last direction varies fastest):
-/// flat index = `i_0 * (n_1 * n_2 * …) + i_1 * (n_2 * …) + … + i_{d-1}`.
-///
-/// # Usage
+/// # Example
 /// ```rust
 /// use quadratix::basis::Basis;
 /// // 2D Q4 element: 5×5 GLL nodes
-/// let calc = Basis::new(vec![(5, true), (5, true)]);
+/// let basis = Basis::new(vec![(5, true), (5, true)]);
 /// ```
 #[derive(Debug)]
 pub struct Basis {
     /// Per-direction description: `(n_points, is_lobatto)`.
     basis: Vec<(usize, bool)>,
 
-    /// Quadrature weights, one vector per direction.
+    /// Quadrature weights on $[0,1]$, one vector per direction.
     weights: Vec<Vec<f64>>,
-    /// Quadrature nodes on [0, 1], one vector per direction.
+    /// Quadrature nodes on $[0,1]$, one vector per direction.
     points: Vec<Vec<f64>>,
 
-    /// 1D differentiation matrices D, one per direction.
-    /// `diff_matrices[k][j, i] = φ_i'(ξ_j)` where `ξ_j` are the nodes of direction `k`.
+    /// 1D differentiation matrices, one per direction.
+    /// `diff_matrices[k][(j, i)]` $= L_i'(\xi_j)$ where $\xi_j$ are the nodes
+    /// of direction $k$.
     diff_matrices: Vec<DMatrix<f64>>,
 
-    /// Total number of DOFs: `∏_k n_k`.
+    /// Total number of DOFs: $\prod_k n_k$.
     n_points: usize,
-    /// Prefix products of point counts: `n_points_acc[k] = n_0 * n_1 * … * n_k`.
+    /// Prefix products of point counts: `n_points_acc[k]` $= n_0 \cdots n_k$.
     n_points_acc: Vec<usize>,
 
-    /// Stride step used by [`Basis::diff`] for direction `k`.
+    /// Stride step used by [`Basis::diff`] for direction $k$.
     step: Vec<usize>,
-    /// Starting flat indices of fibers in direction `k` (indices where `i_k == 0`).
+    /// Starting flat indices of fibres in direction $k$ (all $p$ with $i_k(p) = 0$).
     start: Vec<Vec<usize>>,
 }
 
 impl Basis {
-    // Convert a flat index to a multi-index `(i_0, i_1, …, i_{d-1})`.
+    // Convert a flat DOF index to the multi-index $(i_0, \ldots, i_{d-1})$.
     fn flat_to_multi(n_points_acc: &[usize], index: usize) -> Vec<usize> {
         let n = n_points_acc.len();
         let mut multi_index = vec![0; n];
@@ -66,12 +82,12 @@ impl Basis {
         multi_index
     }
 
-    /// Convert a flat index to a multi-index `(i_0, i_1, …, i_{d-1})`.
+    /// Convert a flat DOF index to the multi-index $(i_0, \ldots, i_{d-1})$.
     pub fn get_multi_index(&self, index: usize) -> Vec<usize> {
         Self::flat_to_multi(&self.n_points_acc, index)
     }
 
-    /// Convert a multi-index `(i_0, i_1, …, i_{d-1})` to a flat index.
+    /// Convert a multi-index $(i_0, \ldots, i_{d-1})$ to a flat DOF index.
     pub fn get_index(&self, multi_index: &[usize]) -> usize {
         let n = self.n_points_acc.len();
         let mut i = multi_index[0];
@@ -81,11 +97,13 @@ impl Basis {
         i
     }
 
-    /// Build a `Basis` from a list of per-direction descriptions.
+    /// Build a `Basis` from a list of per-direction descriptions `(n, is_lobatto)`.
     ///
-    /// Each entry `(n, is_lobatto)` specifies the number of quadrature points
-    /// and whether to use Gauss-Lobatto (`true`) or Gauss (`false`) nodes.
-    /// Lobatto rules require `n ≥ 2`; Gauss rules require `n ≥ 1`.
+    /// `n` is the number of quadrature nodes and `is_lobatto` selects GLL (`true`)
+    /// or GL (`false`) nodes on $[0,1]$.
+    ///
+    /// # Panics
+    /// Panics if a GLL direction has fewer than 2 nodes, or a GL direction has 0 nodes.
     pub fn new(basis: Vec<(usize, bool)>) -> Self {
         let n = basis.len();
 
@@ -107,7 +125,7 @@ impl Basis {
 
             diff_matrices[k].resize_mut(basis[k].0, basis[k].0, 0.0);
 
-            // D_{ji} = (phi_i)'(xi_j)
+            // D_{ji} = L_i'(ξ_j)
             for i in 0..basis[k].0 {
                 for j in 0..basis[k].0 {
                     diff_matrices[k][(j, i)] =
@@ -159,27 +177,28 @@ impl Basis {
         }
     }
 
-    /// Quadrature nodes on `[0, 1]` for direction `dim`.
+    /// Return the quadrature nodes on $[0,1]$ for direction `dim`.
     pub fn points(&self, dim: usize) -> &[f64] {
         &self.points[dim]
     }
 
-    /// Raw 1D differentiation matrix for direction `dim`.
+    /// Return the raw 1D differentiation matrix for direction `dim`.
     ///
-    /// Entry `(j, i)` = `φ_i'(ξ_j)`. For the full tensor-product matrix see
-    /// [`Basis::diff_matrix`].
+    /// Entry $(j, i)$ equals $L_i'(\xi_j)$.  For the full tensor-product lift
+    /// see [`Basis::diff_matrix`].
     pub fn diff_matrix_1d(&self, dim: usize) -> &DMatrix<f64> {
         &self.diff_matrices[dim]
     }
 
     /// Apply the differentiation operator along direction `dim` in place.
     ///
-    /// Computes `sol_diff = D_dim · sol` where `D_dim` is the 1D differentiation
-    /// matrix in direction `dim`, applied fiber-by-fiber over the tensor-product grid.
+    /// Computes $\mathtt{sol\_diff} \leftarrow D^{(\mathrm{dim})} \cdot \mathtt{sol}$,
+    /// where $D^{(\mathrm{dim})}$ is applied fibre-by-fibre over the tensor-product grid:
+    /// for each combination of indices $(i_0, \ldots, \widehat{i_{\mathrm{dim}}}, \ldots, i_{d-1})$,
+    /// the length-$n_{\mathrm{dim}}$ fibre is multiplied by $D^{(\mathrm{dim})}$.
     ///
     /// # Panics
-    /// Panics if `dim ≥ number of directions`, or if `sol`/`sol_diff` have the
-    /// wrong length.
+    /// Panics if `dim ≥ d`, or if `sol`/`sol_diff` have the wrong length.
     pub fn diff(&self, dim: usize, sol: &[f64], sol_diff: &mut [f64]) {
         assert!(
             dim < self.basis.len(),
@@ -209,10 +228,11 @@ impl Basis {
         }
     }
 
-    /// Return the diagonal mass matrix as a dense `n_points × n_points` matrix.
+    /// Return the diagonal mass matrix as a dense $N_\mathrm{dof} \times N_\mathrm{dof}$ matrix.
     ///
-    /// Entry `(k, k)` equals the tensor-product quadrature weight at DOF `k`:
-    /// `w_{i_0} * w_{i_1} * … * w_{i_{d-1}}`.  Off-diagonal entries are zero.
+    /// Entry $(p, p)$ equals the tensor-product quadrature weight at DOF $p$:
+    /// $$M_{pp} = \prod_{k=0}^{d-1} w^{(k)}_{i_k(p)}.$$
+    /// All off-diagonal entries are zero.
     pub fn mass_matrix(&self) -> DMatrix<f64> {
         let mut mass_matrix = DMatrix::<f64>::zeros(self.n_points, self.n_points);
         for k in 0..self.n_points {
@@ -225,13 +245,12 @@ impl Basis {
         mass_matrix
     }
 
-    /// Return the full differentiation matrix along direction `dim` as a dense
-    /// `n_points × n_points` matrix.
+    /// Return the full tensor-product differentiation matrix along direction `dim` as a
+    /// dense $N_\mathrm{dof} \times N_\mathrm{dof}$ matrix.
     ///
-    /// This is the block-diagonal lift of the 1D matrix `D_dim` to the full
-    /// tensor-product space, assembled via the same fiber iteration used by
-    /// [`Basis::diff`].  Useful for constructing the stiffness matrix
-    /// `K = D^T M D`.
+    /// This is the block-diagonal lift of $D^{(\mathrm{dim})}$ to the full tensor-product
+    /// space, assembled via the same fibre iteration as [`Basis::diff`].
+    /// Useful for building the stiffness matrix $K = D^T M D$.
     pub fn diff_matrix(&self, dim: usize) -> DMatrix<f64> {
         let mut diff_matrix = DMatrix::<f64>::zeros(self.n_points, self.n_points);
 

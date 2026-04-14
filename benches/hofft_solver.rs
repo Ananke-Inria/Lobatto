@@ -1,5 +1,6 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use quadratix::hofft::*;
+use rustfft::num_complex::Complex;
 use std::f64::consts::PI;
 use std::hint::black_box;
 
@@ -34,7 +35,8 @@ fn bench_solve_in_place(c: &mut Criterion) {
                 PoissonSolver1D::new(l, 0.0, n, r, alpha, beta, BoundaryCondition::Periodic);
             let x = solver.get_x();
 
-            let f_init: Vec<f64> = x.iter().map(|&xi| rhs_f(xi)).collect();
+            let f_init: Vec<Complex<f64>> =
+                x.iter().map(|&xi| Complex::new(rhs_f(xi), 0.0)).collect();
 
             group.bench_with_input(
                 BenchmarkId::new(format!("r={r}"), format!("n={n}")),
@@ -74,13 +76,13 @@ fn bench_solve_in_place_2d(c: &mut Criterion) {
                 [0.0; 2],
                 [n; 2],
                 [r; 2],
-                [BoundaryCondition::Periodic; 2],
                 alpha,
                 beta,
+                [BoundaryCondition::Periodic; 2],
             );
             let x = solver.get_x();
 
-            let f_init: Vec<f64> = (0..ndof)
+            let f_init: Vec<Complex<f64>> = (0..ndof)
                 .map(|i| {
                     let (xi, yi) = (x[i][0], x[i][1]);
                     let rhs_1d = |t: f64| {
@@ -91,7 +93,7 @@ fn bench_solve_in_place_2d(c: &mut Criterion) {
                     };
                     let ux = (w * xi).sin().exp();
                     let uy = (w * yi).sin().exp();
-                    rhs_1d(xi) * uy + ux * rhs_1d(yi) - alpha * ux * uy
+                    Complex::new(rhs_1d(xi) * uy + ux * rhs_1d(yi) - alpha * ux * uy, 0.0)
                 })
                 .collect();
 
@@ -138,13 +140,13 @@ fn bench_solve_in_place_3d(c: &mut Criterion) {
                 [0.0; 3],
                 [n; 3],
                 [r; 3],
-                [BoundaryCondition::Periodic; 3],
                 alpha,
                 beta,
+                [BoundaryCondition::Periodic; 3],
             );
             let x = solver.get_x();
 
-            let f_init: Vec<f64> = (0..ndof)
+            let f_init: Vec<Complex<f64>> = (0..ndof)
                 .map(|i| {
                     let (xi, yi, zi) = (x[i][0], x[i][1], x[i][2]);
                     let rhs_1d = |t: f64| {
@@ -158,8 +160,11 @@ fn bench_solve_in_place_3d(c: &mut Criterion) {
                         (w * yi).sin().exp(),
                         (w * zi).sin().exp(),
                     );
-                    rhs_1d(xi) * uy * uz + ux * rhs_1d(yi) * uz + ux * uy * rhs_1d(zi)
-                        - 2.0 * alpha * ux * uy * uz
+                    Complex::new(
+                        rhs_1d(xi) * uy * uz + ux * rhs_1d(yi) * uz + ux * uy * rhs_1d(zi)
+                            - 2.0 * alpha * ux * uy * uz,
+                        0.0,
+                    )
                 })
                 .collect();
 

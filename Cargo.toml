@@ -19,6 +19,10 @@ path = "src/hc/bin/gen_q5.rs"
 name = "gen_q6"
 path = "src/hc/bin/gen_q6.rs"
 
+[[bin]]
+name = "gen_lobatto"
+path = "src/hc/bin/gen_lobatto.rs"
+
 [[bench]]
 name = "hc_kernels"
 harness = false

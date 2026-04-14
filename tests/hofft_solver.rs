@@ -660,14 +660,16 @@ fn convergence_2d() {
                 [0.0; 2],
                 [n; 2],
                 [r; 2],
-                [BoundaryCondition::Periodic; 2],
                 alpha,
                 beta,
+                [BoundaryCondition::Periodic; 2],
             );
             let x = solver.get_x();
             let total = x.len();
 
-            let mut f: Vec<Complex<f64>> = (0..total).map(|i| Complex::new(rhs_f(x[i][0], x[i][1]), 0.0)).collect();
+            let mut f: Vec<Complex<f64>> = (0..total)
+                .map(|i| Complex::new(rhs_f(x[i][0], x[i][1]), 0.0))
+                .collect();
             solver.solve_in_place(&mut f);
 
             let max_err = (0..total)
@@ -683,6 +685,154 @@ fn convergence_2d() {
                         r + 1
                     );
                     format!("{rate_val:.2}")
+                }
+                _ => "-".to_string(),
+            };
+
+            println!("{r:<6} {n:>8} {h:>14.2e} {max_err:>10.2e} {rate:>10}");
+            prev_h = Some(h);
+            prev_err = Some(max_err);
+        }
+        println!();
+    }
+}
+
+#[test]
+fn convergence_2d_dirichlet() {
+    let alpha = 1.0_f64;
+    let beta = 1.0_f64;
+
+    // Exact solution: u(x,y) = sin(πx)·sin(πy) on [0,1]²
+    //   Dirichlet in both x and y: u = 0 on all boundaries  ✓
+    //   (α − β Δ)u = (α + 2β π²)·u
+    let w = PI;
+    let c = alpha + 2.0 * beta * w * w;
+    let exact_u = |x: f64, y: f64| (w * x).sin() * (w * y).sin();
+    let rhs_f = |x: f64, y: f64| c * exact_u(x, y);
+
+    let orders = [2, 3, 4, 5];
+    let n_values = [4, 8, 16, 32, 64];
+
+    println!("\n{:=<70}", "");
+    println!("2D convergence: Dirichlet x / Dirichlet y  on [0,1]²");
+    println!("u = sin(πx)·sin(πy),  α={alpha}, β={beta}");
+    println!("{:=<70}\n", "");
+    println!(
+        "{:<6} {:>8} {:>14} {:>10} {:>10}",
+        "r", "n", "h", "max_err", "rate"
+    );
+    println!("{:-<52}", "");
+
+    for &r in &orders {
+        let mut prev_h: Option<f64> = None;
+        let mut prev_err: Option<f64> = None;
+
+        for &n in &n_values {
+            let h = 1.0 / n as f64;
+            let solver = PoissonSolverND::<2>::new(
+                [1.0; 2],
+                [0.0; 2],
+                [n; 2],
+                [r; 2],
+                alpha,
+                beta,
+                [BoundaryCondition::Dirichlet; 2],
+            );
+            let x = solver.get_x();
+            let total = x.len();
+
+            let mut f: Vec<Complex<f64>> = (0..total)
+                .map(|i| Complex::new(rhs_f(x[i][0], x[i][1]), 0.0))
+                .collect();
+            solver.solve_in_place(&mut f);
+
+            let max_err = (0..total)
+                .map(|i| (f[i].re - exact_u(x[i][0], x[i][1])).abs())
+                .fold(0.0_f64, f64::max);
+
+            let rate = match (prev_h, prev_err) {
+                (Some(ph), Some(pe)) if pe > 0.0 && max_err > 0.0 => {
+                    let rv = (pe / max_err).ln() / (ph / h).ln();
+                    assert!(
+                        max_err < 1e-8 || rv >= (r as f64 + 1.0) - 0.1,
+                        "2D Dirichlet r={r} n={n}: rate {rv:.2} < {} but err={max_err:.2e}",
+                        r + 1
+                    );
+                    format!("{rv:.2}")
+                }
+                _ => "-".to_string(),
+            };
+
+            println!("{r:<6} {n:>8} {h:>14.2e} {max_err:>10.2e} {rate:>10}");
+            prev_h = Some(h);
+            prev_err = Some(max_err);
+        }
+        println!();
+    }
+}
+
+#[test]
+fn convergence_2d_neumann() {
+    let alpha = 1.0_f64;
+    let beta = 1.0_f64;
+
+    // Exact solution: u(x,y) = cos(πx)·cos(πy) on [0,1]²
+    //   Neumann in both x and y: u'=0 on all boundaries  ✓
+    //   (α − β Δ)u = (α + 2β π²)·u
+    let w = PI;
+    let c = alpha + 2.0 * beta * w * w;
+    let exact_u = |x: f64, y: f64| (w * x).cos() * (w * y).cos();
+    let rhs_f = |x: f64, y: f64| c * exact_u(x, y);
+
+    let orders = [2, 3, 4, 5];
+    let n_values = [4, 8, 16, 32, 64];
+
+    println!("\n{:=<70}", "");
+    println!("2D convergence: Neumann x / Neumann y  on [0,1]²");
+    println!("u = cos(πx)·cos(πy),  α={alpha}, β={beta}");
+    println!("{:=<70}\n", "");
+    println!(
+        "{:<6} {:>8} {:>14} {:>10} {:>10}",
+        "r", "n", "h", "max_err", "rate"
+    );
+    println!("{:-<52}", "");
+
+    for &r in &orders {
+        let mut prev_h: Option<f64> = None;
+        let mut prev_err: Option<f64> = None;
+
+        for &n in &n_values {
+            let h = 1.0 / n as f64;
+            let solver = PoissonSolverND::<2>::new(
+                [1.0; 2],
+                [0.0; 2],
+                [n; 2],
+                [r; 2],
+                alpha,
+                beta,
+                [BoundaryCondition::Neumann; 2],
+            );
+            let x = solver.get_x();
+            let total = x.len();
+
+            let mut f: Vec<Complex<f64>> = (0..total)
+                .map(|i| Complex::new(rhs_f(x[i][0], x[i][1]), 0.0))
+                .collect();
+            solver.solve_in_place(&mut f);
+
+            let max_err = (0..total)
+                .map(|i| (f[i].re - exact_u(x[i][0], x[i][1])).abs())
+                .fold(0.0_f64, f64::max);
+
+            let rate = match (prev_h, prev_err) {
+                (Some(ph), Some(pe)) if pe > 0.0 && max_err > 0.0 => {
+                    let rv = (pe / max_err).ln() / (ph / h).ln();
+                    assert!(
+                        max_err < 1e-8 || rv >= (r as f64 + 1.0) - 0.1,
+                        "2D Neumann r={r} n={n}: rate {rv:.2} < {} but err={max_err:.2e}",
+                        r + 1
+                    );
+                    format!("{rv:.2}")
                 }
                 _ => "-".to_string(),
             };
@@ -733,14 +883,16 @@ fn convergence_2d_dirichlet_neumann() {
                 [0.0; 2],
                 [n; 2],
                 [r; 2],
-                [BoundaryCondition::Dirichlet, BoundaryCondition::Neumann],
                 alpha,
                 beta,
+                [BoundaryCondition::Dirichlet, BoundaryCondition::Neumann],
             );
             let x = solver.get_x();
             let total = x.len();
 
-            let mut f: Vec<Complex<f64>> = (0..total).map(|i| Complex::new(rhs_f(x[i][0], x[i][1]), 0.0)).collect();
+            let mut f: Vec<Complex<f64>> = (0..total)
+                .map(|i| Complex::new(rhs_f(x[i][0], x[i][1]), 0.0))
+                .collect();
             solver.solve_in_place(&mut f);
 
             let max_err = (0..total)
@@ -785,13 +937,15 @@ fn convergence_2d_anisotropic() {
             [0.0; 2],
             ns,
             rs,
-            [BoundaryCondition::Periodic; 2],
             alpha,
             beta,
+            [BoundaryCondition::Periodic; 2],
         );
         let x = solver.get_x();
         let total = x.len();
-        let mut f: Vec<Complex<f64>> = (0..total).map(|i| Complex::new(rhs_f(x[i][0], x[i][1]), 0.0)).collect();
+        let mut f: Vec<Complex<f64>> = (0..total)
+            .map(|i| Complex::new(rhs_f(x[i][0], x[i][1]), 0.0))
+            .collect();
         solver.solve_in_place(&mut f);
         (0..total)
             .map(|i| (f[i].re - exact_u(x[i][0], x[i][1])).abs())
@@ -959,9 +1113,9 @@ fn convergence_3d() {
                     xls,
                     [n; 3],
                     [r; 3],
-                    [BoundaryCondition::Periodic; 3],
                     alpha,
                     beta,
+                    [BoundaryCondition::Periodic; 3],
                 );
                 let x = solver.get_x();
                 let total = x.len();
@@ -1011,6 +1165,154 @@ fn convergence_3d() {
                 prev_err = Some(max_err);
             }
             println!();
+        }
+        println!();
+    }
+}
+
+#[test]
+fn convergence_3d_dirichlet() {
+    let alpha = 1.0_f64;
+    let beta = 1.0_f64;
+
+    // Anisotropic domain: [0.2, 1.7] × [0.5, 3.0] × [-1.0, 1.0]
+    let ls = [1.5_f64, 2.5, 2.0];
+    let xls = [0.2_f64, 0.5, -1.0];
+
+    // Exact: u = sin(πξ)·sin(πη)·sin(πζ),  ξ_d = (x_d − xl_d) / l_d
+    // Dirichlet in all directions: u = 0 on boundaries  ✓
+    // (α − β Δ)u = (α + β π²·Σ 1/l_d²)·u
+    let c = alpha + beta * PI * PI * (1.0 / (ls[0] * ls[0]) + 1.0 / (ls[1] * ls[1]) + 1.0 / (ls[2] * ls[2]));
+
+    let exact_u = |x: [f64; 3]| {
+        (0..3)
+            .map(|d| (PI * (x[d] - xls[d]) / ls[d]).sin())
+            .product::<f64>()
+    };
+    let rhs_f = |x: [f64; 3]| c * exact_u(x);
+
+    let orders = [2, 3, 4, 5];
+    let n_values = [4, 8, 16, 32, 64];
+
+    println!("\n{:=<70}", "");
+    println!(
+        "3D Dirichlet: on [{:.1},{:.1}]×[{:.1},{:.1}]×[{:.1},{:.1}]",
+        xls[0], xls[0]+ls[0], xls[1], xls[1]+ls[1], xls[2], xls[2]+ls[2]
+    );
+    println!("u = sin(πξ)·sin(πη)·sin(πζ),  α={alpha}, β={beta}");
+    println!("{:=<70}\n", "");
+    println!(
+        "{:<6} {:>8} {:>14} {:>10} {:>10}",
+        "r", "n", "h", "max_err", "rate"
+    );
+    println!("{:-<52}", "");
+
+    for &r in &orders {
+        let mut prev_h: Option<f64> = None;
+        let mut prev_err: Option<f64> = None;
+        for &n in &n_values {
+            let h = 1.0 / n as f64;
+            let solver = PoissonSolverND::<3>::new(
+                ls, xls, [n; 3], [r; 3], alpha, beta,
+                [BoundaryCondition::Dirichlet; 3],
+            );
+            let x = solver.get_x();
+            let total = x.len();
+            let mut f: Vec<Complex<f64>> = (0..total).map(|i| Complex::new(rhs_f(x[i]), 0.0)).collect();
+            solver.solve_in_place(&mut f);
+            let max_err = (0..total)
+                .map(|i| (f[i].re - exact_u(x[i])).abs())
+                .fold(0.0_f64, f64::max);
+
+            let rate = match (prev_h, prev_err) {
+                (Some(ph), Some(pe)) if pe > 0.0 && max_err > 0.0 => {
+                    let rv = (pe / max_err).ln() / (ph / h).ln();
+                    assert!(
+                        max_err < 1e-8 || rv >= (r as f64 + 1.0) - 0.1,
+                        "3D Dirichlet r={r} n={n}: rate {rv:.2} < {}, err={max_err:.2e}",
+                        r + 1
+                    );
+                    format!("{rv:.2}")
+                }
+                _ => "-".to_string(),
+            };
+            println!("{r:<6} {n:>8} {h:>14.2e} {max_err:>10.2e} {rate:>10}");
+            prev_h = Some(h);
+            prev_err = Some(max_err);
+        }
+        println!();
+    }
+}
+
+#[test]
+fn convergence_3d_neumann() {
+    let alpha = 1.0_f64;
+    let beta = 1.0_f64;
+
+    // Anisotropic domain: [0.2, 1.7] × [0.5, 3.0] × [-1.0, 1.0]
+    let ls = [1.5_f64, 2.5, 2.0];
+    let xls = [0.2_f64, 0.5, -1.0];
+
+    // Exact: u = cos(πξ)·cos(πη)·cos(πζ),  ξ_d = (x_d − xl_d) / l_d
+    // Neumann in all directions: u' = 0 on boundaries  ✓
+    // (α − β Δ)u = (α + β π²·Σ 1/l_d²)·u
+    let c = alpha + beta * PI * PI * (1.0 / (ls[0] * ls[0]) + 1.0 / (ls[1] * ls[1]) + 1.0 / (ls[2] * ls[2]));
+
+    let exact_u = |x: [f64; 3]| {
+        (0..3)
+            .map(|d| (PI * (x[d] - xls[d]) / ls[d]).cos())
+            .product::<f64>()
+    };
+    let rhs_f = |x: [f64; 3]| c * exact_u(x);
+
+    let orders = [2, 3, 4, 5];
+    let n_values = [4, 8, 16, 32, 64];
+
+    println!("\n{:=<70}", "");
+    println!(
+        "3D Neumann: on [{:.1},{:.1}]×[{:.1},{:.1}]×[{:.1},{:.1}]",
+        xls[0], xls[0]+ls[0], xls[1], xls[1]+ls[1], xls[2], xls[2]+ls[2]
+    );
+    println!("u = cos(πξ)·cos(πη)·cos(πζ),  α={alpha}, β={beta}");
+    println!("{:=<70}\n", "");
+    println!(
+        "{:<6} {:>8} {:>14} {:>10} {:>10}",
+        "r", "n", "h", "max_err", "rate"
+    );
+    println!("{:-<52}", "");
+
+    for &r in &orders {
+        let mut prev_h: Option<f64> = None;
+        let mut prev_err: Option<f64> = None;
+        for &n in &n_values {
+            let h = 1.0 / n as f64;
+            let solver = PoissonSolverND::<3>::new(
+                ls, xls, [n; 3], [r; 3], alpha, beta,
+                [BoundaryCondition::Neumann; 3],
+            );
+            let x = solver.get_x();
+            let total = x.len();
+            let mut f: Vec<Complex<f64>> = (0..total).map(|i| Complex::new(rhs_f(x[i]), 0.0)).collect();
+            solver.solve_in_place(&mut f);
+            let max_err = (0..total)
+                .map(|i| (f[i].re - exact_u(x[i])).abs())
+                .fold(0.0_f64, f64::max);
+
+            let rate = match (prev_h, prev_err) {
+                (Some(ph), Some(pe)) if pe > 0.0 && max_err > 0.0 => {
+                    let rv = (pe / max_err).ln() / (ph / h).ln();
+                    assert!(
+                        max_err < 1e-8 || rv >= (r as f64 + 1.0) - 0.1,
+                        "3D Neumann r={r} n={n}: rate {rv:.2} < {}, err={max_err:.2e}",
+                        r + 1
+                    );
+                    format!("{rv:.2}")
+                }
+                _ => "-".to_string(),
+            };
+            println!("{r:<6} {n:>8} {h:>14.2e} {max_err:>10.2e} {rate:>10}");
+            prev_h = Some(h);
+            prev_err = Some(max_err);
         }
         println!();
     }
@@ -1073,7 +1375,7 @@ fn convergence_3d_mixed_bc() {
     ];
 
     let compute_err = |ns: [usize; 3], rs: [usize; 3]| -> f64 {
-        let solver = PoissonSolverND::<3>::new(ls, xls, ns, rs, bc, alpha, beta);
+        let solver = PoissonSolverND::<3>::new(ls, xls, ns, rs, alpha, beta, bc);
         let x = solver.get_x();
         let total = x.len();
         let mut f: Vec<Complex<f64>> = (0..total).map(|i| Complex::new(rhs_f(x[i]), 0.0)).collect();
@@ -1230,14 +1532,16 @@ fn convergence_periodic_2d() {
                 [0.0; 2],
                 [n; 2],
                 [r; 2],
-                [BoundaryCondition::Periodic; 2],
                 alpha,
                 beta,
+                [BoundaryCondition::Periodic; 2],
             );
             let x = solver.get_x();
             let total = x.len();
 
-            let mut f: Vec<Complex<f64>> = (0..total).map(|i| Complex::new(rhs_f(x[i][0], x[i][1]), 0.0)).collect();
+            let mut f: Vec<Complex<f64>> = (0..total)
+                .map(|i| Complex::new(rhs_f(x[i][0], x[i][1]), 0.0))
+                .collect();
             solver.solve_in_place(&mut f);
 
             let max_err = (0..total)
@@ -1330,9 +1634,9 @@ fn convergence_3d_eval() {
             xls,
             [n; 3],
             [r; 3],
-            [BoundaryCondition::Periodic; 3],
             alpha,
             beta,
+            [BoundaryCondition::Periodic; 3],
         );
         let x = solver.get_x();
         let total = x.len();
@@ -1401,9 +1705,9 @@ fn convect_4d_q6() {
         [0.0; 4],
         [n; 4],
         [r; 4],
+        1.0,
+        1.0,
         [BoundaryCondition::Periodic; 4],
-        1.0,
-        1.0,
     );
     let x = solver.get_x();
     let total = x.len();

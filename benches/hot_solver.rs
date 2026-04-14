@@ -27,7 +27,7 @@ fn bench_hot_solve_in_place(c: &mut Criterion) {
     for &r in r_values {
         group.throughput(Throughput::Elements(r as u64));
 
-        let solver = PoissonSolver1D::new(l, 0.0, r, alpha, beta);
+        let solver = PoissonSolver1D::new(l, 0.0, r, alpha, beta, BoundaryCondition::Periodic);
         let x = solver.get_x();
 
         let f_init: Vec<f64> = x.iter().map(|&xi| rhs_f(xi)).collect();
@@ -62,7 +62,14 @@ fn bench_hot_solve_in_place_2d(c: &mut Criterion) {
         let ndof = r * r;
         group.throughput(Throughput::Elements(ndof as u64));
 
-        let solver = PoissonSolverND::<2>::new([1.0; 2], [0.0; 2], [r; 2], alpha, beta);
+        let solver = PoissonSolverND::<2>::new(
+            [1.0; 2],
+            [0.0; 2],
+            [r; 2],
+            alpha,
+            beta,
+            [BoundaryCondition::Periodic; 2],
+        );
         let x = solver.get_x();
 
         let f_init: Vec<f64> = (0..ndof)
@@ -112,7 +119,14 @@ fn bench_hot_solve_in_place_3d(c: &mut Criterion) {
         let ndof = r * r * r;
         group.throughput(Throughput::Elements(ndof as u64));
 
-        let solver = PoissonSolverND::<3>::new([1.0; 3], [0.0; 3], [r; 3], alpha, beta);
+        let solver = PoissonSolverND::<3>::new(
+            [1.0; 3],
+            [0.0; 3],
+            [r; 3],
+            alpha,
+            beta,
+            [BoundaryCondition::Periodic; 3],
+        );
         let x = solver.get_x();
 
         let f_init: Vec<f64> = (0..ndof)

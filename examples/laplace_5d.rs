@@ -16,6 +16,7 @@
 //!   cargo run --example laplace_5d --release
 
 use quadratix::hofft::{BoundaryCondition, PoissonSolverND as HofftPoissonSolverND};
+use quadratix::hot::BoundaryCondition as HotBoundaryCondition;
 use quadratix::hot::PoissonSolverND as HotPoissonSolverND;
 use rayon::prelude::*;
 use std::f64::consts::PI;
@@ -67,7 +68,7 @@ fn main() {
 
     // HoFFT parameters
     let n = 10; // elements per direction
-    let r = 4;  // polynomial order per direction
+    let r = 4; // polynomial order per direction
     let ndof_1d: usize = n * r;
 
     // HoFFT-1 / HoT parameters: single element, same DOF/direction
@@ -94,9 +95,9 @@ fn main() {
         [0.0; 5],
         [n; 5],
         [r; 5],
-        [BoundaryCondition::Periodic; 5],
         alpha,
         beta,
+        [BoundaryCondition::Periodic; 5],
     );
     let hofft_setup_ms = t.elapsed().as_secs_f64() * 1e3;
     println!("  Setup time : {hofft_setup_ms:.1} ms");
@@ -167,9 +168,9 @@ fn main() {
         [0.0; 5],
         [1; 5],
         [r_hot; 5],
-        [BoundaryCondition::Periodic; 5],
         alpha,
         beta,
+        [BoundaryCondition::Periodic; 5],
     );
     let hofft1_setup_ms = t.elapsed().as_secs_f64() * 1e3;
     println!("  Setup time : {hofft1_setup_ms:.1} ms");
@@ -213,7 +214,9 @@ fn main() {
     let t = Instant::now();
     let mut hofft1_vals =
         vec![rustfft::num_complex::Complex::new(0.0_f64, 0.0); eval_hot_pts.len()];
-    solver_hofft1.fft.eval(&eval_hot_pts, &f_hofft1, &mut hofft1_vals);
+    solver_hofft1
+        .fft
+        .eval(&eval_hot_pts, &f_hofft1, &mut hofft1_vals);
     let hofft1_eval_err = eval_hot_pts
         .iter()
         .zip(hofft1_vals.iter())
@@ -233,7 +236,14 @@ fn main() {
     println!("── HoT (r={r_hot}, single element) ─────────────────────────────────");
 
     let t = Instant::now();
-    let solver_hot = HotPoissonSolverND::<5>::new([1.0; 5], [0.0; 5], [r_hot; 5], alpha, beta);
+    let solver_hot = HotPoissonSolverND::<5>::new(
+        [1.0; 5],
+        [0.0; 5],
+        [r_hot; 5],
+        alpha,
+        beta,
+        [HotBoundaryCondition::Periodic; 5],
+    );
     let hot_setup_ms = t.elapsed().as_secs_f64() * 1e3;
     println!("  Setup time : {hot_setup_ms:.1} ms");
 
