@@ -1,5 +1,5 @@
 use nalgebra::Complex;
-use lobatto_tensor::hofft::*;
+use lobatto_fft::hofft::*;
 use std::f64::consts::PI;
 use std::time::Instant;
 

@@ -358,7 +358,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "lobatto-tensor"
+name = "lobatto-fft"
 version = "0.1.0"
 dependencies = [
  "criterion",

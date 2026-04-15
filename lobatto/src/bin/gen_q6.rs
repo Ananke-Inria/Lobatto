@@ -1,13 +1,13 @@
 //! Code generator for the Q6 (7-node Gauss-Lobatto) hard-coded differentiation kernel.
 //!
-//! Computes the 7×7 GLL differentiation matrix on [0,1] via `Basis`,
+//! Computes the 7×7 GLL differentiation matrix on \[0,1\] via `LagrangianBasis`,
 //! identifies the unique coefficients exploiting the antisymmetry
 //! D[6-i, 6-j] = -D[i, j], and prints the corresponding `_d_q6_q6` Rust kernel.
 //!
 //! Run with:
 //!   cargo run --bin gen_q6 --release
 
-use lobatto::LagrangianBasis;
+use lobatto::basis::LagrangianBasis;
 
 fn main() {
     let n = 7usize; // Q6: 7 nodes

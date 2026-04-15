@@ -1,6 +1,6 @@
-//! Gauss–Legendre (GL) and Gauss–Lobatto–Legendre (GLL) quadrature rules on `[-1, 1]` and `[0, 1]`.
+//!  GL and GLL nodes and weights on $\[-1,1\]$ and $\[0,1\]$.
 //!
-//! Both rules integrate polynomials exactly and are based on Legendre polynomials,
+//! Both rules integrate polynomials exactly up to a given order and are based on Legendre polynomials,
 //! but differ in whether the endpoints are included as nodes.
 //!
 //! # Gauss–Legendre (GL)
@@ -44,17 +44,39 @@
 //!
 //! # Algorithms
 //!
-//! Node positions are computed via Newton's method on the Fourier–cosine representation
+//! Weights and Node positions are computed using the Fourier–cosine representation
 //! $P_n(\cos\theta) = \sum_k a_{n,k} \cos(k\theta)$, following:
 //!
 //! - \[1\] Swarztrauber, P. N. (2002). *On computing the points and weights for
 //!   Gauss–Legendre quadrature*. SIAM Journal of Scientific Computing, 24(3), 945–954.
 //! - \[2\] Yakimiw, E. (1996). *Accurate computation of weights in classical
 //!   Gauss–Christoffel quadrature rules*. Journal of Computational Physics, 129(2), 406–430.
+//!
+//! # Example
+//!
+//! Integrate $p(x) = x^8$ over $\[-1, 1\]$ using a 9-point GLL rule.
+//! The rule is exact for polynomials up to degree $2 \times 9 - 3 = 15$,
+//! so the result matches the analytical value $\int_{-1}^{1} x^8\, dx = \tfrac{2}{9}$ to
+//! machine precision:
+//!
+//! ```rust
+//! use lobatto::quadrature::gauss_lobatto;
+//!
+//! let (points, weights) = gauss_lobatto(9);
+//!
+//! // Evaluate the integrand at each quadrature node  
+//! let f: Vec<f64> = points.iter().map(|&x| x.powi(8)).collect();
+//!
+//! // Weighted sum
+//! let integral: f64 = weights.iter().zip(&f).map(|(w, f)| w * f).sum();
+//!
+//! let analytical = 2.0 / 9.0;
+//! assert!((integral - analytical).abs() < 1e-16);
+//! ```
 
-/// Compute `n_quad_points`-point Gauss-Legendre quadrature on [-1, 1].
+/// Compute Gauss-Legendre quadrature on [-1, 1].
 ///
-/// Returns `(points, weights)` with `points` sorted in increasing order. Exact closed-form expressions are used for 1, 2, and 3 points.
+/// Returns a `n_quad_points`-point quadrature as a vector `(points, weights)` with `points` sorted in increasing order. Exact closed-form expressions are used for 1, 2, and 3 points.
 ///
 /// # Panics
 /// Panics if `n_quad_points == 0`.
@@ -87,9 +109,9 @@ pub fn gauss(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     }
 }
 
-/// Compute `n_quad_points`-point Gauss-Lobatto-Legendre (GLL) quadrature on [-1, 1].
-/// `points` sorted in increasing order.
-/// Exact closed-form expressions are used for 2, 3, and 4 points.
+/// Compute Gauss-Lobatto-Legendre quadrature on [-1, 1].
+///
+/// Returns a `n_quad_points`-point quadrature as a vector `(points, weights)` with `points` sorted in increasing order. Exact closed-form expressions are used for 2, 3, and 4 points.
 ///
 /// # Panics
 /// Panics if `n_quad_points < 2` (GLL requires at least the two endpoints).
@@ -139,7 +161,7 @@ pub fn gauss_lobatto_on_unit_interval(n_quad_points: usize) -> (Vec<f64>, Vec<f6
     return (points, weights);
 }
 
-/// Gauss-Legendre quadrature on the unit interval [0, 1].
+/// GL quadrature on the unit interval [0, 1].
 ///
 /// Equivalent to [`gauss`] with the affine change of variable `x = (t+1)/2`.
 pub fn gauss_on_unit_interval(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {

@@ -1,36 +1,64 @@
-//! Multi-dimensional GLL differentiation and mass-matrix operators.
+//! Multi-dimensional Lagrangian basis on tensor-product Gauss and Gauss–Lobatto grids.
 //!
-//! [`Basis`] assembles, for a tensor-product grid of Gauss or Gauss–Lobatto–Legendre
-//! nodes, the per-direction **differentiation matrices** and the **diagonal mass
-//! matrix**.
+//! ## 1D Lagrangian basis
+//!
+//! In each direction $k$, choose $n_k$ distinct nodes
+//! $\xi_0^{(k)} < \xi_1^{(k)} < \cdots < \xi_{n_k-1}^{(k)}$,
+//! either the **Gauss–Legendre** (GL) or the **Gauss–Lobatto–Legendre** (GLL) points on
+//! $\[0,1\]$ (see [`crate::quadrature`]).
+//! The associated **Lagrange basis polynomials** $L_0^{(k)}, \ldots, L_{n_k-1}^{(k)}$
+//! are the unique degree-$(n_k-1)$ polynomials satisfying the interpolation condition
+//! $$L_i^{(k)}(\xi_j^{(k)}) = \delta_{ij}, \quad i,j = 0, \ldots, n_k-1.$$
+//!
+//! ## ND Lagrangian basis by tensor-product   
+//!
+//! In $d$ dimensions with nodes $\xi_{i_k}^{(k)}$ in direction $k$, the
+//! **tensor-product Lagrange basis** is
+//! $$\Phi_p \big(\xi^{(0)}, \ldots, \xi^{(d-1)} \big)
+//!   = \prod_{k=0}^{d-1} L_{i_k(p)}^{(k)}(\xi^{(k)}),$$
+//! where $p$ is the global DOF index (or flat index) and $(i_0(p), \ldots, i_{d-1}(p))$ its multi-index.
+//! Any function $f$ represented by the basis reads
+//! $$f(\boldsymbol{\xi}) = \sum_p f_p ~ \Phi_p(\boldsymbol{\xi}),
+//!   \quad f_p = f \big(\xi_{i_0(p)}^{(0)}, \ldots, \xi_{i_{d-1}(p)}^{(d-1)}\big).$$
+//! note that the flat index is obtained using an ordering where lower direction number varies fastest:
+//! $$p = i_0 + n_0 ~ i_1 + n_0 ~n_1 ~ i_2 + \cdots $$
+//! giving a total of $N_\mathrm{dof} = \prod_{k=0}^{d-1} n_k$ degrees of freedom.
 //!
 //! ## Differentiation matrix
 //!
-//! For direction $k$ with $n_k$ nodes $\xi_0 < \cdots < \xi_{n_k-1}$, the 1D
-//! differentiation matrix $D^{(k)}$ is defined by
-//! $$D^{(k)}_{ji} = L_i'(\xi_j), \quad i,j = 0, \ldots, n_k - 1,$$
-//! where $L_i$ is the $i$-th Lagrange basis polynomial.
-//! [`Basis::diff`] applies the resulting operator fibre-by-fibre over the full
-//! tensor-product grid; [`Basis::diff_matrix`] returns it as a dense matrix.
+//! For each direction $k$ the entries of the matrix $D^{(k)}$  are
+//! $$
+//! D^{(k)}_{ji} = \big( \frac{d}{d\xi} L_i^{(k)} \big)(\xi_j^{(k)}), \quad i,j = 0, \ldots, n_k - 1.
+//! $$
+//! Differentiating a function $f$ with respect to $\xi^{(k)}$ along is achieved by
+//! applying the 1D matrix $D^{(k)}$ on each fiber (i.e. a  set of DOF with the same $i_k$ but for one). If
+//! $
+//! f(\boldsymbol{\xi}) = \sum_p f_p ~ \Phi_p(\boldsymbol{\xi}) $ then
+//! $$
+//!   \big( \frac{\partial f}{\partial \xi^{(k)}} \big) (\boldsymbol{\xi})  = \sum_p  g_p ~ \Phi _p  (\boldsymbol{\xi})
+//! $$
+//! where $g_p$ is given by matrix/vector product with the 1D differentiation matrices  $D^{(k)}$.
+//!
+//! [`LagrangianBasis::diff`] applies this fibre-by-fibre over the full grid in place;
+//! [`LagrangianBasis::diff_matrix`] returns the corresponding $N_\mathrm{dof} \times N_\mathrm{dof}$ matrix.
 //!
 //! ## Mass matrix
 //!
-//! The mass matrix is diagonal with entries
-//! $$M_{pp} = \prod_{k=0}^{d-1} w^{(k)}_{i_k(p)},$$
-//! where $w^{(k)}_j$ is the $j$-th quadrature weight in direction $k$ and
-//! $(i_0(p), \ldots, i_{d-1}(p))$ is the multi-index of DOF $p$.
-//!
-//! ## DOF ordering
-//!
-//! The global DOF ordering is **row-major** (last direction varies fastest):
-//! $$p = i_0 \cdot (n_1 n_2 \cdots) + i_1 \cdot (n_2 \cdots) + \cdots + i_{d-1}.$$
+//! The quadrature weights $w_i^{(k)}$ associated with the nodes $\xi_i^{(k)}$ define a
+//! diagonal mass matrix whose entry at DOF $p$ with multi-index $(i_0, \ldots, i_{d-1})$ is
+//! $$
+//! M_{pp} = \prod_ {k=0}^{d-1} w^{(k)}_ {i_k(p)}.
+//! $$
+//! [`LagrangianBasis::mass_diag`] returns the diagonal as a `Vec<f64>`;
+//! [`LagrangianBasis::mass_matrix`] returns the full dense $N_\mathrm{dof} \times N_\mathrm{dof}$
 
 use crate::quadrature::*;
 use crate::utilities::lagrangian_derivative_interpolation;
 use nalgebra::*;
 
-/// Multi-dimensional spectral differentiation and mass-matrix operator on a
-/// tensor-product GLL or GL grid.
+///(\frac{\partial f}{\partial \xi^{(k)}} )_q = \sum_ {i=0}^{n_k-1} D^{(k)}_{ji} ~ f_{p(i)},
+
+///  Multi-dimensional GLL/GL operations on tensor-product grids.
 ///
 /// Each direction $k$ is described by a pair `(n_k, is_lobatto)`:
 /// - `n_k`: number of quadrature nodes in direction $k$.
@@ -47,9 +75,9 @@ pub struct LagrangianBasis {
     /// Per-direction description: `(n_points, is_lobatto)`.
     basis: Vec<(usize, bool)>,
 
-    /// Quadrature weights on $[0,1]$, one vector per direction.
+    /// Quadrature weights on $\[0,1\]$, one vector per direction.
     weights: Vec<Vec<f64>>,
-    /// Quadrature nodes on $[0,1]$, one vector per direction.
+    /// Quadrature nodes on $\[0,1\]$, one vector per direction.
     points: Vec<Vec<f64>>,
 
     /// 1D differentiation matrices, one per direction.
@@ -62,7 +90,7 @@ pub struct LagrangianBasis {
     /// Prefix products of point counts: `n_points_acc[k]` $= n_0 \cdots n_k$.
     n_points_acc: Vec<usize>,
 
-    /// Stride step used by [`Basis::diff`] for direction $k$.
+    /// Stride step used by [`LagrangianBasis::diff`] for direction $k$.
     step: Vec<usize>,
     /// Starting flat indices of fibres in direction $k$ (all $p$ with $i_k(p) = 0$).
     start: Vec<Vec<usize>>,
@@ -100,7 +128,7 @@ impl LagrangianBasis {
     /// Build a `Basis` from a list of per-direction descriptions `(n, is_lobatto)`.
     ///
     /// `n` is the number of quadrature nodes and `is_lobatto` selects GLL (`true`)
-    /// or GL (`false`) nodes on $[0,1]$.
+    /// or GL (`false`) nodes on $\[0,1\]$.
     ///
     /// # Panics
     /// Panics if a GLL direction has fewer than 2 nodes, or a GL direction has 0 nodes.
@@ -177,7 +205,7 @@ impl LagrangianBasis {
         }
     }
 
-    /// Return the quadrature nodes on $[0,1]$ for direction `dim`.
+    /// Return the quadrature nodes on $\[0,1\]$ for direction `dim`.
     pub fn points(&self, dim: usize) -> &[f64] {
         &self.points[dim]
     }
@@ -185,16 +213,14 @@ impl LagrangianBasis {
     /// Return the raw 1D differentiation matrix for direction `dim`.
     ///
     /// Entry $(j, i)$ equals $L_i'(\xi_j)$.  For the full tensor-product lift
-    /// see [`Basis::diff_matrix`].
+    /// see [`LagrangianBasis::diff_matrix`].
     pub fn diff_matrix_1d(&self, dim: usize) -> &DMatrix<f64> {
         &self.diff_matrices[dim]
     }
 
     /// Apply the differentiation operator along direction `dim` in place.
-    ///
-    /// Computes $\mathtt{sol\_diff} \leftarrow D^{(\mathrm{dim})} \cdot \mathtt{sol}$,
-    /// where $D^{(\mathrm{dim})}$ is applied fibre-by-fibre over the tensor-product grid:
-    /// for each combination of indices $(i_0, \ldots, \widehat{i_{\mathrm{dim}}}, \ldots, i_{d-1})$,
+    /// The matrix $D^{(\mathrm{dim})}$ is applied fibre-by-fibre over the tensor-product grid:
+    /// for each combination of indices $(i_0, \ldots, {i_{\mathrm{dim}}}, \ldots, i_{d-1})$,
     /// the length-$n_{\mathrm{dim}}$ fibre is multiplied by $D^{(\mathrm{dim})}$.
     ///
     /// # Panics
@@ -228,19 +254,29 @@ impl LagrangianBasis {
         }
     }
 
+    /// Return the diagonal of the mass matrix as a vector of length $N_\mathrm{dof}$.
+    ///
+    /// Entry $p$ equals the tensor-product quadrature weight at DOF $p$:
+    /// $$M_{pp} = \prod_{k=0}^{d-1} w^{(k)}_{i_k(p)}.$$
+    pub fn mass_diag(&self) -> Vec<f64> {
+        (0..self.n_points)
+            .map(|p| {
+                let multi_index = self.get_multi_index(p);
+                (0..self.basis.len())
+                    .map(|l| self.weights[l][multi_index[l]])
+                    .product()
+            })
+            .collect()
+    }
+
     /// Return the diagonal mass matrix as a dense $N_\mathrm{dof} \times N_\mathrm{dof}$ matrix.
     ///
-    /// Entry $(p, p)$ equals the tensor-product quadrature weight at DOF $p$:
-    /// $$M_{pp} = \prod_{k=0}^{d-1} w^{(k)}_{i_k(p)}.$$
-    /// All off-diagonal entries are zero.
+    /// All off-diagonal entries are zero; diagonal entries are given by [`mass_diag`](Self::mass_diag).
     pub fn mass_matrix(&self) -> DMatrix<f64> {
+        let diag = self.mass_diag();
         let mut mass_matrix = DMatrix::<f64>::zeros(self.n_points, self.n_points);
-        for k in 0..self.n_points {
-            let multi_index = self.get_multi_index(k);
-            let weight = (0..self.basis.len())
-                .map(|l| self.weights[l][multi_index[l]])
-                .product();
-            mass_matrix[(k, k)] = weight;
+        for (p, w) in diag.iter().enumerate() {
+            mass_matrix[(p, p)] = *w;
         }
         mass_matrix
     }
@@ -249,7 +285,7 @@ impl LagrangianBasis {
     /// dense $N_\mathrm{dof} \times N_\mathrm{dof}$ matrix.
     ///
     /// This is the block-diagonal lift of $D^{(\mathrm{dim})}$ to the full tensor-product
-    /// space, assembled via the same fibre iteration as [`Basis::diff`].
+    /// space, assembled via the same fibre iteration as [`LagrangianBasis::diff`].
     /// Useful for building the stiffness matrix $K = D^T M D$.
     pub fn diff_matrix(&self, dim: usize) -> DMatrix<f64> {
         let mut diff_matrix = DMatrix::<f64>::zeros(self.n_points, self.n_points);

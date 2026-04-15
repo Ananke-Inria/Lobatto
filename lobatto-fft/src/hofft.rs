@@ -63,8 +63,8 @@
 //! Steps 2/4 are parallelised over independent fibres; step 3 is parallelised
 //! over independent Fourier-mode tuples.
 
+use lobatto::basis::LagrangianBasis;
 use lobatto::utilities::{barycentric_weights, lagrangian_interpolation_all};
-use lobatto::LagrangianBasis;
 use nalgebra::*;
 use rayon::prelude::*;
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
@@ -548,7 +548,7 @@ impl HofftPlanner {
     }
 
     /// GLL nodes in x-increasing order on `[xl, xl+l]`, matching
-    /// [`solver::PoissonSolver1D::get_x`].
+    /// [`PoissonSolver1D::get_x`].
     ///
     /// - `Periodic`: `n * r` nodes — left endpoint included, right excluded.
     /// - `Odd`:      `n * r − 1` nodes — both boundary endpoints excluded.
@@ -914,7 +914,7 @@ impl<const N: usize> HofftPlannerND<N> {
     /// in the full buffer `∏_d (r_d × n_fft_d)`.
     ///
     /// Each direction is handled independently: the per-direction compact index
-    /// `c_d` is extracted, the 1D [`HofftPlanner::k_packing`] maps it to the
+    /// `c_d` is extracted, the 1D `k_packing` maps it to the
     /// full 1D index `f_d`, and the result is assembled using full-buffer strides.
     pub fn k_packing(&self, i: usize) -> usize {
         (0..N).fold(0, |acc, d| {
@@ -926,7 +926,7 @@ impl<const N: usize> HofftPlannerND<N> {
     /// Maps a full-buffer ND flat index `i ∈ [0, ∏_d (r_d × n_fft_d))` to
     /// `(compact_index, coefficient)` such that `full_buf[i] = coefficient * compact_buf[compact_index]`.
     ///
-    /// Each direction is handled independently via the 1D [`HofftPlanner::k_unpacking`];
+    /// Each direction is handled independently via the 1D `k_unpacking`;
     /// the overall coefficient is the product of the per-direction coefficients.
     pub fn k_unpacking(&self, i: usize) -> (usize, Complex<f64>) {
         let mut compact_idx = 0usize;
@@ -944,7 +944,7 @@ impl<const N: usize> HofftPlannerND<N> {
     /// compact buffer `g` into `g_k`.
     ///
     /// `ks[d]` may be any mode in `0..n_fft_d`; modes in the symmetric half are
-    /// recovered via the per-direction [`HofftPlanner::k_unpacking`], with the
+    /// recovered via the per-direction `k_unpacking`, with the
     /// overall coefficient being the product of the per-direction coefficients.
     ///
     /// `g_k` must have length `∏_d r_d`, indexed column-major (direction 0 fastest).

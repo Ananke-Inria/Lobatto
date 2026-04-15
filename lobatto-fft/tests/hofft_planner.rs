@@ -1,4 +1,4 @@
-use lobatto_tensor::hofft::*;
+use lobatto_fft::hofft::*;
 use nalgebra::Complex;
 use std::f64::consts::PI;
 

@@ -1,13 +1,13 @@
 //! Code generator for the Q3 (4-node Gauss-Lobatto) hard-coded differentiation kernel.
 //!
-//! Computes the 4×4 GLL differentiation matrix on [0,1] via `Basis`,
+//! Computes the 4×4 GLL differentiation matrix on \[0,1\] via `LagrangianBasis`,
 //! identifies the unique coefficients exploiting the antisymmetry
 //! D[3-i, 3-j] = -D[i, j], and prints the corresponding `_d_q3_q3` Rust kernel.
 //!
 //! Run with:
 //!   cargo run --bin gen_q3 --release
 
-use lobatto::LagrangianBasis;
+use lobatto::basis::LagrangianBasis;
 
 fn main() {
     let n = 4usize; // Q3: 4 nodes

@@ -1,13 +1,13 @@
 //! Code generator for the Q5 (6-node Gauss-Lobatto) hard-coded differentiation kernel.
 //!
-//! Computes the 6×6 GLL differentiation matrix on [0,1] via `Basis`,
+//! Computes the 6×6 GLL differentiation matrix on \[0,1\] via `LagrangianBasis`,
 //! identifies the unique coefficients exploiting the antisymmetry
 //! D[5-i, 5-j] = -D[i, j], and prints the corresponding `_d_q5_q5` Rust kernel.
 //!
 //! Run with:
 //!   cargo run --bin gen_q5 --release
 
-use lobatto::LagrangianBasis;
+use lobatto::basis::LagrangianBasis;
 
 fn main() {
     let n = 6usize; // Q5: 6 nodes

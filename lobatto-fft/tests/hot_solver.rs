@@ -1,4 +1,4 @@
-use lobatto_tensor::hot::*;
+use lobatto_fft::hot::*;
 use std::f64::consts::PI;
 
 // ── 1D p-convergence ─────────────────────────────────────────────────────────
