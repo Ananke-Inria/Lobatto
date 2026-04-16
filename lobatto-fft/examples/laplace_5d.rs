@@ -5,7 +5,7 @@
 //! using three methods:
 //!   - HoFFT:    n=10 elements × r=4 polynomial order  → 40 DOF/direction
 //!   - HoFFT-1:  n=1  element  × r=20                  → 20 DOF/direction  (should match HoT)
-//!   - HoT:      r=20 (single element, spectral)        → 20 DOF/direction
+//!   - HoT:      r=20 (single element, spectral)       → 20 DOF/direction
 //!
 //! HoFFT-1 and HoT solve the same mathematical problem; comparing them validates
 //! that both implementations agree and benchmarks any overhead difference.

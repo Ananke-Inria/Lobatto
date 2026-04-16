@@ -351,14 +351,26 @@ checksum = "2874a2af47a2325c2001a6e6fad9b16a53b802102b528163885171cf92b15976"
 
 [[package]]
 name = "lobatto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "nalgebra",
+ "rayon",
 ]
 
 [[package]]
 name = "lobatto-fft"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "lobatto",
+ "nalgebra",
+ "rayon",
+ "rustfft",
+]
+
+[[package]]
+name = "lobatto-spectral"
 version = "0.1.0"
 dependencies = [
  "criterion",

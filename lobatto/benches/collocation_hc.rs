@@ -1,8 +1,8 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::hint::black_box;
 
-use lobatto::basis::*;
-use lobatto::basis_hc::*;
+use lobatto::collocation::*;
+use lobatto::collocation_hc::*;
 
 /// Xorshift64 with a fixed seed — produces the same sequence every run,
 /// no external crate required.
@@ -51,7 +51,7 @@ fn bench_dx_q3(c: &mut Criterion) {
     });
     let v_in_gle: Vec<f64> = seeded_vec(4);
     let mut v_out_gle: Vec<f64> = vec![0.0; 4];
-    let gle = LagrangianBasis::new(vec![(4, true)]);
+    let gle = CollocationBasis::new(vec![(4, Gauss::Lobatto)]);
     group.bench_function(BenchmarkId::new("Basis::diff", 1), |b| {
         b.iter(|| gle.diff(0, black_box(&v_in_gle), &mut v_out_gle))
     });
@@ -89,7 +89,7 @@ fn bench_dx_q33(c: &mut Criterion) {
     });
     let v_in_gle: Vec<f64> = seeded_vec(16);
     let mut v_out_gle: Vec<f64> = vec![0.0; 16];
-    let gle = LagrangianBasis::new(vec![(4, true), (4, true)]);
+    let gle = CollocationBasis::new(vec![(4, Gauss::Lobatto), (4, Gauss::Lobatto)]);
     group.bench_function(BenchmarkId::new("Basis::diff", 1), |b| {
         b.iter(|| gle.diff(0, black_box(&v_in_gle), &mut v_out_gle))
     });
@@ -127,7 +127,7 @@ fn bench_dx_q4(c: &mut Criterion) {
     });
     let v_in_gle: Vec<f64> = seeded_vec(5);
     let mut v_out_gle: Vec<f64> = vec![0.0; 5];
-    let gle = LagrangianBasis::new(vec![(5, true)]);
+    let gle = CollocationBasis::new(vec![(5, Gauss::Lobatto)]);
     group.bench_function(BenchmarkId::new("Basis::diff", 1), |b| {
         b.iter(|| gle.diff(0, black_box(&v_in_gle), &mut v_out_gle))
     });
@@ -166,7 +166,7 @@ fn bench_dx_q44(c: &mut Criterion) {
     });
     let v_in_gle: Vec<f64> = seeded_vec(25);
     let mut v_out_gle: Vec<f64> = vec![0.0; 25];
-    let gle = LagrangianBasis::new(vec![(5, true), (5, true)]);
+    let gle = CollocationBasis::new(vec![(5, Gauss::Lobatto), (5, Gauss::Lobatto)]);
     group.bench_function(BenchmarkId::new("Basis::diff", 1), |b| {
         b.iter(|| gle.diff(0, black_box(&v_in_gle), &mut v_out_gle))
     });
@@ -205,7 +205,7 @@ fn bench_dx_q5(c: &mut Criterion) {
     });
     let v_in_gle: Vec<f64> = seeded_vec(6);
     let mut v_out_gle: Vec<f64> = vec![0.0; 6];
-    let gle = LagrangianBasis::new(vec![(6, true)]);
+    let gle = CollocationBasis::new(vec![(6, Gauss::Lobatto)]);
     group.bench_function(BenchmarkId::new("Basis::diff", 1), |b| {
         b.iter(|| gle.diff(0, black_box(&v_in_gle), &mut v_out_gle))
     });
@@ -244,7 +244,7 @@ fn bench_dx_q55(c: &mut Criterion) {
     });
     let v_in_gle: Vec<f64> = seeded_vec(36);
     let mut v_out_gle: Vec<f64> = vec![0.0; 36];
-    let gle = LagrangianBasis::new(vec![(6, true), (6, true)]);
+    let gle = CollocationBasis::new(vec![(6, Gauss::Lobatto), (6, Gauss::Lobatto)]);
     group.bench_function(BenchmarkId::new("Basis::diff", 1), |b| {
         b.iter(|| gle.diff(0, black_box(&v_in_gle), &mut v_out_gle))
     });
@@ -283,7 +283,7 @@ fn bench_dx_q6(c: &mut Criterion) {
     });
     let v_in_gle: Vec<f64> = seeded_vec(7);
     let mut v_out_gle: Vec<f64> = vec![0.0; 7];
-    let gle = LagrangianBasis::new(vec![(7, true)]);
+    let gle = CollocationBasis::new(vec![(7, Gauss::Lobatto)]);
     group.bench_function(BenchmarkId::new("Basis::diff", 1), |b| {
         b.iter(|| gle.diff(0, black_box(&v_in_gle), &mut v_out_gle))
     });
@@ -322,7 +322,7 @@ fn bench_dx_q66(c: &mut Criterion) {
     });
     let v_in_gle: Vec<f64> = seeded_vec(49);
     let mut v_out_gle: Vec<f64> = vec![0.0; 49];
-    let gle = LagrangianBasis::new(vec![(7, true), (7, true)]);
+    let gle = CollocationBasis::new(vec![(7, Gauss::Lobatto), (7, Gauss::Lobatto)]);
     group.bench_function(BenchmarkId::new("Basis::diff", 1), |b| {
         b.iter(|| gle.diff(0, black_box(&v_in_gle), &mut v_out_gle))
     });
@@ -347,6 +347,38 @@ fn bench_dx_q66(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_eval(c: &mut Criterion) {
+    const N_PTS: usize = 1000;
+
+    let mut group = c.benchmark_group("eval");
+    group.throughput(Throughput::Elements(N_PTS as u64));
+
+    // Query points in [0, 1)^d — seeded_vec gives (-1, 1), shift to (0, 1).
+    let raw: Vec<f64> = {
+        let mut state: u64 = 0xdeadbeefcafe1234;
+        (0..N_PTS * 3)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (f64::from_bits((state >> 12) | 0x3FF0000000000000) - 1.0) * 0.98 + 0.01
+            })
+            .collect()
+    };
+    let xs: Vec<Vec<f64>> = raw.chunks(3).map(|c| c.to_vec()).collect();
+
+    for n_nodes in [4usize, 5, 6, 7] {
+        let basis = CollocationBasis::new(vec![(n_nodes, Gauss::Lobatto); 3]);
+        let u = seeded_vec(n_nodes.pow(3));
+        let id = BenchmarkId::new("Q_3d", format!("n={n_nodes}"));
+        group.bench_function(id, |b| {
+            b.iter(|| basis.eval(black_box(&xs), black_box(&u)))
+        });
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_dx_q3,
@@ -357,5 +389,6 @@ criterion_group!(
     bench_dx_q55,
     bench_dx_q6,
     bench_dx_q66,
+    bench_eval,
 );
 criterion_main!(benches);

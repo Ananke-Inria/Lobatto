@@ -7,7 +7,7 @@ fn test_gauss_quadrature() {
     let n_tested_quad = 100; // Number of tested quadratures
 
     for n in 1..n_tested_quad {
-        let (points, weights) = gauss(n);
+        let (points, weights) = gauss_legendre(n);
 
         //Test if the integral of the monomials x^p are well integrated up to order p = 2n-1
         for p in 0..2 * n {

@@ -10,9 +10,6 @@
 //!
 //! | Module | Contents |
 //! |--------|----------|
-//! | [`hot`] | **HoT** — single spectral element per direction; direct eigendecomposition of the local symbol. Supports Periodic, Dirichlet, and Neumann BCs. |
-//! | [`hofft`] | **HoFFT** — multi-element solver; FFT diagonalisation over inter-element coupling modes. |
-
-pub mod hot;
+//! | [`hofft`] | **HoFFT** — multi-element solver; FFT diagonalisation over inter-element coupling modes.  Supports Periodic, Dirichlet, and Neumann BCs. |
 
 pub mod hofft;

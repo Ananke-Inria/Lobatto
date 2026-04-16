@@ -10,35 +10,9 @@
 //! allowing all $n$ values $L_0(p), \ldots, L_{n-1}(p)$ to be evaluated in
 //! $O(n)$ time once the weights $w_i$ have been precomputed in $O(n^2)$.
 //!
-//! [`barycentric_weights`] computes the weights; [`lagrangian_interpolation_all`]
+//! [`barycentric_weights`] computes the weights; [`lagrangian_interpolation`]
 //! evaluates all basis functions simultaneously using a numerically stable
 //! product that avoids dividing by the smallest difference term.
-
-/// Evaluate the $i$-th Lagrange basis function at `p`.
-///
-/// Computes $L_i(p) = \prod_{k \ne i}(p - x_k) / (x_i - x_k)$
-/// directly in $O(n)$ using the node set `pos`.  `i` must be in `0..pos.len()`.
-#[allow(dead_code)]
-pub fn lagrangian_interpolation(pos: &[f64], p: f64, i: usize) -> f64 {
-    let mut res: f64 = 1.0;
-    let mut w = 1.0;
-
-    for r in 0..pos.len() {
-        if r != i {
-            w *= pos[i] - pos[r];
-        }
-    }
-
-    debug_assert!(w != 0.0);
-
-    for r in 0..pos.len() {
-        if r != i {
-            res *= p - pos[r];
-        }
-    }
-
-    res / w
-}
 
 /// Evaluate the derivative $L_i'(p)$ of the $i$-th Lagrange basis function at `p`.
 ///
@@ -76,7 +50,7 @@ pub fn lagrangian_derivative_interpolation(pos: &[f64], p: f64, i: usize) -> f64
 /// Precompute barycentric weights $w_i = 1 / \prod_{k \ne i}(x_i - x_k)$ for nodes `x`.
 ///
 /// These weights are independent of the evaluation point and need only be computed
-/// once per node set.  Pass them to [`lagrangian_interpolation_all`] to evaluate
+/// once per node set.  Pass them to [`lagrangian_interpolation`] to evaluate
 /// all $n$ basis functions at any point in $O(n)$.
 ///
 /// Cost: $O(n^2)$.
@@ -109,7 +83,7 @@ pub fn barycentric_weights(x: &[f64]) -> Vec<f64> {
 /// (and most cancellation-prone) factor.
 ///
 /// Cost: $O(n)$ after the $O(n^2)$ weight precomputation.
-pub fn lagrangian_interpolation_all(pos: &[f64], w: &[f64], p: f64) -> Vec<f64> {
+pub fn lagrangian_interpolation(pos: &[f64], w: &[f64], p: f64) -> Vec<f64> {
     let n = pos.len();
 
     // diffs[r] = p - pos[r]; i_min is the index of the closest node.

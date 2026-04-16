@@ -1,18 +1,18 @@
 //! Code generator for the Q4 (5-node Gauss-Lobatto) hard-coded differentiation kernel.
 //!
-//! Computes the 5×5 GLL differentiation matrix on \[0,1\] via `LagrangianBasis`,
+//! Computes the 5×5 GLL differentiation matrix on \[0,1\] via `CollocationBasis`,
 //! identifies the unique coefficients exploiting the antisymmetry
 //! D[4-i, 4-j] = -D[i, j], and prints the corresponding `_d_q4_q4` Rust kernel.
 //!
 //! Run with:
 //!   cargo run --bin gen_q4 --release
 
-use lobatto::basis::LagrangianBasis;
+use lobatto::collocation::{CollocationBasis, Gauss};
 
 fn main() {
     let n = 5usize; // Q4: 5 nodes
-    let calc = LagrangianBasis::new(vec![(n, true)]);
-    let pts = calc.points(0);
+    let calc = CollocationBasis::new(vec![(n, Gauss::Lobatto)]);
+    let pts = calc.points_1d(0);
 
     // 5×5 differentiation matrix from the Basis: d[(row, col)]
     let d = calc.diff_matrix_1d(0);

@@ -1,4 +1,4 @@
-//! High-order FFT (HoFFT) transform planners and screened Poisson solver.
+//! High-order FFT (HoFFT) based on Gauss-Lobatto points and corresponding screened Poisson solver.
 //!
 //! Solves the screened Poisson equation
 //! $$(\alpha M + \beta K)\, u = f$$
@@ -63,8 +63,8 @@
 //! Steps 2/4 are parallelised over independent fibres; step 3 is parallelised
 //! over independent Fourier-mode tuples.
 
-use lobatto::basis::LagrangianBasis;
-use lobatto::utilities::{barycentric_weights, lagrangian_interpolation_all};
+use lobatto::collocation::{CollocationBasis, Gauss};
+use lobatto::utilities::{barycentric_weights, lagrangian_interpolation};
 use nalgebra::*;
 use rayon::prelude::*;
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
@@ -152,7 +152,7 @@ impl RawPlanner {
         let mut planner = FftPlanner::<f64>::new();
         let fw_fft = planner.plan_fft_forward(n);
         let i_fft = planner.plan_fft_inverse(n);
-        let gll_points = LagrangianBasis::new(vec![(r + 1, true)]).points(0).to_vec();
+        let gll_points = CollocationBasis::new(vec![(r + 1, Gauss::Lobatto)]).points_1d(0).to_vec();
         Self {
             n,
             r,
@@ -276,7 +276,7 @@ impl HofftPlanner {
         let mut fft_planner = FftPlanner::<f64>::new();
         let fw_fft = fft_planner.plan_fft_forward(n_fft);
         let i_fft = fft_planner.plan_fft_inverse(n_fft);
-        let gll_points = LagrangianBasis::new(vec![(r + 1, true)]).points(0).to_vec();
+        let gll_points = CollocationBasis::new(vec![(r + 1, Gauss::Lobatto)]).points_1d(0).to_vec();
         let bary_weights: Vec<f64> = barycentric_weights(&gll_points);
         let mut s = Self {
             n,
@@ -614,7 +614,7 @@ impl HofftPlanner {
         let h = self.l / (self.n as f64);
         let k = (((y - self.xl) / h) as usize).min(self.n - 1);
         let xi = (y - self.xl - (k as f64) * h) / h;
-        let phi = lagrangian_interpolation_all(&self.gll_points, &self.bary_weights, xi);
+        let phi = lagrangian_interpolation(&self.gll_points, &self.bary_weights, xi);
 
         let mut val = Complex::new(0.0_f64, 0.0);
         match self.extension {
@@ -1086,7 +1086,7 @@ impl<const N: usize> HofftPlannerND<N> {
                                 _ => xs[i][d],
                             };
                             let xi = (y - xls[d] - (ks[d] as f64) * hs[d]) / hs[d];
-                            lagrangian_interpolation_all(
+                            lagrangian_interpolation(
                                 &self.planners[d].gll_points,
                                 &self.planners[d].bary_weights,
                                 xi,
@@ -1303,7 +1303,7 @@ impl PoissonSolver1D {
         beta: f64,
         bc: BoundaryCondition,
     ) -> Self {
-        let lobatto_basis = LagrangianBasis::new(vec![(r + 1, true)]);
+        let lobatto_basis = CollocationBasis::new(vec![(r + 1, Gauss::Lobatto)]);
 
         let h = l / (n as f64);
 
@@ -1322,7 +1322,7 @@ impl PoissonSolver1D {
         };
 
         let mut symbol = vec![DMatrix::<Complex::<f64>>::zeros(r, r); n_freq];
-        let mass_matrix = lobatto_basis.mass_matrix();
+        let mass_matrix = lobatto_basis.weights_matrix();
         let periodic_mass_matrix = DVector::from_fn(r, |i, _| {
             if i == 0 {
                 h * 2.0 * mass_matrix[(0, 0)]

@@ -1,6 +1,6 @@
 [package]
 name = "lobatto"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Gauss–Lobatto quadrature and interpolation points, spectral finite-element lagrangian basis operations with efficient hardcoded versions for low order low dimensions cases."
 license = "LGPL-3.0-only"
@@ -9,28 +9,8 @@ keywords = ["quadrature", "gauss-lobatto", "spectral-element", "finite-element",
 categories = ["mathematics", "science"]
 exclude = ["src/bin/*"]
 
-[[bin]]
-name = "gen_q3"
-path = "src/bin/gen_q3.rs"
-
-[[bin]]
-name = "gen_q4"
-path = "src/bin/gen_q4.rs"
-
-[[bin]]
-name = "gen_q5"
-path = "src/bin/gen_q5.rs"
-
-[[bin]]
-name = "gen_q6"
-path = "src/bin/gen_q6.rs"
-
-[[bin]]
-name = "gen_lobatto"
-path = "src/bin/gen_lobatto.rs"
-
 [[bench]]
-name = "basis_hc"
+name = "collocation_hc"
 harness = false
 
 [package.metadata.docs.rs]
@@ -38,6 +18,7 @@ rustdoc-args = ["--html-in-header", "katex.html"]
 
 [dependencies]
 nalgebra = "0.34.1"
+rayon = "1"
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }

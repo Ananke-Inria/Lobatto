@@ -40,8 +40,8 @@
 //! so steps 2–4 are applied direction by direction (sum factorisation), parallelised
 //! with Rayon over independent fibres.
 
-use lobatto::basis::LagrangianBasis;
-use lobatto::utilities::{barycentric_weights, lagrangian_interpolation_all};
+use lobatto::collocation::{CollocationBasis, Gauss};
+use lobatto::utilities::{barycentric_weights, lagrangian_interpolation};
 use nalgebra::*;
 use rayon::prelude::*;
 
@@ -86,7 +86,7 @@ pub struct PoissonSolver1D {
     /// Boundary condition type.
     bc: BoundaryCondition,
     /// GLL basis with $r+1$ nodes on $\[0,1\]$.
-    lobatto_basis: LagrangianBasis,
+    lobatto_basis: CollocationBasis,
     /// Pre-computed pseudo-inverse $A^+ = V \Lambda^+ V^T M$ of the local symbol.
     symbol_pseudo_inv: DMatrix<f64>,
     /// Eigenvalues $\lambda_j$ of the mass-normalised symbol
@@ -115,8 +115,8 @@ impl PoissonSolver1D {
     /// - `alpha`, `beta`: operator coefficients.
     /// - `bc`: boundary condition type.
     pub fn new(l: f64, xl: f64, r: usize, alpha: f64, beta: f64, bc: BoundaryCondition) -> Self {
-        let lobatto_basis = LagrangianBasis::new(vec![(r + 1, true)]);
-        let mass_matrix = lobatto_basis.mass_matrix();
+        let lobatto_basis = CollocationBasis::new(vec![(r + 1, Gauss::Lobatto)]);
+        let mass_matrix = lobatto_basis.weights_matrix();
         let diff_matrix = lobatto_basis.diff_matrix(0);
         let stiffness_matrix = diff_matrix.transpose() * &mass_matrix * &diff_matrix;
         let h = l;
@@ -197,7 +197,7 @@ impl PoissonSolver1D {
         let symbol_pseudo_inv =
             &eigenvectors * DMatrix::from_diagonal(&lambda_pinv) * eigenvectors.transpose();
 
-        let bary_weights = barycentric_weights(&lobatto_basis.points(0));
+        let bary_weights = barycentric_weights(&lobatto_basis.points_1d(0));
 
         Self {
             l,
@@ -222,7 +222,7 @@ impl PoissonSolver1D {
     ///   are enforced to zero and are not returned).
     /// - `Neumann`:   all nodes $0, \ldots, r$ (including both endpoints).
     pub fn get_x(&self) -> Vec<f64> {
-        let pts = self.lobatto_basis.points(0);
+        let pts = self.lobatto_basis.points_1d(0);
         match self.bc {
             BoundaryCondition::Periodic => (0..self.r).map(|i| self.xl + self.l * pts[i]).collect(),
             BoundaryCondition::Dirichlet => {
@@ -257,11 +257,11 @@ impl PoissonSolver1D {
     /// - `Periodic`: `x` is folded into $[x_l, x_l+L)$ by periodicity.
     /// - `Dirichlet`/`Neumann`: `x` is clamped to $[x_l, x_l+L]$.
     pub fn eval(&self, x: f64, u: &[f64]) -> f64 {
-        let pts = self.lobatto_basis.points(0);
+        let pts = self.lobatto_basis.points_1d(0);
         match self.bc {
             BoundaryCondition::Periodic => {
                 let xi = (x - self.xl).rem_euclid(self.l) / self.l;
-                let phi = lagrangian_interpolation_all(pts, &self.bary_weights, xi);
+                let phi = lagrangian_interpolation(pts, &self.bary_weights, xi);
                 // phi[r] (right endpoint) folds into DOF 0 by periodicity.
                 let mut val = u[0] * (phi[0] + phi[self.r]);
                 for i in 1..self.r {
@@ -271,13 +271,13 @@ impl PoissonSolver1D {
             }
             BoundaryCondition::Dirichlet => {
                 let xi = ((x - self.xl) / self.l).clamp(0.0, 1.0);
-                let phi = lagrangian_interpolation_all(pts, &self.bary_weights, xi);
+                let phi = lagrangian_interpolation(pts, &self.bary_weights, xi);
                 // Endpoint basis functions (phi[0], phi[r]) multiply zero-valued DOFs.
                 (1..self.r).map(|i| u[i - 1] * phi[i]).sum()
             }
             BoundaryCondition::Neumann => {
                 let xi = ((x - self.xl) / self.l).clamp(0.0, 1.0);
-                let phi = lagrangian_interpolation_all(pts, &self.bary_weights, xi);
+                let phi = lagrangian_interpolation(pts, &self.bary_weights, xi);
                 (0..=self.r).map(|i| u[i] * phi[i]).sum()
             }
         }
@@ -485,8 +485,8 @@ impl<const N: usize> PoissonSolverND<N> {
                         }
                         _ => ((x[d] - self.xls[d]) / self.ls[d]).clamp(0.0, 1.0),
                     };
-                    let phi_1d = lagrangian_interpolation_all(
-                        self.solvers[d].lobatto_basis.points(0),
+                    let phi_1d = lagrangian_interpolation(
+                        self.solvers[d].lobatto_basis.points_1d(0),
                         &self.solvers[d].bary_weights,
                         xi,
                     );

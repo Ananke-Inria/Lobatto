@@ -1,4 +1,4 @@
-//!  GL and GLL nodes and weights on $\[-1,1\]$ and $\[0,1\]$.
+//! GL and GLL nodes and weights on $\[-1,1\]$ and $\[0,1\]$.
 //!
 //! Both rules integrate polynomials exactly up to a given order and are based on Legendre polynomials,
 //! but differ in whether the endpoints are included as nodes.
@@ -56,7 +56,7 @@
 //!
 //! Integrate $p(x) = x^8$ over $\[-1, 1\]$ using a 9-point GLL rule.
 //! The rule is exact for polynomials up to degree $2 \times 9 - 3 = 15$,
-//! so the result matches the analytical value $\int_{-1}^{1} x^8\, dx = \tfrac{2}{9}$ to
+//! so the result matches the analytical value $\int_{-1}^{1} x^8 ~ dx = \tfrac{2}{9}$ to
 //! machine precision:
 //!
 //! ```rust
@@ -80,10 +80,10 @@
 ///
 /// # Panics
 /// Panics if `n_quad_points == 0`.
-pub fn gauss(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
+pub fn gauss_legendre(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     assert!(
         n_quad_points >= 1,
-        "Gauss quadratures have at least one point"
+        "Gauss-Legendre quadratures have at least one point"
     );
 
     // Exact expressions for order 1, 2, 3
@@ -121,7 +121,7 @@ pub fn gauss_lobatto(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
         "Gauss-Lobatto quadratures have at least two points"
     );
 
-    // Exact expressions for order 1, 2, 3
+    // Exact expressions for n = 2, 3, 4
     match n_quad_points {
         2 => {
             return (vec![-1.0, 1.0], vec![1.0, 1.0]);
@@ -149,6 +149,9 @@ pub fn gauss_lobatto(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
 /// GLL quadrature on the unit interval [0, 1].
 ///
 /// Equivalent to [`gauss_lobatto`] with the affine change of variable `x = (t+1)/2`.
+///
+/// # Panics
+/// Panics if `n_quad_points < 2`.
 pub fn gauss_lobatto_on_unit_interval(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     let mut points: Vec<f64>;
     let mut weights: Vec<f64>;
@@ -163,12 +166,15 @@ pub fn gauss_lobatto_on_unit_interval(n_quad_points: usize) -> (Vec<f64>, Vec<f6
 
 /// GL quadrature on the unit interval [0, 1].
 ///
-/// Equivalent to [`gauss`] with the affine change of variable `x = (t+1)/2`.
-pub fn gauss_on_unit_interval(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
+/// Equivalent to [`gauss_legendre`] with the affine change of variable `x = (t+1)/2`.
+///
+/// # Panics
+/// Panics if `n_quad_points == 0`.
+pub fn gauss_legendre_on_unit_interval(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     let mut points: Vec<f64>;
     let mut weights: Vec<f64>;
 
-    (points, weights) = gauss(n_quad_points);
+    (points, weights) = gauss_legendre(n_quad_points);
 
     points.iter_mut().for_each(|x| *x = 0.5 * (*x + 1.0));
     weights.iter_mut().for_each(|w| *w *= 0.5);

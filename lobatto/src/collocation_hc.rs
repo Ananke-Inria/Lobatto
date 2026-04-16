@@ -1,4 +1,4 @@
-//! Hard-coded spectral differentiation operators for Q3–Q6 Gauss-Lobatto elements.
+//! Hardcoded SIMD-friendly operations for Q3–Q6 elements in dimension up to 3.
 //!
 //! Each operator applies the 1D spectral differentiation matrix **D** to a
 //! batch of `N` elements simultaneously, exploiting the antisymmetry of the
@@ -35,9 +35,6 @@ const DX3: [f64; 5] = [
 /// Rows 2,3 exploit the antisymmetry D[3-i, 3-j] = -D[i,j].
 /// Each output loop is kept independent to enable auto-vectorization over N.
 fn _d_q3_q3<const N: usize, const M: usize>(in_q3: &[f64], out_q3: &mut [f64]) {
-    assert!(in_q3.len() >= N * (3 * M + 1));
-    assert!(out_q3.len() >= N * (3 * M + 1));
-
     let a = &in_q3[0..N];
     let b = &in_q3[M * N..M * N + N];
     let c = &in_q3[2 * M * N..2 * M * N + N];
@@ -79,6 +76,17 @@ pub fn dx_q33_q33<const N: usize>(input: &[f64], output: &mut [f64]) {
     }
 }
 
+/// y-derivative on a batch of N Q3×Q3 elements (16*N dofs).
+pub fn dy_q33_q33<const N: usize>(input: &[f64], output: &mut [f64]) {
+    for i in 0..4 {
+        let start = N * i;
+        _d_q3_q3::<N, 4>(
+            &input[start..start + 13 * N],
+            &mut output[start..start + 13 * N],
+        );
+    }
+}
+
 // ----------------------------------------------------------------------------
 // 3D  —  Q3×Q3×Q3  (64*N dofs)
 // ----------------------------------------------------------------------------
@@ -94,7 +102,6 @@ pub fn dx_q333_q333<const N: usize>(input: &[f64], output: &mut [f64]) {
 
 /// y-derivative on a batch of N Q3×Q3×Q3 elements (64*N dofs).
 pub fn dy_q333_q333<const N: usize>(input: &[f64], output: &mut [f64]) {
-    assert!(input.len() >= 64 * N && output.len() >= 64 * N);
     for k in 0..4 {
         for i in 0..4 {
             let start = N * (i + 16 * k);
@@ -108,7 +115,6 @@ pub fn dy_q333_q333<const N: usize>(input: &[f64], output: &mut [f64]) {
 
 /// z-derivative on a batch of N Q3×Q3×Q3 elements (64*N dofs).
 pub fn dz_q333_q333<const N: usize>(input: &[f64], output: &mut [f64]) {
-    assert!(input.len() >= 64 * N && output.len() >= 64 * N);
     for j in 0..4 {
         for i in 0..4 {
             let start = N * (i + 4 * j);
@@ -149,9 +155,6 @@ const DX4: [f64; 9] = [
 /// Rows 3,4 exploit the antisymmetry D[4-i, 4-j] = -D[i,j].
 /// Each output loop is kept independent to enable auto-vectorization over N.
 fn _d_q4_q4<const N: usize, const M: usize>(in_q4: &[f64], out_q4: &mut [f64]) {
-    assert!(in_q4.len() >= N * (4 * M + 1));
-    assert!(out_q4.len() >= N * (4 * M + 1));
-
     let a = &in_q4[0..N];
     let b = &in_q4[M * N..M * N + N];
     let c = &in_q4[2 * M * N..2 * M * N + N];
@@ -198,6 +201,17 @@ pub fn dx_q44_q44<const N: usize>(input: &[f64], output: &mut [f64]) {
     }
 }
 
+/// y-derivative on a batch of N Q4×Q4 elements (25*N dofs).
+pub fn dy_q44_q44<const N: usize>(input: &[f64], output: &mut [f64]) {
+    for i in 0..5 {
+        let start = N * i;
+        _d_q4_q4::<N, 5>(
+            &input[start..start + 21 * N],
+            &mut output[start..start + 21 * N],
+        );
+    }
+}
+
 // ----------------------------------------------------------------------------
 // 3D  —  Q4×Q4×Q4  (125*N dofs)
 // ----------------------------------------------------------------------------
@@ -213,7 +227,6 @@ pub fn dx_q444_q444<const N: usize>(input: &[f64], output: &mut [f64]) {
 
 /// y-derivative on a batch of N Q4×Q4×Q4 elements (125*N dofs).
 pub fn dy_q444_q444<const N: usize>(input: &[f64], output: &mut [f64]) {
-    assert!(input.len() >= 125 * N && output.len() >= 125 * N);
     for k in 0..5 {
         for i in 0..5 {
             let start = N * (i + 25 * k);
@@ -227,7 +240,6 @@ pub fn dy_q444_q444<const N: usize>(input: &[f64], output: &mut [f64]) {
 
 /// z-derivative on a batch of N Q4×Q4×Q4 elements (125*N dofs).
 pub fn dz_q444_q444<const N: usize>(input: &[f64], output: &mut [f64]) {
-    assert!(input.len() >= 125 * N && output.len() >= 125 * N);
     for j in 0..5 {
         for i in 0..5 {
             let start = N * (i + 5 * j);
@@ -273,9 +285,6 @@ const DX5: [f64; 14] = [
 /// Rows 3,4,5 exploit the antisymmetry D[5-i, 5-j] = -D[i,j].
 /// Each output loop is kept independent to enable auto-vectorization over N.
 fn _d_q5_q5<const N: usize, const M: usize>(in_q5: &[f64], out_q5: &mut [f64]) {
-    assert!(in_q5.len() >= N * (5 * M + 1));
-    assert!(out_q5.len() >= N * (5 * M + 1));
-
     let a = &in_q5[0..N];
     let b = &in_q5[M * N..M * N + N];
     let c = &in_q5[2 * M * N..2 * M * N + N];
@@ -331,6 +340,17 @@ pub fn dx_q55_q55<const N: usize>(input: &[f64], output: &mut [f64]) {
     }
 }
 
+/// y-derivative on a batch of N Q5×Q5 elements (36*N dofs).
+pub fn dy_q55_q55<const N: usize>(input: &[f64], output: &mut [f64]) {
+    for i in 0..6 {
+        let start = N * i;
+        _d_q5_q5::<N, 6>(
+            &input[start..start + 31 * N],
+            &mut output[start..start + 31 * N],
+        );
+    }
+}
+
 // ----------------------------------------------------------------------------
 // 3D  —  Q5×Q5×Q5  (216*N dofs)
 // ----------------------------------------------------------------------------
@@ -346,7 +366,6 @@ pub fn dx_q555_q555<const N: usize>(input: &[f64], output: &mut [f64]) {
 
 /// y-derivative on a batch of N Q5×Q5×Q5 elements (216*N dofs).
 pub fn dy_q555_q555<const N: usize>(input: &[f64], output: &mut [f64]) {
-    assert!(input.len() >= 216 * N && output.len() >= 216 * N);
     for k in 0..6 {
         for i in 0..6 {
             let start = N * (i + 36 * k);
@@ -360,7 +379,6 @@ pub fn dy_q555_q555<const N: usize>(input: &[f64], output: &mut [f64]) {
 
 /// z-derivative on a batch of N Q5×Q5×Q5 elements (216*N dofs).
 pub fn dz_q555_q555<const N: usize>(input: &[f64], output: &mut [f64]) {
-    assert!(input.len() >= 216 * N && output.len() >= 216 * N);
     for j in 0..6 {
         for i in 0..6 {
             let start = N * (i + 6 * j);
@@ -412,9 +430,6 @@ const DX6: [f64; 20] = [
 /// Rows 4,5,6 exploit the antisymmetry D[6-i, 6-j] = -D[i,j].
 /// Each output loop is kept independent to enable auto-vectorization over N.
 fn _d_q6_q6<const N: usize, const M: usize>(in_q6: &[f64], out_q6: &mut [f64]) {
-    assert!(in_q6.len() >= N * (6 * M + 1));
-    assert!(out_q6.len() >= N * (6 * M + 1));
-
     let a = &in_q6[0..N];
     let b = &in_q6[M * N..M * N + N];
     let c = &in_q6[2 * M * N..2 * M * N + N];
@@ -483,6 +498,17 @@ pub fn dx_q66_q66<const N: usize>(input: &[f64], output: &mut [f64]) {
     }
 }
 
+/// y-derivative on a batch of N Q6×Q6 elements (49*N dofs).
+pub fn dy_q66_q66<const N: usize>(input: &[f64], output: &mut [f64]) {
+    for i in 0..7 {
+        let start = N * i;
+        _d_q6_q6::<N, 7>(
+            &input[start..start + 43 * N],
+            &mut output[start..start + 43 * N],
+        );
+    }
+}
+
 // ----------------------------------------------------------------------------
 // 3D  —  Q6×Q6×Q6  (343*N dofs)
 // ----------------------------------------------------------------------------
@@ -498,7 +524,6 @@ pub fn dx_q666_q666<const N: usize>(input: &[f64], output: &mut [f64]) {
 
 /// y-derivative on a batch of N Q6×Q6×Q6 elements (343*N dofs).
 pub fn dy_q666_q666<const N: usize>(input: &[f64], output: &mut [f64]) {
-    assert!(input.len() >= 343 * N && output.len() >= 343 * N);
     for k in 0..7 {
         for i in 0..7 {
             let start = N * (i + 49 * k);
@@ -512,7 +537,6 @@ pub fn dy_q666_q666<const N: usize>(input: &[f64], output: &mut [f64]) {
 
 /// z-derivative on a batch of N Q6×Q6×Q6 elements (343*N dofs).
 pub fn dz_q666_q666<const N: usize>(input: &[f64], output: &mut [f64]) {
-    assert!(input.len() >= 343 * N && output.len() >= 343 * N);
     for j in 0..7 {
         for i in 0..7 {
             let start = N * (i + 7 * j);
