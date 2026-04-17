@@ -1,4 +1,4 @@
-use lobatto_fft::hot::*;
+use lobatto_spectral::solver::*;
 use std::f64::consts::PI;
 
 // ── 1D p-convergence ─────────────────────────────────────────────────────────
@@ -62,8 +62,7 @@ fn convergence_1d() {
         let mut prev_err: Option<f64> = None;
 
         for r in 2..=*r_max {
-            let solver =
-                PoissonSolver1D::new(1.0, 0.0, r, alpha, beta, BoundaryCondition::Periodic);
+            let solver = Poisson::new(1.0, 0.0, r, alpha, beta, BoundaryCondition::Periodic);
             let x = solver.get_x();
             let mut f: Vec<f64> = x.iter().map(|&xi| rhs_f(xi)).collect();
             solver.solve_in_place(&mut f);
@@ -133,8 +132,7 @@ fn convergence_1d_dirichlet() {
 
     let mut prev_err: Option<f64> = None;
     for r in 2..=r_max {
-        let solver =
-            PoissonSolver1D::new(1.0, 0.0, r, alpha, beta, BoundaryCondition::Dirichlet);
+        let solver = Poisson::new(1.0, 0.0, r, alpha, beta, BoundaryCondition::Dirichlet);
         let x = solver.get_x();
         let ndof = solver.ndof;
         let mut f: Vec<f64> = x.iter().map(|&xi| rhs_f(xi)).collect();
@@ -201,8 +199,7 @@ fn convergence_1d_neumann() {
 
     let mut prev_err: Option<f64> = None;
     for r in 2..=r_max {
-        let solver =
-            PoissonSolver1D::new(1.0, 0.0, r, alpha, beta, BoundaryCondition::Neumann);
+        let solver = Poisson::new(1.0, 0.0, r, alpha, beta, BoundaryCondition::Neumann);
         let x = solver.get_x();
         let ndof = solver.ndof;
         let mut f: Vec<f64> = x.iter().map(|&xi| rhs_f(xi)).collect();
@@ -265,7 +262,7 @@ fn convergence_2d() {
 
     let mut prev_err: Option<f64> = None;
     for r in 2..=r_max {
-        let solver = PoissonSolverND::<2>::new(
+        let solver = PoissonND::<2>::new(
             [1.0; 2],
             [0.0; 2],
             [r; 2],
@@ -321,7 +318,7 @@ fn convergence_2d_laplace() {
 
     let mut prev_err: Option<f64> = None;
     for r in 2..=r_max {
-        let solver = PoissonSolverND::<2>::new(
+        let solver = PoissonND::<2>::new(
             [1.0; 2],
             [0.0; 2],
             [r; 2],
@@ -371,9 +368,8 @@ fn convergence_2d_dirichlet() {
         s.exp() * p * p * (2.0 * c * c + s * (c * c - s - 1.0))
     };
     let exact_u = |x: f64, y: f64| f1d(x) * f1d(y);
-    let rhs_f = |x: f64, y: f64| {
-        alpha * f1d(x) * f1d(y) - beta * (f1d_pp(x) * f1d(y) + f1d(x) * f1d_pp(y))
-    };
+    let rhs_f =
+        |x: f64, y: f64| alpha * f1d(x) * f1d(y) - beta * (f1d_pp(x) * f1d(y) + f1d(x) * f1d_pp(y));
 
     let r_mono = 5;
     let r_max = 20;
@@ -386,7 +382,7 @@ fn convergence_2d_dirichlet() {
 
     let mut prev_err: Option<f64> = None;
     for r in 2..=r_max {
-        let solver = PoissonSolverND::<2>::new(
+        let solver = PoissonND::<2>::new(
             [1.0; 2],
             [0.0; 2],
             [r; 2],
@@ -452,7 +448,7 @@ fn convergence_2d_neumann() {
 
     let mut prev_err: Option<f64> = None;
     for r in 2..=r_max {
-        let solver = PoissonSolverND::<2>::new(
+        let solver = PoissonND::<2>::new(
             [1.0; 2],
             [0.0; 2],
             [r; 2],
@@ -525,7 +521,7 @@ fn convergence_3d() {
 
     let mut prev_err: Option<f64> = None;
     for r in 2..=r_max {
-        let solver = PoissonSolverND::<3>::new(
+        let solver = PoissonND::<3>::new(
             ls,
             xls,
             [r; 3],
@@ -628,7 +624,7 @@ fn convergence_3d_eval() {
 
     let mut prev_err: Option<f64> = None;
     for r in 2..=r_max {
-        let solver = PoissonSolverND::<3>::new(
+        let solver = PoissonND::<3>::new(
             ls,
             xls,
             [r; 3],

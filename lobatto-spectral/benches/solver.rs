@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use lobatto_fft::hot::*;
+use lobatto_spectral::solver::*;
 use std::f64::consts::PI;
 use std::hint::black_box;
 
@@ -7,7 +7,7 @@ use std::hint::black_box;
 /// using u(x) = exp(sin(2*pi*x)) as the test function.
 /// Sweeps over polynomial order r (single element, so ndof = r).
 /// The 1D solver does not use Rayon, so no thread-count loop.
-fn bench_hot_solve_in_place(c: &mut Criterion) {
+fn bench_solve_in_place(c: &mut Criterion) {
     let l = 1.0_f64;
     let alpha = 1.0_f64;
     let beta = 1.0_f64;
@@ -27,7 +27,7 @@ fn bench_hot_solve_in_place(c: &mut Criterion) {
     for &r in r_values {
         group.throughput(Throughput::Elements(r as u64));
 
-        let solver = PoissonSolver1D::new(l, 0.0, r, alpha, beta, BoundaryCondition::Periodic);
+        let solver = Poisson::new(l, 0.0, r, alpha, beta, BoundaryCondition::Periodic);
         let x = solver.get_x();
 
         let f_init: Vec<f64> = x.iter().map(|&xi| rhs_f(xi)).collect();
@@ -48,7 +48,7 @@ fn bench_hot_solve_in_place(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_hot_solve_in_place_2d(c: &mut Criterion) {
+fn bench_solve_in_place_2d(c: &mut Criterion) {
     let alpha = 1.0_f64;
     let beta = 1.0_f64;
     let w = 2.0 * PI;
@@ -62,7 +62,7 @@ fn bench_hot_solve_in_place_2d(c: &mut Criterion) {
         let ndof = r * r;
         group.throughput(Throughput::Elements(ndof as u64));
 
-        let solver = PoissonSolverND::<2>::new(
+        let solver = PoissonND::<2>::new(
             [1.0; 2],
             [0.0; 2],
             [r; 2],
@@ -105,7 +105,7 @@ fn bench_hot_solve_in_place_2d(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_hot_solve_in_place_3d(c: &mut Criterion) {
+fn bench_solve_in_place_3d(c: &mut Criterion) {
     let alpha = 1.0_f64;
     let beta = 1.0_f64;
     let w = 2.0 * PI;
@@ -119,7 +119,7 @@ fn bench_hot_solve_in_place_3d(c: &mut Criterion) {
         let ndof = r * r * r;
         group.throughput(Throughput::Elements(ndof as u64));
 
-        let solver = PoissonSolverND::<3>::new(
+        let solver = PoissonND::<3>::new(
             [1.0; 3],
             [0.0; 3],
             [r; 3],
@@ -168,8 +168,8 @@ fn bench_hot_solve_in_place_3d(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_hot_solve_in_place,
-    bench_hot_solve_in_place_2d,
-    bench_hot_solve_in_place_3d
+    bench_solve_in_place,
+    bench_solve_in_place_2d,
+    bench_solve_in_place_3d
 );
 criterion_main!(benches);

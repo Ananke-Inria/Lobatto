@@ -1,5 +1,5 @@
+use lobatto_fft::solver::*;
 use nalgebra::Complex;
-use lobatto_fft::hofft::*;
 use std::f64::consts::PI;
 use std::time::Instant;
 
@@ -14,7 +14,7 @@ fn compute_error(
     rhs_f: &dyn Fn(f64) -> f64,
     bc: BoundaryCondition,
 ) -> f64 {
-    let solver = PoissonSolver1D::new(l, 0.0, n, r, alpha, beta, bc);
+    let solver = Poisson::new(l, 0.0, n, r, alpha, beta, bc);
     let x = solver.get_x();
     let ndof = x.len();
 
@@ -457,7 +457,7 @@ fn convergence_periodic_1d_eval() {
     let (mut prev_h, mut prev_err) = (None::<f64>, None::<f64>);
     for &n in &n_values {
         let h = l / n as f64;
-        let solver = PoissonSolver1D::new(l, xl, n, r, alpha, beta, BoundaryCondition::Periodic);
+        let solver = Poisson::new(l, xl, n, r, alpha, beta, BoundaryCondition::Periodic);
         let x = solver.get_x();
         let mut f: Vec<Complex<f64>> = x
             .iter()
@@ -523,7 +523,7 @@ fn convergence_dirichlet_1d_eval() {
     let (mut prev_h, mut prev_err) = (None::<f64>, None::<f64>);
     for &n in &n_values {
         let h = l / n as f64;
-        let solver = PoissonSolver1D::new(l, xl, n, r, alpha, beta, BoundaryCondition::Dirichlet);
+        let solver = Poisson::new(l, xl, n, r, alpha, beta, BoundaryCondition::Dirichlet);
         let x = solver.get_x();
         let mut f: Vec<Complex<f64>> = x
             .iter()
@@ -589,7 +589,7 @@ fn convergence_neumann_1d_eval() {
     let (mut prev_h, mut prev_err) = (None::<f64>, None::<f64>);
     for &n in &n_values {
         let h = l / n as f64;
-        let solver = PoissonSolver1D::new(l, xl, n, r, alpha, beta, BoundaryCondition::Neumann);
+        let solver = Poisson::new(l, xl, n, r, alpha, beta, BoundaryCondition::Neumann);
         let x = solver.get_x();
         let mut f: Vec<Complex<f64>> = x
             .iter()
@@ -655,7 +655,7 @@ fn convergence_2d() {
 
         for &n in &n_values {
             let h = 1.0 / n as f64;
-            let solver = PoissonSolverND::<2>::new(
+            let solver = PoissonND::<2>::new(
                 [1.0; 2],
                 [0.0; 2],
                 [n; 2],
@@ -729,7 +729,7 @@ fn convergence_2d_dirichlet() {
 
         for &n in &n_values {
             let h = 1.0 / n as f64;
-            let solver = PoissonSolverND::<2>::new(
+            let solver = PoissonND::<2>::new(
                 [1.0; 2],
                 [0.0; 2],
                 [n; 2],
@@ -803,7 +803,7 @@ fn convergence_2d_neumann() {
 
         for &n in &n_values {
             let h = 1.0 / n as f64;
-            let solver = PoissonSolverND::<2>::new(
+            let solver = PoissonND::<2>::new(
                 [1.0; 2],
                 [0.0; 2],
                 [n; 2],
@@ -878,7 +878,7 @@ fn convergence_2d_dirichlet_neumann() {
 
         for &n in &n_values {
             let h = 1.0 / n as f64;
-            let solver = PoissonSolverND::<2>::new(
+            let solver = PoissonND::<2>::new(
                 [1.0; 2],
                 [0.0; 2],
                 [n; 2],
@@ -932,7 +932,7 @@ fn convergence_2d_anisotropic() {
     let rhs_f = |x: f64, y: f64| c * exact_u(x, y);
 
     let compute_err = |ns: [usize; 2], rs: [usize; 2]| -> f64 {
-        let solver = PoissonSolverND::<2>::new(
+        let solver = PoissonND::<2>::new(
             [1.0; 2],
             [0.0; 2],
             ns,
@@ -1108,7 +1108,7 @@ fn convergence_3d() {
 
             for &n in &n_values {
                 let h = 1.0 / n as f64;
-                let solver = PoissonSolverND::<3>::new(
+                let solver = PoissonND::<3>::new(
                     ls,
                     xls,
                     [n; 3],
@@ -1182,7 +1182,8 @@ fn convergence_3d_dirichlet() {
     // Exact: u = sin(πξ)·sin(πη)·sin(πζ),  ξ_d = (x_d − xl_d) / l_d
     // Dirichlet in all directions: u = 0 on boundaries  ✓
     // (α − β Δ)u = (α + β π²·Σ 1/l_d²)·u
-    let c = alpha + beta * PI * PI * (1.0 / (ls[0] * ls[0]) + 1.0 / (ls[1] * ls[1]) + 1.0 / (ls[2] * ls[2]));
+    let c = alpha
+        + beta * PI * PI * (1.0 / (ls[0] * ls[0]) + 1.0 / (ls[1] * ls[1]) + 1.0 / (ls[2] * ls[2]));
 
     let exact_u = |x: [f64; 3]| {
         (0..3)
@@ -1197,7 +1198,12 @@ fn convergence_3d_dirichlet() {
     println!("\n{:=<70}", "");
     println!(
         "3D Dirichlet: on [{:.1},{:.1}]×[{:.1},{:.1}]×[{:.1},{:.1}]",
-        xls[0], xls[0]+ls[0], xls[1], xls[1]+ls[1], xls[2], xls[2]+ls[2]
+        xls[0],
+        xls[0] + ls[0],
+        xls[1],
+        xls[1] + ls[1],
+        xls[2],
+        xls[2] + ls[2]
     );
     println!("u = sin(πξ)·sin(πη)·sin(πζ),  α={alpha}, β={beta}");
     println!("{:=<70}\n", "");
@@ -1212,13 +1218,19 @@ fn convergence_3d_dirichlet() {
         let mut prev_err: Option<f64> = None;
         for &n in &n_values {
             let h = 1.0 / n as f64;
-            let solver = PoissonSolverND::<3>::new(
-                ls, xls, [n; 3], [r; 3], alpha, beta,
+            let solver = PoissonND::<3>::new(
+                ls,
+                xls,
+                [n; 3],
+                [r; 3],
+                alpha,
+                beta,
                 [BoundaryCondition::Dirichlet; 3],
             );
             let x = solver.get_x();
             let total = x.len();
-            let mut f: Vec<Complex<f64>> = (0..total).map(|i| Complex::new(rhs_f(x[i]), 0.0)).collect();
+            let mut f: Vec<Complex<f64>> =
+                (0..total).map(|i| Complex::new(rhs_f(x[i]), 0.0)).collect();
             solver.solve_in_place(&mut f);
             let max_err = (0..total)
                 .map(|i| (f[i].re - exact_u(x[i])).abs())
@@ -1256,7 +1268,8 @@ fn convergence_3d_neumann() {
     // Exact: u = cos(πξ)·cos(πη)·cos(πζ),  ξ_d = (x_d − xl_d) / l_d
     // Neumann in all directions: u' = 0 on boundaries  ✓
     // (α − β Δ)u = (α + β π²·Σ 1/l_d²)·u
-    let c = alpha + beta * PI * PI * (1.0 / (ls[0] * ls[0]) + 1.0 / (ls[1] * ls[1]) + 1.0 / (ls[2] * ls[2]));
+    let c = alpha
+        + beta * PI * PI * (1.0 / (ls[0] * ls[0]) + 1.0 / (ls[1] * ls[1]) + 1.0 / (ls[2] * ls[2]));
 
     let exact_u = |x: [f64; 3]| {
         (0..3)
@@ -1271,7 +1284,12 @@ fn convergence_3d_neumann() {
     println!("\n{:=<70}", "");
     println!(
         "3D Neumann: on [{:.1},{:.1}]×[{:.1},{:.1}]×[{:.1},{:.1}]",
-        xls[0], xls[0]+ls[0], xls[1], xls[1]+ls[1], xls[2], xls[2]+ls[2]
+        xls[0],
+        xls[0] + ls[0],
+        xls[1],
+        xls[1] + ls[1],
+        xls[2],
+        xls[2] + ls[2]
     );
     println!("u = cos(πξ)·cos(πη)·cos(πζ),  α={alpha}, β={beta}");
     println!("{:=<70}\n", "");
@@ -1286,13 +1304,19 @@ fn convergence_3d_neumann() {
         let mut prev_err: Option<f64> = None;
         for &n in &n_values {
             let h = 1.0 / n as f64;
-            let solver = PoissonSolverND::<3>::new(
-                ls, xls, [n; 3], [r; 3], alpha, beta,
+            let solver = PoissonND::<3>::new(
+                ls,
+                xls,
+                [n; 3],
+                [r; 3],
+                alpha,
+                beta,
                 [BoundaryCondition::Neumann; 3],
             );
             let x = solver.get_x();
             let total = x.len();
-            let mut f: Vec<Complex<f64>> = (0..total).map(|i| Complex::new(rhs_f(x[i]), 0.0)).collect();
+            let mut f: Vec<Complex<f64>> =
+                (0..total).map(|i| Complex::new(rhs_f(x[i]), 0.0)).collect();
             solver.solve_in_place(&mut f);
             let max_err = (0..total)
                 .map(|i| (f[i].re - exact_u(x[i])).abs())
@@ -1375,7 +1399,7 @@ fn convergence_3d_mixed_bc() {
     ];
 
     let compute_err = |ns: [usize; 3], rs: [usize; 3]| -> f64 {
-        let solver = PoissonSolverND::<3>::new(ls, xls, ns, rs, alpha, beta, bc);
+        let solver = PoissonND::<3>::new(ls, xls, ns, rs, alpha, beta, bc);
         let x = solver.get_x();
         let total = x.len();
         let mut f: Vec<Complex<f64>> = (0..total).map(|i| Complex::new(rhs_f(x[i]), 0.0)).collect();
@@ -1527,7 +1551,7 @@ fn convergence_periodic_2d() {
 
         for &n in &n_values {
             let h = 1.0 / n as f64;
-            let solver = PoissonSolverND::<2>::new(
+            let solver = PoissonND::<2>::new(
                 [1.0; 2],
                 [0.0; 2],
                 [n; 2],
@@ -1573,7 +1597,7 @@ fn convergence_periodic_2d() {
 ///
 /// Checks h-convergence (r=3 fixed, n increasing) using the same tensor-product
 /// test function as `convergence_3d`.  Error is the max over 100 pseudo-random
-/// points that do NOT coincide with any GLL node.
+/// points that do NOT coincide with any Gaus-Lobatto node.
 #[test]
 fn convergence_3d_eval() {
     let alpha = 1.0_f64;
@@ -1594,7 +1618,7 @@ fn convergence_3d_eval() {
         u1d((x - xls[0]) / ls[0]) * u1d((y - xls[1]) / ls[1]) * u1d((z - xls[2]) / ls[2])
     };
 
-    // 100 deterministic points spread across the domain, well-separated from GLL nodes.
+    // 100 deterministic points spread across the domain, well-separated from Gauss-Lobatto nodes.
     let pts: Vec<[f64; 3]> = (0..100)
         .map(|i| {
             let t = (i as f64 + 0.5) / 100.0;
@@ -1629,7 +1653,7 @@ fn convergence_3d_eval() {
 
     for &n in &n_values {
         let h = 1.0 / n as f64;
-        let solver = PoissonSolverND::<3>::new(
+        let solver = PoissonND::<3>::new(
             ls,
             xls,
             [n; 3],
@@ -1700,7 +1724,7 @@ fn convect_4d_q6() {
     let r = 6;
     let n = 6;
 
-    let solver = PoissonSolverND::<4>::new(
+    let solver = PoissonND::<4>::new(
         [1.0; 4],
         [0.0; 4],
         [n; 4],

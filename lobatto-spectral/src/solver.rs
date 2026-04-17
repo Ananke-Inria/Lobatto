@@ -1,13 +1,10 @@
-//! High-order Tensor (HoT) screened Poisson solver.
+//! High-order screened Poisson solver based on Lagrangian functions on Gauss-Lobatto points.
 //!
 //! Solves the screened Poisson equation
-//! $$(\alpha M + \beta K)\, u = f$$
+//! $$(\alpha I - \Delta K)~u = f$$
 //! on the box $[x_{l}, x_{l}+L]^N$ using a **single** high-order spectral element
 //! of polynomial order $r$ per direction.  Supports periodic, Dirichlet, and Neumann
 //! boundary conditions via the [`BoundaryCondition`] enum.
-//!
-//! $M$ is the Gauss–Lobatto–Legendre (GLL) mass matrix and $K = D^T M D$ is the
-//! stiffness matrix built from the GLL differentiation matrix $D$.
 //!
 //! ## Boundary conditions and DOF layout
 //!
@@ -21,7 +18,8 @@
 //!
 //! ## Algorithm
 //!
-//! The local operator $A = \alpha M + \beta K$ is symmetric positive semi-definite.
+//! Denoting $M$ the mass-lumped matrix and $K$ the
+//! stiffness matrix built from the spectral finite-element method on one hypercube, we define  $A = \alpha M + \beta K$ a symmetric positive semi-definite.
 //! Its generalised eigendecomposition $A V = M V \Lambda$ is computed once at construction:
 //! $$M^{-1/2} A M^{-1/2} = W \Lambda W^T, \quad V = M^{-1/2} W,$$
 //! yielding $M$-orthonormal columns $V^T M V = I$.
@@ -33,12 +31,12 @@
 //!    (near-zero eigenvalues are set to zero — pseudo-inverse).
 //! 4. **Inverse transform**: $u \leftarrow V \hat{u}$.
 //!
-//! The $N$-dimensional solver [`PoissonSolverND`] exploits the tensor-product structure.
+//! The $N$-dimensional solver [`PoissonND`] exploits the tensor-product structure.
 //! The eigenvectors and eigenvalues factorise as
 //! $$V_\mathrm{ND} = V^{(0)} \otimes \cdots \otimes V^{(N-1)},
 //!   \quad \lambda_{j_0,\ldots,j_{N-1}} = \alpha + \beta \sum_{d=0}^{N-1} \lambda^{(d)}_{j_d},$$
-//! so steps 2–4 are applied direction by direction (sum factorisation), parallelised
-//! with Rayon over independent fibres.
+//! so steps 2–4 are applied direction by direction (sum factorisation),
+//! parallelised with Rayon over independent fibres.
 
 use lobatto::collocation::{CollocationBasis, Gauss};
 use lobatto::utilities::{barycentric_weights, lagrangian_interpolation};
@@ -74,7 +72,7 @@ pub enum BoundaryCondition {
 /// $$M^{-1/2}(\alpha M + \beta K)M^{-1/2} = W \Lambda W^T, \quad V = M^{-1/2} W$$
 /// is computed and the pseudo-inverse $A^+ = V \Lambda^+ V^T M$ is stored.
 /// The solve is then a single matrix-vector product: $u = A^+ f$.
-pub struct PoissonSolver1D {
+pub struct Poisson {
     /// Domain length $L$.
     l: f64,
     /// Position of the left boundary $x_l$.
@@ -102,7 +100,7 @@ pub struct PoissonSolver1D {
     bary_weights: Vec<f64>,
 }
 
-impl PoissonSolver1D {
+impl Poisson {
     /// Construct the 1D HoT solver.
     ///
     /// Assembles the local operator $\alpha M + \beta K$ for the chosen boundary
@@ -288,7 +286,7 @@ impl PoissonSolver1D {
 
 /// $N$-dimensional HoT screened Poisson solver.
 ///
-/// Extends [`PoissonSolver1D`] to $N$ spatial dimensions using a **tensor-product
+/// Extends [`Poisson`] to $N$ spatial dimensions using a **tensor-product
 /// eigendecomposition**.  Each direction $d$ may have an independent polynomial
 /// order $r_d$ and [`BoundaryCondition`].
 ///
@@ -310,9 +308,9 @@ impl PoissonSolver1D {
 ///
 /// Steps 1 and 3 are embarrassingly parallel; steps 2 and 4 are parallelised
 /// over independent fibres with Rayon.
-pub struct PoissonSolverND<const N: usize> {
+pub struct PoissonND<const N: usize> {
     /// One 1D solver per spatial direction.
-    pub solvers: [PoissonSolver1D; N],
+    pub solvers: [Poisson; N],
     /// Coefficient $\alpha$ of the mass term.
     pub alpha: f64,
     /// Coefficient $\beta$ of the stiffness term.
@@ -333,10 +331,10 @@ pub struct PoissonSolverND<const N: usize> {
     pub local_strides: [usize; N],
 }
 
-impl<const N: usize> PoissonSolverND<N> {
+impl<const N: usize> PoissonND<N> {
     /// Construct the ND HoT solver.
     ///
-    /// Builds one [`PoissonSolver1D`] per direction with `alpha = 0, beta = 1`
+    /// Builds one [`Poisson`] per direction with `alpha = 0, beta = 1`
     /// (pure stiffness) to obtain the per-direction eigenvectors; the full operator
     /// coefficients $\alpha$ and $\beta$ are applied at the ND level during the solve.
     ///
@@ -356,8 +354,7 @@ impl<const N: usize> PoissonSolverND<N> {
     ) -> Self {
         // 1D solvers are built with (alpha=0, beta=1) so their eigenvectors diagonalise
         // the pure stiffness operator; alpha is applied at the ND level in solve_in_place.
-        let solvers =
-            std::array::from_fn(|d| PoissonSolver1D::new(ls[d], xls[d], rs[d], 0.0, 1.0, bcs[d]));
+        let solvers = std::array::from_fn(|d| Poisson::new(ls[d], xls[d], rs[d], 0.0, 1.0, bcs[d]));
         let ndofs: [usize; N] = std::array::from_fn(|d| solvers[d].ndof);
         let r_total = ndofs.iter().product();
         let local_strides = Self::compute_strides(&ndofs);
@@ -567,12 +564,12 @@ mod tests {
     use nalgebra::DMatrix;
 
     #[test]
-    fn test_hot1d_periodic_eigendecomposition() {
+    fn test_1d_periodic_eigendecomposition() {
         const ORTHO_TOL: f64 = 1e-10;
         const RECON_TOL: f64 = 1e-10;
 
         for &r in &[2, 3, 4, 5, 6] {
-            let solver = PoissonSolver1D::new(1.0, 0.0, r, 1.0, 1.0, BoundaryCondition::Periodic);
+            let solver = Poisson::new(1.0, 0.0, r, 1.0, 1.0, BoundaryCondition::Periodic);
             let m = DMatrix::from_diagonal(&solver.mass_diag);
             let id = DMatrix::<f64>::identity(r, r);
             let v = &solver.eigenvectors;
@@ -595,11 +592,11 @@ mod tests {
     }
 
     #[test]
-    fn test_hot1d_dirichlet_eigendecomposition() {
+    fn test_1d_dirichlet_eigendecomposition() {
         const ORTHO_TOL: f64 = 1e-10;
 
         for &r in &[3, 4, 5, 6, 8] {
-            let solver = PoissonSolver1D::new(1.0, 0.0, r, 1.0, 1.0, BoundaryCondition::Dirichlet);
+            let solver = Poisson::new(1.0, 0.0, r, 1.0, 1.0, BoundaryCondition::Dirichlet);
             let ndof = r - 1;
             let m = DMatrix::from_diagonal(&solver.mass_diag);
             let id = DMatrix::<f64>::identity(ndof, ndof);
@@ -615,11 +612,11 @@ mod tests {
     }
 
     #[test]
-    fn test_hot1d_neumann_eigendecomposition() {
+    fn test_1d_neumann_eigendecomposition() {
         const ORTHO_TOL: f64 = 1e-10;
 
         for &r in &[2, 3, 4, 5, 6] {
-            let solver = PoissonSolver1D::new(1.0, 0.0, r, 1.0, 1.0, BoundaryCondition::Neumann);
+            let solver = Poisson::new(1.0, 0.0, r, 1.0, 1.0, BoundaryCondition::Neumann);
             let ndof = r + 1;
             let m = DMatrix::from_diagonal(&solver.mass_diag);
             let id = DMatrix::<f64>::identity(ndof, ndof);

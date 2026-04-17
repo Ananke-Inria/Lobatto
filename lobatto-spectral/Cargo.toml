@@ -9,7 +9,7 @@ keywords = ["gauss-lobatto", "spectral-element", "poisson", "tensor-product"]
 categories = ["mathematics", "science"]
 
 [[bench]]
-name = "hot_solver"
+name = "solver"
 harness = false
 
 [package.metadata.docs.rs]

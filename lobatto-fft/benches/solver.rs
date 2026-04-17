@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use lobatto_fft::hofft::*;
+use lobatto_fft::solver::*;
 use rustfft::num_complex::Complex;
 use std::f64::consts::PI;
 use std::hint::black_box;
@@ -31,8 +31,7 @@ fn bench_solve_in_place(c: &mut Criterion) {
             let ndof = n * r;
             group.throughput(Throughput::Elements(ndof as u64));
 
-            let solver =
-                PoissonSolver1D::new(l, 0.0, n, r, alpha, beta, BoundaryCondition::Periodic);
+            let solver = Poisson::new(l, 0.0, n, r, alpha, beta, BoundaryCondition::Periodic);
             let x = solver.get_x();
 
             let f_init: Vec<Complex<f64>> =
@@ -71,7 +70,7 @@ fn bench_solve_in_place_2d(c: &mut Criterion) {
             let ndof = (n * r).pow(2);
             group.throughput(Throughput::Elements(ndof as u64));
 
-            let solver = PoissonSolverND::<2>::new(
+            let solver = PoissonND::<2>::new(
                 [1.0; 2],
                 [0.0; 2],
                 [n; 2],
@@ -135,7 +134,7 @@ fn bench_solve_in_place_3d(c: &mut Criterion) {
             let ndof = (n * r).pow(3);
             group.throughput(Throughput::Elements(ndof as u64));
 
-            let solver = PoissonSolverND::<3>::new(
+            let solver = PoissonND::<3>::new(
                 [1.0; 3],
                 [0.0; 3],
                 [n; 3],

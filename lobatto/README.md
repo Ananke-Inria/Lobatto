@@ -48,13 +48,18 @@ let basis = CollocationBasis::new(vec![(5, Gauss::Lobatto), (5, Gauss::Lobatto)]
 // DOF values: f(x, y) = x^2 + y^2 at the collocation points
 let u: Vec<f64> = basis.points().iter().map(|p| p[0].powi(2) + p[1].powi(2)).collect();
 
-// Differentiate along x in place
+// Differentiate along x 
 let mut du_dx = vec![0.0; u.len()];
 basis.diff(0, &u, &mut du_dx);
 
 // Evaluate the interpolant at an arbitrary point
 let vals = basis.eval(&[vec![0.3, 0.7]], &u);
 let expected = 0.3f64.powi(2) + 0.7f64.powi(2);
+assert!((vals[0] - expected).abs() < 1e-13);
+
+// Evaluate the interpolant derivative at an arbitrary point
+let vals = basis.eval(&[vec![0.7, 0.3]], &du_dx);
+let expected = 2.0*0.7;
 assert!((vals[0] - expected).abs() < 1e-13);
 ```
 

@@ -2,21 +2,21 @@
 name = "lobatto-fft"
 version = "0.1.0"
 edition = "2021"
-description = "High-order tensor-product screened Poisson solvers (HoT and HoFFT) on GLL grids."
+description = "High-order FFT on Gauss–Lobatto grids and corresponding high-order solver for Poisson problems."
 license = "LGPL-3.0-only"
 repository = "https://github.com/OndoMathX/QuadratiX/tree/main/lobatto-fft"
 keywords = ["gauss-lobatto", "spectral-element", "poisson", "tensor-product", "fft"]
 categories = ["mathematics", "science"]
 
 [[bench]]
-name = "hofft_solver"
+name = "solver"
 harness = false
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--html-in-header", "katex.html"]
 
 [dependencies]
-lobatto = { path = "../lobatto", version = "0.1.0" }
+lobatto = "0.1.1"
 nalgebra = "0.34.1"
 rustfft = "6.3.0"
 rayon = "1"

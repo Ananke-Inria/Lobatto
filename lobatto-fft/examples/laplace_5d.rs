@@ -2,22 +2,17 @@
 //!
 //!   (α M + β K) u = f   on [0, 1]^5
 //!
-//! using three methods:
+//! using two methods:
 //!   - HoFFT:    n=10 elements × r=4 polynomial order  → 40 DOF/direction
-//!   - HoFFT-1:  n=1  element  × r=20                  → 20 DOF/direction  (should match HoT)
-//!   - HoT:      r=20 (single element, spectral)       → 20 DOF/direction
-//!
-//! HoFFT-1 and HoT solve the same mathematical problem; comparing them validates
-//! that both implementations agree and benchmarks any overhead difference.
+//!   - HoFFT-1:  n=1  element  × r=20                  → 20 DOF/direction
 //!
 //! Exact solution: u = exp(sin(2π x_1)) · … · exp(sin(2π x_5))
 //!
 //! Run with:
 //!   cargo run --example laplace_5d --release
 
-use lobatto_fft::hofft::{BoundaryCondition, PoissonSolverND as HofftPoissonSolverND};
-use lobatto_fft::hot::BoundaryCondition as HotBoundaryCondition;
-use lobatto_fft::hot::PoissonSolverND as HotPoissonSolverND;
+use lobatto_fft::solver::BoundaryCondition;
+use lobatto_fft::solver::PoissonND;
 use rayon::prelude::*;
 use std::f64::consts::PI;
 use std::time::Instant;
@@ -83,14 +78,13 @@ fn main() {
     println!();
     println!("  HoFFT   : n={n}×r={r} → {ndof_1d} DOF/direction, {ndof_hofft} total");
     println!("  HoFFT-1 : n=1×r={r_hot} → {r_hot} DOF/direction, {ndof_1} total");
-    println!("  HoT     : r={r_hot}     → {r_hot} DOF/direction, {ndof_1} total");
     println!();
 
     // ── HoFFT ─────────────────────────────────────────────────────────────────
     println!("── HoFFT (n={n}, r={r}) ──────────────────────────────────────────");
 
     let t = Instant::now();
-    let solver_hofft = HofftPoissonSolverND::<5>::new(
+    let solver_hofft = PoissonND::<5>::new(
         [1.0; 5],
         [0.0; 5],
         [n; 5],
@@ -163,7 +157,7 @@ fn main() {
     println!("── HoFFT-1 (n=1, r={r_hot}) ────────────────────────────────────────");
 
     let t = Instant::now();
-    let solver_hofft1 = HofftPoissonSolverND::<5>::new(
+    let solver_hofft1 = PoissonND::<5>::new(
         [1.0; 5],
         [0.0; 5],
         [1; 5],
@@ -232,71 +226,6 @@ fn main() {
     );
     println!();
 
-    // ── HoT ───────────────────────────────────────────────────────────────────
-    println!("── HoT (r={r_hot}, single element) ─────────────────────────────────");
-
-    let t = Instant::now();
-    let solver_hot = HotPoissonSolverND::<5>::new(
-        [1.0; 5],
-        [0.0; 5],
-        [r_hot; 5],
-        alpha,
-        beta,
-        [HotBoundaryCondition::Periodic; 5],
-    );
-    let hot_setup_ms = t.elapsed().as_secs_f64() * 1e3;
-    println!("  Setup time : {hot_setup_ms:.1} ms");
-
-    let t = Instant::now();
-    let x_hot = solver_hot.get_x();
-    let mut f_hot: Vec<f64> = (0..ndof_1)
-        .into_par_iter()
-        .map(|i| {
-            let [x0, x1, x2, x3, x4] = x_hot[i];
-            let u = u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4);
-            alpha * u
-                - beta
-                    * (u1d_pp(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4)
-                        + u1d(x0) * u1d_pp(x1) * u1d(x2) * u1d(x3) * u1d(x4)
-                        + u1d(x0) * u1d(x1) * u1d_pp(x2) * u1d(x3) * u1d(x4)
-                        + u1d(x0) * u1d(x1) * u1d(x2) * u1d_pp(x3) * u1d(x4)
-                        + u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d_pp(x4))
-        })
-        .collect();
-    let hot_rhs_ms = t.elapsed().as_secs_f64() * 1e3;
-    println!("  RHS build  : {hot_rhs_ms:.1} ms");
-
-    let t = Instant::now();
-    solver_hot.solve_in_place(&mut f_hot);
-    let hot_solve_ms = t.elapsed().as_secs_f64() * 1e3;
-    println!("  Solve time : {hot_solve_ms:.1} ms");
-
-    let hot_err = (0..ndof_1)
-        .map(|i| {
-            let [x0, x1, x2, x3, x4] = x_hot[i];
-            let u_ex = u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4);
-            (f_hot[i] - u_ex).abs()
-        })
-        .fold(0.0_f64, f64::max);
-    println!("  Max error  : {hot_err:.3e}");
-
-    let t = Instant::now();
-    let hot_vals = solver_hot.eval(&eval_hot_pts, &f_hot);
-    let hot_eval_err = eval_hot_pts
-        .iter()
-        .zip(hot_vals.iter())
-        .map(|(&[p0, p1, p2, p3, p4], &v)| {
-            (v - u1d(p0) * u1d(p1) * u1d(p2) * u1d(p3) * u1d(p4)).abs()
-        })
-        .fold(0.0_f64, f64::max);
-    let hot_eval_ms = t.elapsed().as_secs_f64() * 1e3;
-    println!("  Eval error : {hot_eval_err:.3e}  ({hot_eval_ms:.2} ms for 1000 pts)");
-    println!(
-        "  Total time : {:.1} ms",
-        hot_setup_ms + hot_rhs_ms + hot_solve_ms
-    );
-    println!();
-
     // ── Summary ───────────────────────────────────────────────────────────────
     println!("── Summary ────────────────────────────────────────────────────────");
     println!(
@@ -326,9 +255,5 @@ fn main() {
         hofft1_err,
         hofft1_eval_err,
         hofft1_eval_ms
-    );
-    println!(
-        "  {:>10}  {:>12.1}  {:>12.1}  {:>12.1}  {:>12.3e}  {:>12.3e}  {:>14.2}",
-        "HoT", hot_setup_ms, hot_rhs_ms, hot_solve_ms, hot_err, hot_eval_err, hot_eval_ms
     );
 }

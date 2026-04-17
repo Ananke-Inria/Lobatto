@@ -35,7 +35,7 @@ fn even_extension_symmetry() {
     let xl = 0.0_f64;
 
     // Physical planner (Even extension): 10 DOFs, n_fft = 6, n_freq = n+1 = 4.
-    let planner = HofftPlanner::new(n, r, l, xl, Extension::Even);
+    let planner = Engine::new(n, r, l, xl, Extension::Even);
     let x = planner.get_x(); // 10 x-increasing nodes
 
     // Generic complex function with no special symmetry properties:
@@ -95,9 +95,9 @@ fn even_extension_symmetry() {
 
     // ── Step 2: apply r independent forward FFTs of length n_fft ─────────────
     //
-    // RawPlanner with n = n_fft (= 2n_phys) applies r in-place FFTs, each of
+    // RawEngine with n = n_fft (= 2n_phys) applies r in-place FFTs, each of
     // length n_fft, laid out as r consecutive rows of n_fft entries.
-    let raw = RawPlanner::new(n_fft, r, l, xl); // r rows, each of length n_fft
+    let raw = RawEngine::new(n_fft, r, l, xl); // r rows, each of length n_fft
     raw.forward(&mut buf);
 
     // ── Step 3: print the full frequency-domain buffer ────────────────────────
@@ -251,7 +251,7 @@ fn odd_extension_symmetry() {
     let xl = 0.0_f64;
 
     // Physical planner (Odd extension): n·r−1 = 11 DOFs, n_fft = 6, n_freq = n+1 = 4.
-    let planner = HofftPlanner::new(n, r, l, xl, Extension::Odd);
+    let planner = Engine::new(n, r, l, xl, Extension::Odd);
     let x = planner.get_x();
 
     // Same generic complex function as the Even test — no special symmetry.
@@ -307,7 +307,7 @@ fn odd_extension_symmetry() {
     }
 
     // ── Step 2: apply r independent forward FFTs of length n_fft ─────────────
-    let raw = RawPlanner::new(n_fft, r, l, xl);
+    let raw = RawEngine::new(n_fft, r, l, xl);
     raw.forward(&mut buf);
 
     println!("\nFull FFT coefficients F̂[j·n_fft + k]:");
@@ -446,7 +446,7 @@ fn odd_extension_symmetry() {
 
 // ── FFT round-trip ────────────────────────────────────────────────────────────
 
-fn roundtrip_error_1d(planner: &HofftPlanner, f_orig: &[Complex<f64>]) -> f64 {
+fn roundtrip_error_1d(planner: &Engine, f_orig: &[Complex<f64>]) -> f64 {
     let mut g = f_orig.to_vec();
     planner.forward(&mut g);
     planner.inverse(&mut g);
@@ -456,7 +456,7 @@ fn roundtrip_error_1d(planner: &HofftPlanner, f_orig: &[Complex<f64>]) -> f64 {
         .fold(0.0_f64, f64::max)
 }
 
-fn roundtrip_error_nd<const N: usize>(planner: &HofftPlannerND<N>, f_orig: &[Complex<f64>]) -> f64 {
+fn roundtrip_error_nd<const N: usize>(planner: &EngineND<N>, f_orig: &[Complex<f64>]) -> f64 {
     let mut g = f_orig.to_vec();
     planner.forward(&mut g);
     planner.inverse(&mut g);
@@ -481,56 +481,56 @@ fn test_hofft_planner_roundtrip() {
     const TOL: f64 = 1e-12;
 
     // Periodic
-    let p = HofftPlanner::new(8, 3, 1.0, 0.0, Extension::Periodic);
+    let p = Engine::new(8, 3, 1.0, 0.0, Extension::Periodic);
     let f: Vec<Complex<f64>> = p.get_x().iter().map(|&x| cplx(x)).collect();
     let err = roundtrip_error_1d(&p, &f);
     assert!(
         err < TOL,
-        "HofftPlanner Periodic round-trip error = {err:.2e}"
+        "Engine Periodic round-trip error = {err:.2e}"
     );
 
     // Odd (Dirichlet) — imaginary part must vanish at boundaries for odd extension.
     // Use the same generic complex function; the extension enforces the BC internally.
-    let p = HofftPlanner::new(8, 3, 1.0, 0.0, Extension::Odd);
+    let p = Engine::new(8, 3, 1.0, 0.0, Extension::Odd);
     let f: Vec<Complex<f64>> = p.get_x().iter().map(|&x| cplx(x)).collect();
     let err = roundtrip_error_1d(&p, &f);
-    assert!(err < TOL, "HofftPlanner Odd round-trip error = {err:.2e}");
+    assert!(err < TOL, "Engine Odd round-trip error = {err:.2e}");
 
     // Even (Neumann)
-    let p = HofftPlanner::new(8, 3, 1.0, 0.0, Extension::Even);
+    let p = Engine::new(8, 3, 1.0, 0.0, Extension::Even);
     let f: Vec<Complex<f64>> = p.get_x().iter().map(|&x| cplx(x)).collect();
     let err = roundtrip_error_1d(&p, &f);
-    assert!(err < TOL, "HofftPlanner Even round-trip error = {err:.2e}");
+    assert!(err < TOL, "Engine Even round-trip error = {err:.2e}");
 }
 
 #[test]
 fn test_nd_fft_roundtrip() {
     const TOL: f64 = 1e-12;
 
-    // ── HofftPlannerND::<1> ───────────────────────────────────────────────────
+    // ── EngineND::<1> ───────────────────────────────────────────────────
 
     // Periodic
-    let p = HofftPlannerND::<1>::new([8], [3], [1.0], [0.0], [Extension::Periodic]);
+    let p = EngineND::<1>::new([8], [3], [1.0], [0.0], [Extension::Periodic]);
     let f: Vec<Complex<f64>> = p.get_x().iter().map(|pt| cplx(pt[0])).collect();
     let err = roundtrip_error_nd(&p, &f);
     assert!(err < TOL, "ND<1> Periodic round-trip error = {err:.2e}");
 
     // Odd (Dirichlet)
-    let p = HofftPlannerND::<1>::new([8], [3], [1.0], [0.0], [Extension::Odd]);
+    let p = EngineND::<1>::new([8], [3], [1.0], [0.0], [Extension::Odd]);
     let f: Vec<Complex<f64>> = p.get_x().iter().map(|pt| cplx(pt[0])).collect();
     let err = roundtrip_error_nd(&p, &f);
     assert!(err < TOL, "ND<1> Odd round-trip error = {err:.2e}");
 
     // Even (Neumann)
-    let p = HofftPlannerND::<1>::new([8], [3], [1.0], [0.0], [Extension::Even]);
+    let p = EngineND::<1>::new([8], [3], [1.0], [0.0], [Extension::Even]);
     let f: Vec<Complex<f64>> = p.get_x().iter().map(|pt| cplx(pt[0])).collect();
     let err = roundtrip_error_nd(&p, &f);
     assert!(err < TOL, "ND<1> Even round-trip error = {err:.2e}");
 
-    // ── HofftPlannerND::<2> ───────────────────────────────────────────────────
+    // ── EngineND::<2> ───────────────────────────────────────────────────
 
     // Periodic
-    let p = HofftPlannerND::<2>::new([4; 2], [2; 2], [1.0; 2], [0.0; 2], [Extension::Periodic; 2]);
+    let p = EngineND::<2>::new([4; 2], [2; 2], [1.0; 2], [0.0; 2], [Extension::Periodic; 2]);
     let f: Vec<Complex<f64>> = p
         .get_x()
         .iter()
@@ -540,7 +540,7 @@ fn test_nd_fft_roundtrip() {
     assert!(err < TOL, "ND<2> Periodic round-trip error = {err:.2e}");
 
     // Mixed Odd / Even
-    let p = HofftPlannerND::<2>::new(
+    let p = EngineND::<2>::new(
         [4; 2],
         [2; 2],
         [1.0; 2],
@@ -555,10 +555,10 @@ fn test_nd_fft_roundtrip() {
     let err = roundtrip_error_nd(&p, &f);
     assert!(err < TOL, "ND<2> Odd/Even round-trip error = {err:.2e}");
 
-    // ── HofftPlannerND::<3> ───────────────────────────────────────────────────
+    // ── EngineND::<3> ───────────────────────────────────────────────────
 
     // Periodic
-    let p = HofftPlannerND::<3>::new([4; 3], [2; 3], [1.0; 3], [0.0; 3], [Extension::Periodic; 3]);
+    let p = EngineND::<3>::new([4; 3], [2; 3], [1.0; 3], [0.0; 3], [Extension::Periodic; 3]);
     let f: Vec<Complex<f64>> = p
         .get_x()
         .iter()
@@ -568,7 +568,7 @@ fn test_nd_fft_roundtrip() {
     assert!(err < TOL, "ND<3> Periodic round-trip error = {err:.2e}");
 
     // All Odd
-    let p = HofftPlannerND::<3>::new([4; 3], [2; 3], [1.0; 3], [0.0; 3], [Extension::Odd; 3]);
+    let p = EngineND::<3>::new([4; 3], [2; 3], [1.0; 3], [0.0; 3], [Extension::Odd; 3]);
     let f: Vec<Complex<f64>> = p
         .get_x()
         .iter()
@@ -578,7 +578,7 @@ fn test_nd_fft_roundtrip() {
     assert!(err < TOL, "ND<3> Odd round-trip error = {err:.2e}");
 
     // All Even
-    let p = HofftPlannerND::<3>::new([4; 3], [2; 3], [1.0; 3], [0.0; 3], [Extension::Even; 3]);
+    let p = EngineND::<3>::new([4; 3], [2; 3], [1.0; 3], [0.0; 3], [Extension::Even; 3]);
     let f: Vec<Complex<f64>> = p
         .get_x()
         .iter()
