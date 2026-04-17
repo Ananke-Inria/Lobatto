@@ -2,39 +2,33 @@
 
 High-order FFT (**HoFFT**) on Gauss–Lobatto grids and corresponding high-order solver for Poisson problems.
 
-Solves $(\alpha I - \beta \Delta)~ u = f$ on tensor-product domains
-$\prod_{d=0}^{N-1} [x_{l,d},\, x_{l,d} + L_d]$
-using a spectral-finite element discretisation with $n_d$ elements of polynomial order $r_d$ per direction,
-for any combination of periodic, Dirichlet, and Neumann boundary conditions.
-The solver runs in $\mathcal{O}(N_\mathrm{dof} \log N_\mathrm{dof})$ after a one-time setup.
-
-For the single-element limit ($n_d = 1$, all FFT overhead removed), see
-[`lobatto-spectral`](../lobatto-spectral/README.md).
+Solves (αI − βΔ) u = f on tensor-product domains using a spectral-finite element discretisation with n_d elements of polynomial order r_d per direction, for any combination of periodic, Dirichlet, and Neumann boundary conditions.
+The solver runs in O(N_dof log N_dof) after a one-time setup.
 
 ---
 
 ## Method
 
-The HoFFT algorithm of Caforio & Imperiale (2019) exploits the (near-)circulant
-inter-element coupling of the GLL operator.  A single FFT per direction decouples
-all Fourier modes, reducing the global system to a collection of independent
-$r \times r$ Hermitian problems — the **local symbols** $S(k)$ — whose
+The method is based on the  HoFFT algorithm of Caforio & Imperiale (2019). It uses a single FFT per direction and per type of nodes to decouple all Fourier modes, reducing the global system to a collection of independent
+r × r Hermitian problems — the **local symbols** S(k) — whose
 eigendecompositions are precomputed at setup time.
 
 Each call to `solve_in_place` runs four steps:
 
-1. **Mass scaling** — $f \leftarrow \tilde{M}\, f$ where $\tilde{M}$ is the
-   diagonal periodic mass matrix.
+1. **Mass scaling** — f ← M f where M is the
+   diagonal mass matrix.
 2. **Forward HoFFT** — apply [`hofft::EngineND::forward`] direction by direction
    (sum factorisation, Rayon-parallel).
-3. **Per-mode symbol solve** — for each mode tuple $(k_0,\ldots,k_{N-1})$:
-   $$\hat{u}_k = V_k \left(\alpha I + \beta \Lambda_k\right)^{-1} V_k^\dagger \hat{f}_k$$
-   where $V_k$ and $\Lambda_k$ are the precomputed eigenvectors and eigenvalues of the
+3. **Per-mode symbol solve** — for each mode tuple (k_0, ..., k_{N-1}):
+
+   û_k = V_k (αI + β Λ_k)^{-1} V_k† f̂_k
+
+   where V_k and Λ_k are the precomputed eigenvectors and eigenvalues of the
    per-direction symbols (Rayon-parallel over mode tuples).
 4. **Inverse HoFFT** — apply [`hofft::EngineND::inverse`] direction by direction.
 
 Non-periodic BCs are handled by an odd (Dirichlet) or even (Neumann) extension of the
-domain to length $2n$ before the FFT, retaining only the independent Fourier coefficients
+domain to length 2n before the FFT, retaining only the independent Fourier coefficients
 (Lemma 3.2 of \[1\]).
 
 **Reference** — \[1\] Caforio, F. and Imperiale, S. (2019). *High-order discrete Fourier
@@ -45,14 +39,14 @@ Computing, 41(5), A2747–A2771.
 
 ## Boundary conditions
 
-| BC          | Extension | $n_\mathrm{fft}$ | $N_\mathrm{dof}$ per direction |
-|-------------|-----------|------------------|-------------------------------|
-| `Periodic`  | none      | $n$              | $n r$                         |
-| `Dirichlet` | Odd       | $2n$             | $n r - 1$                     |
-| `Neumann`   | Even      | $2n$             | $n r + 1$                     |
+| BC          | Extension | n_fft | N_dof per direction |
+|-------------|-----------|-------|---------------------|
+| `Periodic`  | none      | n     | n·r                 |
+| `Dirichlet` | Odd       | 2n    | n·r − 1             |
+| `Neumann`   | Even      | 2n    | n·r + 1             |
 
 Each spatial direction carries an independent boundary condition, enabling mixed
-configurations (e.g. Dirichlet in $x$, Neumann in $y$).
+configurations (e.g. Dirichlet in x, Neumann in y).
 
 ---
 
@@ -60,8 +54,7 @@ configurations (e.g. Dirichlet in $x$, Neumann in $y$).
 
 ```toml
 [dependencies]
-lobatto-fft = { path = "path/to/lobatto-fft" }
-rustfft = "6"
+lobatto-fft = "0.1.1"
 ```
 
 ```rust
@@ -69,10 +62,10 @@ use lobatto_fft::solver::{BoundaryCondition, PoissonND};
 use rustfft::num_complex::Complex;
 use std::f64::consts::PI;
 
-// Solve (M + K) u = f on [0, 1]^2 with n=8 elements of order r=4 per direction.
+// Solve (I α -  β Δ) u = f on [0, 1]^2 with n=8 elements of order r=4 per direction.
 let solver = PoissonND::<2>::new(
-    [1.0; 2],                          // domain lengths  L_d
-    [0.0; 2],                          // left boundaries x_{l,d}
+    [1.0; 2],                          // domain lengths  
+    [0.0; 2],                          // left boundaries 
     [8;   2],                          // elements per direction n_d
     [4;   2],                          // polynomial orders r_d
     1.0, 1.0,                          // α, β
@@ -168,7 +161,7 @@ cargo bench
 
 | Crate | Purpose |
 |-------|---------|
-| [`lobatto`](../lobatto) | GLL quadrature, collocation basis, differentiation and interpolation |
+| [`lobatto`](https://crates.io/crates/lobatto) | GLL quadrature, collocation basis, differentiation and interpolation |
 | [`rustfft`](https://github.com/ejmahler/RustFFT) | Forward/inverse FFT plans |
 | [`nalgebra`](https://nalgebra.org) | Eigendecomposition and matrix-vector products |
 | [`rayon`](https://github.com/rayon-rs/rayon) | Data-parallel fibre sweeps and mode-tuple loop |
