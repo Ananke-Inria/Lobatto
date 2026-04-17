@@ -2,32 +2,31 @@
 
 High-order screened Poisson solvers on Gauss-Lobatto grids.
 
-Solves $(\alpha I - \beta \Delta)~ u = f$ on $[x_l, x_l + L]^N$ using a **single**  
-spectral finite-element of polynomial order $r$ per direction.  Supports periodic, Dirichlet, and Neumann boundary conditions, independently
-per direction.
+Solves (αI − βΔ) u = f on [x_l, x_l + L]^N using a **single**
+spectral finite-element of polynomial order r per direction. Supports periodic, Dirichlet, and Neumann boundary conditions, independently per direction.
 
 For problems with many elements per direction, see
-[`lobatto-fft`](../lobatto-fft/README.md), which uses the multi-element HoFFT algorithm.
+[`lobatto-fft`](https://crates.io/crates/lobatto-fft), which uses the multi-element HoFFT algorithm.
 
 ---
 
 ## Method
 
 With one element per direction the global operator factorises as a tensor product of 1D
-operators.  At construction the generalised eigendecomposition
+operators. At construction the generalised eigendecomposition
 
-$$M^{-1/2}(\alpha M + \beta K)M^{-1/2} = W \Lambda W^T, \quad V = M^{-1/2} W$$
+M^{-1/2}(αM + βK)M^{-1/2} = W Λ W^T,   V = M^{-1/2} W
 
-is computed once per direction.  The ND eigenvalues are then
+is computed once per direction. The ND eigenvalues are then
 
-$$\lambda_{j_0,\ldots,j_{N-1}} = \alpha + \beta \sum_{d=0}^{N-1} \lambda^{(d)}_{j_d},$$
+λ_{j_0,...,j_{N-1}} = α + β ∑_{d=0}^{N-1} λ^(d)_{j_d}
 
 and each call to `solve_in_place` runs four steps:
 
-1. **Mass scaling** — $f \leftarrow M_\mathrm{ND}\, f$ (diagonal, embarrassingly parallel).
-2. **Forward transform** — apply $V^{(d)\,T}$ direction by direction (sum factorisation).
-3. **Spectral division** — $\hat{f}_{j} \leftarrow \hat{f}_{j} / \lambda_{j}$ (pseudo-inverse).
-4. **Inverse transform** — apply $V^{(d)}$ direction by direction.
+1. **Mass scaling** — f ← M_ND f (diagonal, embarrassingly parallel).
+2. **Forward transform** — apply V^(d)T direction by direction (sum factorisation).
+3. **Spectral division** — f̂_j ← f̂_j / λ_j (pseudo-inverse).
+4. **Inverse transform** — apply V^(d) direction by direction.
 
 Steps 2 and 4 are parallelised over independent fibres with [Rayon](https://github.com/rayon-rs/rayon).
 
@@ -35,11 +34,11 @@ Steps 2 and 4 are parallelised over independent fibres with [Rayon](https://gith
 
 ## Boundary conditions
 
-| BC          | Active nodes            | $N_\mathrm{dof}$ | Enforced condition              |
-|-------------|-------------------------|------------------|---------------------------------|
-| `Periodic`  | $0, \ldots, r-1$        | $r$              | $u(x_l) = u(x_l+L)$            |
-| `Dirichlet` | $1, \ldots, r-1$        | $r-1$            | $u(x_l) = u(x_l+L) = 0$        |
-| `Neumann`   | $0, \ldots, r$          | $r+1$            | $u'(x_l) = u'(x_l+L) = 0$      |
+| BC          | Active nodes  | N_dof | 
+|-------------|---------------|-------|
+| `Periodic`  | 0, ..., r-1   | r     | 
+| `Dirichlet` | 1, ..., r-1   | r-1   | 
+| `Neumann`   | 0, ..., r     | r+1   |
 
 ---
 
@@ -47,14 +46,14 @@ Steps 2 and 4 are parallelised over independent fibres with [Rayon](https://gith
 
 ```toml
 [dependencies]
-lobatto-spectral = { path = "path/to/lobatto-spectral" }
+lobatto-spectral = "0.1.0"
 ```
 
 ```rust
 use lobatto_spectral::solver::{BoundaryCondition, PoissonND};
 use std::f64::consts::PI;
 
-// Solve (M + K) u = f on [0, 1]^3 with a single element of order r=20 per direction.
+// Solve (I α -  β Δ) u = f on [0, 1]^3 with a single element of order r=20 per direction.
 let solver = PoissonND::<3>::new(
     [1.0; 3],                          // domain lengths  L_d
     [0.0; 3],                          // left boundaries x_{l,d}
@@ -65,20 +64,20 @@ let solver = PoissonND::<3>::new(
 
 let x = solver.get_x(); // tensor-product GLL grid, length 20^3 = 8 000
 
-let w = 2.0 * PI;
+ 
 let mut f: Vec<f64> = x
     .iter()
     .map(|&[x0, x1, x2]| {
-        // example: u = exp(sin(wx0)) * exp(sin(wx1)) * exp(sin(wx2))
-        // evaluate the right-hand side α u - β Δu here
-        0.0
+        // evaluate the right-hand side f here
+        (PI * x0).sin()*(PI * x1).sin()*(PI * x2).sin()
     })
     .collect();
 
 solver.solve_in_place(&mut f); // f now contains the solution u at the GLL nodes
 ```
 
-For a complete 5-D benchmark see [`examples/laplace_5d.rs`](examples/laplace_5d.rs).
+For a complete 5-D benchmark see
+[`examples/laplace_5d.rs`](https://github.com/OndoMathX/QuadratiX/blob/main/lobatto-spectral/examples/laplace_5d.rs).
 
 ---
 
@@ -134,7 +133,7 @@ cargo bench
 
 | Crate | Purpose |
 |-------|---------|
-| [`lobatto`](../lobatto) | GLL quadrature, collocation basis, differentiation and interpolation |
+| [`lobatto`](https://crates.io/crates/lobatto) | GLL quadrature, collocation basis, differentiation and interpolation |
 | [`nalgebra`](https://nalgebra.org) | Eigendecomposition and matrix-vector products |
 | [`rayon`](https://github.com/rayon-rs/rayon) | Data-parallel fibre sweeps |
 

@@ -74,7 +74,6 @@ let solver = PoissonND::<2>::new(
 
 let x = solver.get_x(); // tensor-product GLL grid, length (8·4)² = 1024
 
-let w = 2.0 * PI;
 let mut f: Vec<Complex<f64>> = x
     .iter()
     .map(|&[xi, yi]| {
@@ -87,7 +86,7 @@ solver.solve_in_place(&mut f); // f now contains the solution u at the GLL nodes
 ```
 
 For a complete 5-D accuracy and timing benchmark see
-[`examples/laplace_5d.rs`](examples/laplace_5d.rs).
+[`examples/laplace_5d.rs`](https://github.com/OndoMathX/QuadratiX/blob/main/lobatto-fft/examples/laplace_5d.rs).
 
 ---
 

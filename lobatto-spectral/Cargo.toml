@@ -16,7 +16,7 @@ harness = false
 rustdoc-args = ["--html-in-header", "katex.html"]
 
 [dependencies]
-lobatto = { path = "../lobatto", version = "0.1.0" }
+lobatto = "0.1.1"
 nalgebra = "0.34.1"
 rustfft = "6.3.0"
 rayon = "1"

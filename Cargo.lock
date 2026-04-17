@@ -384,7 +384,7 @@ name = "lobatto-spectral"
 version = "0.1.0"
 dependencies = [
  "criterion",
- "lobatto 0.1.1",
+ "lobatto 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "nalgebra",
  "rayon",
  "rustfft",
