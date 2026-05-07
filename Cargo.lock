@@ -352,18 +352,18 @@ checksum = "2874a2af47a2325c2001a6e6fad9b16a53b802102b528163885171cf92b15976"
 [[package]]
 name = "lobatto"
 version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9eaed95b5d0e6bdd658836bc675b27b1343127fc795a20e3aaa39a44b27e09d"
 dependencies = [
- "criterion",
  "nalgebra",
  "rayon",
 ]
 
 [[package]]
 name = "lobatto"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9eaed95b5d0e6bdd658836bc675b27b1343127fc795a20e3aaa39a44b27e09d"
+version = "0.1.2"
 dependencies = [
+ "criterion",
  "nalgebra",
  "rayon",
 ]
@@ -373,7 +373,7 @@ name = "lobatto-fft"
 version = "0.1.1"
 dependencies = [
  "criterion",
- "lobatto 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "lobatto 0.1.1",
  "nalgebra",
  "rayon",
  "rustfft",
@@ -384,7 +384,7 @@ name = "lobatto-spectral"
 version = "0.1.1"
 dependencies = [
  "criterion",
- "lobatto 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "lobatto 0.1.1",
  "nalgebra",
  "rayon",
  "rustfft",
