@@ -57,6 +57,22 @@ fn assert_close(a: &[f64], b: &[f64], tol: f64) {
     }
 }
 
+/// Apply GLE `diff_transpose(dir)` to each of `n` elements (AoS layout, `dofs` dofs each).
+fn gll_t_batch_ref(
+    v_in_aos: &[f64],
+    n: usize,
+    dofs: usize,
+    dir: usize,
+    gle: &CollocationBasis,
+) -> Vec<f64> {
+    let mut out = vec![0.0_f64; n * dofs];
+    for i in 0..n {
+        let s = dofs * i;
+        gle.diff_transpose(dir, &v_in_aos[s..s + dofs], &mut out[s..s + dofs]);
+    }
+    out
+}
+
 /// Apply GLE `diff(dir)` to each of `n` elements (AoS layout, `dofs` dofs each).
 fn gll_batch_ref(
     v_in_aos: &[f64],
@@ -695,6 +711,384 @@ fn test_dy_q666_q666_batch() {
     let v_in_soa = aos_to_soa(&v_in_aos, N, 49, 7);
     let mut v_out_soa = vec![0.0_f64; 343 * N];
     dy_q666_q666::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 49, 7);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+// ── diff / diff_transpose tests on non-symmetric grids ───────────────────────
+
+fn diff_ref(basis: &CollocationBasis, dim: usize, v_in: &[f64]) -> Vec<f64> {
+    let d = basis.diff_matrix(dim);
+    (d * nalgebra::DVector::from_column_slice(v_in)).iter().copied().collect()
+}
+
+fn diff_transpose_ref(basis: &CollocationBasis, dim: usize, v_in: &[f64]) -> Vec<f64> {
+    let d = basis.diff_matrix(dim);
+    (d.transpose() * nalgebra::DVector::from_column_slice(v_in)).iter().copied().collect()
+}
+
+#[test]
+fn test_diff_1d() {
+    let basis = CollocationBasis::new(vec![(5, Gauss::Lobatto)]);
+    let v_in = seeded_vec(5);
+    let mut v_out = vec![0.0_f64; 5];
+    basis.diff(0, &v_in, &mut v_out);
+    assert_close(&v_out, &diff_ref(&basis, 0, &v_in), 1e-14);
+}
+
+#[test]
+fn test_diff_2d_nonsymmetric_dx() {
+    let basis = CollocationBasis::new(vec![(3, Gauss::Lobatto), (5, Gauss::Lobatto)]);
+    let v_in = seeded_vec(15);
+    let mut v_out = vec![0.0_f64; 15];
+    basis.diff(0, &v_in, &mut v_out);
+    assert_close(&v_out, &diff_ref(&basis, 0, &v_in), 1e-14);
+}
+
+#[test]
+fn test_diff_2d_nonsymmetric_dy() {
+    let basis = CollocationBasis::new(vec![(3, Gauss::Lobatto), (5, Gauss::Lobatto)]);
+    let v_in = seeded_vec(15);
+    let mut v_out = vec![0.0_f64; 15];
+    basis.diff(1, &v_in, &mut v_out);
+    assert_close(&v_out, &diff_ref(&basis, 1, &v_in), 1e-14);
+}
+
+#[test]
+fn test_diff_3d_nonsymmetric_dz() {
+    let basis = CollocationBasis::new(vec![(3, Gauss::Lobatto), (4, Gauss::Lobatto), (5, Gauss::Lobatto)]);
+    let v_in = seeded_vec(60);
+    let mut v_out = vec![0.0_f64; 60];
+    basis.diff(2, &v_in, &mut v_out);
+    assert_close(&v_out, &diff_ref(&basis, 2, &v_in), 1e-14);
+}
+
+#[test]
+fn test_diff_transpose_1d() {
+    let basis = CollocationBasis::new(vec![(5, Gauss::Lobatto)]);
+    let v_in = seeded_vec(5);
+    let mut v_out = vec![0.0_f64; 5];
+    basis.diff_transpose(0, &v_in, &mut v_out);
+    assert_close(&v_out, &diff_transpose_ref(&basis, 0, &v_in), 1e-14);
+}
+
+#[test]
+fn test_diff_transpose_2d_nonsymmetric_dx() {
+    let basis = CollocationBasis::new(vec![(3, Gauss::Lobatto), (5, Gauss::Lobatto)]);
+    let v_in = seeded_vec(15);
+    let mut v_out = vec![0.0_f64; 15];
+    basis.diff_transpose(0, &v_in, &mut v_out);
+    assert_close(&v_out, &diff_transpose_ref(&basis, 0, &v_in), 1e-14);
+}
+
+#[test]
+fn test_diff_transpose_2d_nonsymmetric_dy() {
+    let basis = CollocationBasis::new(vec![(3, Gauss::Lobatto), (5, Gauss::Lobatto)]);
+    let v_in = seeded_vec(15);
+    let mut v_out = vec![0.0_f64; 15];
+    basis.diff_transpose(1, &v_in, &mut v_out);
+    assert_close(&v_out, &diff_transpose_ref(&basis, 1, &v_in), 1e-14);
+}
+
+#[test]
+fn test_diff_transpose_3d_nonsymmetric_dz() {
+    let basis = CollocationBasis::new(vec![(3, Gauss::Lobatto), (4, Gauss::Lobatto), (5, Gauss::Lobatto)]);
+    let v_in = seeded_vec(60);
+    let mut v_out = vec![0.0_f64; 60];
+    basis.diff_transpose(2, &v_in, &mut v_out);
+    assert_close(&v_out, &diff_transpose_ref(&basis, 2, &v_in), 1e-14);
+}
+
+// ── HC transpose N=1 tests vs diff_transpose ────────────────────────────────
+//
+// With N=1 the SoA layout matches AoS, so functions can be called directly.
+
+#[test]
+fn test_dx_t_q3_q3() {
+    let v_in = seeded_vec(4);
+    let mut v_out = vec![0.0_f64; 4];
+    dx_t_q3_q3::<1>(&v_in, &mut v_out);
+    let gle = CollocationBasis::new(vec![(4, Gauss::Lobatto)]);
+    assert_close(&v_out, &diff_transpose_ref(&gle, 0, &v_in), 1e-10);
+}
+
+#[test]
+fn test_dy_t_q33_q33() {
+    let v_in = seeded_vec(16);
+    let mut v_out = vec![0.0_f64; 16];
+    dy_t_q33_q33::<1>(&v_in, &mut v_out);
+    let gle = CollocationBasis::new(vec![(4, Gauss::Lobatto), (4, Gauss::Lobatto)]);
+    assert_close(&v_out, &diff_transpose_ref(&gle, 1, &v_in), 1e-10);
+}
+
+#[test]
+fn test_dz_t_q333_q333() {
+    let v_in = seeded_vec(64);
+    let mut v_out = vec![0.0_f64; 64];
+    dz_t_q333_q333::<1>(&v_in, &mut v_out);
+    let gle = CollocationBasis::new(vec![(4, Gauss::Lobatto), (4, Gauss::Lobatto), (4, Gauss::Lobatto)]);
+    assert_close(&v_out, &diff_transpose_ref(&gle, 2, &v_in), 1e-10);
+}
+
+#[test]
+fn test_dx_t_q4_q4() {
+    let v_in = seeded_vec(5);
+    let mut v_out = vec![0.0_f64; 5];
+    dx_t_q4_q4::<1>(&v_in, &mut v_out);
+    let gle = CollocationBasis::new(vec![(5, Gauss::Lobatto)]);
+    assert_close(&v_out, &diff_transpose_ref(&gle, 0, &v_in), 1e-10);
+}
+
+#[test]
+fn test_dy_t_q44_q44() {
+    let v_in = seeded_vec(25);
+    let mut v_out = vec![0.0_f64; 25];
+    dy_t_q44_q44::<1>(&v_in, &mut v_out);
+    let gle = CollocationBasis::new(vec![(5, Gauss::Lobatto), (5, Gauss::Lobatto)]);
+    assert_close(&v_out, &diff_transpose_ref(&gle, 1, &v_in), 1e-10);
+}
+
+#[test]
+fn test_dz_t_q444_q444() {
+    let v_in = seeded_vec(125);
+    let mut v_out = vec![0.0_f64; 125];
+    dz_t_q444_q444::<1>(&v_in, &mut v_out);
+    let gle = CollocationBasis::new(vec![(5, Gauss::Lobatto), (5, Gauss::Lobatto), (5, Gauss::Lobatto)]);
+    assert_close(&v_out, &diff_transpose_ref(&gle, 2, &v_in), 1e-10);
+}
+
+#[test]
+fn test_dx_t_q5_q5() {
+    let v_in = seeded_vec(6);
+    let mut v_out = vec![0.0_f64; 6];
+    dx_t_q5_q5::<1>(&v_in, &mut v_out);
+    let gle = CollocationBasis::new(vec![(6, Gauss::Lobatto)]);
+    assert_close(&v_out, &diff_transpose_ref(&gle, 0, &v_in), 1e-10);
+}
+
+#[test]
+fn test_dy_t_q55_q55() {
+    let v_in = seeded_vec(36);
+    let mut v_out = vec![0.0_f64; 36];
+    dy_t_q55_q55::<1>(&v_in, &mut v_out);
+    let gle = CollocationBasis::new(vec![(6, Gauss::Lobatto), (6, Gauss::Lobatto)]);
+    assert_close(&v_out, &diff_transpose_ref(&gle, 1, &v_in), 1e-10);
+}
+
+#[test]
+fn test_dz_t_q555_q555() {
+    let v_in = seeded_vec(216);
+    let mut v_out = vec![0.0_f64; 216];
+    dz_t_q555_q555::<1>(&v_in, &mut v_out);
+    let gle = CollocationBasis::new(vec![(6, Gauss::Lobatto), (6, Gauss::Lobatto), (6, Gauss::Lobatto)]);
+    assert_close(&v_out, &diff_transpose_ref(&gle, 2, &v_in), 1e-10);
+}
+
+#[test]
+fn test_dx_t_q6_q6() {
+    let v_in = seeded_vec(7);
+    let mut v_out = vec![0.0_f64; 7];
+    dx_t_q6_q6::<1>(&v_in, &mut v_out);
+    let gle = CollocationBasis::new(vec![(7, Gauss::Lobatto)]);
+    assert_close(&v_out, &diff_transpose_ref(&gle, 0, &v_in), 1e-10);
+}
+
+#[test]
+fn test_dy_t_q66_q66() {
+    let v_in = seeded_vec(49);
+    let mut v_out = vec![0.0_f64; 49];
+    dy_t_q66_q66::<1>(&v_in, &mut v_out);
+    let gle = CollocationBasis::new(vec![(7, Gauss::Lobatto), (7, Gauss::Lobatto)]);
+    assert_close(&v_out, &diff_transpose_ref(&gle, 1, &v_in), 1e-10);
+}
+
+#[test]
+fn test_dz_t_q666_q666() {
+    let v_in = seeded_vec(343);
+    let mut v_out = vec![0.0_f64; 343];
+    dz_t_q666_q666::<1>(&v_in, &mut v_out);
+    let gle = CollocationBasis::new(vec![(7, Gauss::Lobatto), (7, Gauss::Lobatto), (7, Gauss::Lobatto)]);
+    assert_close(&v_out, &diff_transpose_ref(&gle, 2, &v_in), 1e-10);
+}
+
+// ── HC transpose batch tests vs diff_transpose ───────────────────────────────
+
+#[test]
+fn test_dx_t_q3_q3_batch() {
+    const N: usize = 8;
+    let v_in_aos = seeded_vec(4 * N);
+    let gle = CollocationBasis::new(vec![(4, Gauss::Lobatto)]);
+    let ref_out = gll_t_batch_ref(&v_in_aos, N, 4, 0, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 1, 4);
+    let mut v_out_soa = vec![0.0_f64; 4 * N];
+    dx_t_q3_q3::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 1, 4);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dy_t_q33_q33_batch() {
+    const N: usize = 8;
+    let v_in_aos = seeded_vec(16 * N);
+    let gle = CollocationBasis::new(vec![(4, Gauss::Lobatto), (4, Gauss::Lobatto)]);
+    let ref_out = gll_t_batch_ref(&v_in_aos, N, 16, 1, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 4, 4);
+    let mut v_out_soa = vec![0.0_f64; 16 * N];
+    dy_t_q33_q33::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 4, 4);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dz_t_q333_q333_batch() {
+    const N: usize = 4;
+    let v_in_aos = seeded_vec(64 * N);
+    let gle = CollocationBasis::new(vec![(4, Gauss::Lobatto), (4, Gauss::Lobatto), (4, Gauss::Lobatto)]);
+    let ref_out = gll_t_batch_ref(&v_in_aos, N, 64, 2, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 16, 4);
+    let mut v_out_soa = vec![0.0_f64; 64 * N];
+    dz_t_q333_q333::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 16, 4);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dx_t_q4_q4_batch() {
+    const N: usize = 8;
+    let v_in_aos = seeded_vec(5 * N);
+    let gle = CollocationBasis::new(vec![(5, Gauss::Lobatto)]);
+    let ref_out = gll_t_batch_ref(&v_in_aos, N, 5, 0, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 1, 5);
+    let mut v_out_soa = vec![0.0_f64; 5 * N];
+    dx_t_q4_q4::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 1, 5);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dy_t_q44_q44_batch() {
+    const N: usize = 8;
+    let v_in_aos = seeded_vec(25 * N);
+    let gle = CollocationBasis::new(vec![(5, Gauss::Lobatto), (5, Gauss::Lobatto)]);
+    let ref_out = gll_t_batch_ref(&v_in_aos, N, 25, 1, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 5, 5);
+    let mut v_out_soa = vec![0.0_f64; 25 * N];
+    dy_t_q44_q44::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 5, 5);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dz_t_q444_q444_batch() {
+    const N: usize = 4;
+    let v_in_aos = seeded_vec(125 * N);
+    let gle = CollocationBasis::new(vec![(5, Gauss::Lobatto), (5, Gauss::Lobatto), (5, Gauss::Lobatto)]);
+    let ref_out = gll_t_batch_ref(&v_in_aos, N, 125, 2, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 25, 5);
+    let mut v_out_soa = vec![0.0_f64; 125 * N];
+    dz_t_q444_q444::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 25, 5);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dx_t_q5_q5_batch() {
+    const N: usize = 8;
+    let v_in_aos = seeded_vec(6 * N);
+    let gle = CollocationBasis::new(vec![(6, Gauss::Lobatto)]);
+    let ref_out = gll_t_batch_ref(&v_in_aos, N, 6, 0, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 1, 6);
+    let mut v_out_soa = vec![0.0_f64; 6 * N];
+    dx_t_q5_q5::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 1, 6);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dy_t_q55_q55_batch() {
+    const N: usize = 8;
+    let v_in_aos = seeded_vec(36 * N);
+    let gle = CollocationBasis::new(vec![(6, Gauss::Lobatto), (6, Gauss::Lobatto)]);
+    let ref_out = gll_t_batch_ref(&v_in_aos, N, 36, 1, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 6, 6);
+    let mut v_out_soa = vec![0.0_f64; 36 * N];
+    dy_t_q55_q55::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 6, 6);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dz_t_q555_q555_batch() {
+    const N: usize = 4;
+    let v_in_aos = seeded_vec(216 * N);
+    let gle = CollocationBasis::new(vec![(6, Gauss::Lobatto), (6, Gauss::Lobatto), (6, Gauss::Lobatto)]);
+    let ref_out = gll_t_batch_ref(&v_in_aos, N, 216, 2, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 36, 6);
+    let mut v_out_soa = vec![0.0_f64; 216 * N];
+    dz_t_q555_q555::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 36, 6);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dx_t_q6_q6_batch() {
+    const N: usize = 8;
+    let v_in_aos = seeded_vec(7 * N);
+    let gle = CollocationBasis::new(vec![(7, Gauss::Lobatto)]);
+    let ref_out = gll_t_batch_ref(&v_in_aos, N, 7, 0, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 1, 7);
+    let mut v_out_soa = vec![0.0_f64; 7 * N];
+    dx_t_q6_q6::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 1, 7);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dy_t_q66_q66_batch() {
+    const N: usize = 8;
+    let v_in_aos = seeded_vec(49 * N);
+    let gle = CollocationBasis::new(vec![(7, Gauss::Lobatto), (7, Gauss::Lobatto)]);
+    let ref_out = gll_t_batch_ref(&v_in_aos, N, 49, 1, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 7, 7);
+    let mut v_out_soa = vec![0.0_f64; 49 * N];
+    dy_t_q66_q66::<N>(&v_in_soa, &mut v_out_soa);
+    let v_out_aos = soa_to_aos(&v_out_soa, N, 7, 7);
+
+    assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+#[test]
+fn test_dz_t_q666_q666_batch() {
+    const N: usize = 4;
+    let v_in_aos = seeded_vec(343 * N);
+    let gle = CollocationBasis::new(vec![(7, Gauss::Lobatto), (7, Gauss::Lobatto), (7, Gauss::Lobatto)]);
+    let ref_out = gll_t_batch_ref(&v_in_aos, N, 343, 2, &gle);
+
+    let v_in_soa = aos_to_soa(&v_in_aos, N, 49, 7);
+    let mut v_out_soa = vec![0.0_f64; 343 * N];
+    dz_t_q666_q666::<N>(&v_in_soa, &mut v_out_soa);
     let v_out_aos = soa_to_aos(&v_out_soa, N, 49, 7);
 
     assert_close(&v_out_aos, &ref_out, 1e-10);

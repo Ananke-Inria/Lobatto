@@ -10,6 +10,6 @@
 //!
 //! | Module | Contents |
 //! |--------|----------|
-//! | [`hot`] | **HoT** — single spectral element per direction; direct eigendecomposition of the local symbol. Supports Periodic, Dirichlet, and Neumann BCs. |
+//! | [`solver`] | **solver** — single spectral element per direction; direct eigendecomposition of the local symbol. Supports Periodic, Dirichlet, and Neumann BCs. |
 
 pub mod solver;

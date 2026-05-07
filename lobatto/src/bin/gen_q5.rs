@@ -189,4 +189,57 @@ fn main() {
         println!("; }}");
     }
     println!("}}");
+
+    // ── Transpose kernel ─────────────────────────────────────────────────────
+    println!();
+
+    let dt = d.transpose();
+    let n_half = n / 2;
+
+    let fmt_coeff_t = |v: f64| -> String {
+        let av = v.abs();
+        if av < 1e-12 { return "0.0".to_string(); }
+        if (av.round() - av).abs() < 1e-10 && av.round() <= 20.0 {
+            return format!("{:.1}", av);
+        }
+        if let Some(idx) = seen.iter().position(|&s| (s - av).abs() < 1e-12) {
+            return format!("DX5[{idx}]");
+        }
+        format!("{av:.20}")
+    };
+
+    println!("fn _d_t_q5_q5<const N: usize, const M: usize>(in_q5: &[f64], out_q5: &mut [f64]) {{");
+    println!("    let a = &in_q5[0..N];");
+    println!("    let b = &in_q5[M * N..M * N + N];");
+    println!("    let c = &in_q5[2 * M * N..2 * M * N + N];");
+    println!("    let d = &in_q5[3 * M * N..3 * M * N + N];");
+    println!("    let e = &in_q5[4 * M * N..4 * M * N + N];");
+    println!("    let f = &in_q5[5 * M * N..5 * M * N + N];");
+    println!();
+
+    for row in 0..n {
+        let coeffs: Vec<f64> = if row < n_half {
+            (0..n).map(|col| dt[(row, col)]).collect()
+        } else {
+            (0..n).map(|col| -dt[(n - 1 - row, n - 1 - col)]).collect()
+        };
+        let offset = if row == 0 { "i".to_string() } else { format!("{row} * M * N + i") };
+        print!("    for i in 0..N {{ out_q5[{offset}] =");
+        let mut first = true;
+        for col in 0..n {
+            let v = coeffs[col];
+            if v.abs() < 1e-14 { continue; }
+            let coeff_str = fmt_coeff_t(v);
+            let node = node_names[col];
+            if first && v > 0.0 {
+                print!(" {coeff_str} * {node}[i]");
+            } else {
+                let sign = if v > 0.0 { " +" } else { " -" };
+                print!("{sign} {coeff_str} * {node}[i]");
+            }
+            first = false;
+        }
+        println!("; }}");
+    }
+    println!("}}");
 }

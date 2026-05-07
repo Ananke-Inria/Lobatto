@@ -347,6 +347,292 @@ fn bench_dx_q66(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_dx_t_q3(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dx_t_q3_batch");
+
+    group.throughput(Throughput::Elements(4));
+    let v_in_1 = seeded_vec(4);
+    let mut v_out_1 = vec![0.0_f64; 4];
+    group.bench_function(BenchmarkId::new("hc", 1), |b| {
+        b.iter(|| dx_t_q3_q3::<1>(black_box(&v_in_1), &mut v_out_1))
+    });
+    let v_in_gle: Vec<f64> = seeded_vec(4);
+    let mut v_out_gle: Vec<f64> = vec![0.0; 4];
+    let gle = CollocationBasis::new(vec![(4, Gauss::Lobatto)]);
+    group.bench_function(BenchmarkId::new("Basis::diff_transpose", 1), |b| {
+        b.iter(|| gle.diff_transpose(0, black_box(&v_in_gle), &mut v_out_gle))
+    });
+
+    macro_rules! bench_n {
+        ($n:literal) => {{
+            group.throughput(Throughput::Elements($n * 4));
+            let v_in = aos_to_soa(&seeded_vec(4 * $n), $n, 1, 4);
+            let mut v_out = vec![0.0_f64; 4 * $n];
+            group.bench_function(BenchmarkId::new("hc", $n), |b| {
+                b.iter(|| dx_t_q3_q3::<$n>(black_box(&v_in), &mut v_out))
+            });
+        }};
+    }
+
+    bench_n!(2);
+    bench_n!(4);
+    bench_n!(8);
+    bench_n!(16);
+
+    group.finish();
+}
+
+fn bench_dx_t_q33(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dx_t_q33_batch");
+
+    group.throughput(Throughput::Elements(16));
+    let v_in_1 = seeded_vec(16);
+    let mut v_out_1 = vec![0.0_f64; 16];
+    group.bench_function(BenchmarkId::new("hc", 1), |b| {
+        b.iter(|| dx_t_q33_q33::<1>(black_box(&v_in_1), &mut v_out_1))
+    });
+    let v_in_gle: Vec<f64> = seeded_vec(16);
+    let mut v_out_gle: Vec<f64> = vec![0.0; 16];
+    let gle = CollocationBasis::new(vec![(4, Gauss::Lobatto), (4, Gauss::Lobatto)]);
+    group.bench_function(BenchmarkId::new("Basis::diff_transpose", 1), |b| {
+        b.iter(|| gle.diff_transpose(0, black_box(&v_in_gle), &mut v_out_gle))
+    });
+
+    macro_rules! bench_n {
+        ($n:literal) => {{
+            group.throughput(Throughput::Elements($n * 16));
+            let v_in = aos_to_soa(&seeded_vec(16 * $n), $n, 4, 4);
+            let mut v_out = vec![0.0_f64; 16 * $n];
+            group.bench_function(BenchmarkId::new("hc", $n), |b| {
+                b.iter(|| dx_t_q33_q33::<$n>(black_box(&v_in), &mut v_out))
+            });
+        }};
+    }
+
+    bench_n!(2);
+    bench_n!(4);
+    bench_n!(8);
+    bench_n!(16);
+
+    group.finish();
+}
+
+fn bench_dx_t_q4(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dx_t_q4_batch");
+
+    group.throughput(Throughput::Elements(5));
+    let v_in_1 = seeded_vec(5);
+    let mut v_out_1 = vec![0.0_f64; 5];
+    group.bench_function(BenchmarkId::new("hc", 1), |b| {
+        b.iter(|| dx_t_q4_q4::<1>(black_box(&v_in_1), &mut v_out_1))
+    });
+    let v_in_gle: Vec<f64> = seeded_vec(5);
+    let mut v_out_gle: Vec<f64> = vec![0.0; 5];
+    let gle = CollocationBasis::new(vec![(5, Gauss::Lobatto)]);
+    group.bench_function(BenchmarkId::new("Basis::diff_transpose", 1), |b| {
+        b.iter(|| gle.diff_transpose(0, black_box(&v_in_gle), &mut v_out_gle))
+    });
+
+    macro_rules! bench_n {
+        ($n:literal) => {{
+            group.throughput(Throughput::Elements($n * 5));
+            let v_in = aos_to_soa(&seeded_vec(5 * $n), $n, 1, 5);
+            let mut v_out = vec![0.0_f64; 5 * $n];
+            group.bench_function(BenchmarkId::new("hc", $n), |b| {
+                b.iter(|| dx_t_q4_q4::<$n>(black_box(&v_in), &mut v_out))
+            });
+        }};
+    }
+
+    bench_n!(2);
+    bench_n!(4);
+    bench_n!(8);
+    bench_n!(16);
+    bench_n!(32);
+
+    group.finish();
+}
+
+fn bench_dx_t_q44(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dx_t_q44_batch");
+
+    group.throughput(Throughput::Elements(25));
+    let v_in_1 = seeded_vec(25);
+    let mut v_out_1 = vec![0.0_f64; 25];
+    group.bench_function(BenchmarkId::new("hc", 1), |b| {
+        b.iter(|| dx_t_q44_q44::<1>(black_box(&v_in_1), &mut v_out_1))
+    });
+    let v_in_gle: Vec<f64> = seeded_vec(25);
+    let mut v_out_gle: Vec<f64> = vec![0.0; 25];
+    let gle = CollocationBasis::new(vec![(5, Gauss::Lobatto), (5, Gauss::Lobatto)]);
+    group.bench_function(BenchmarkId::new("Basis::diff_transpose", 1), |b| {
+        b.iter(|| gle.diff_transpose(0, black_box(&v_in_gle), &mut v_out_gle))
+    });
+
+    macro_rules! bench_n {
+        ($n:literal) => {{
+            group.throughput(Throughput::Elements($n * 25));
+            let v_in = aos_to_soa(&seeded_vec(25 * $n), $n, 5, 5);
+            let mut v_out = vec![0.0_f64; 25 * $n];
+            group.bench_function(BenchmarkId::new("hc", $n), |b| {
+                b.iter(|| dx_t_q44_q44::<$n>(black_box(&v_in), &mut v_out))
+            });
+        }};
+    }
+
+    bench_n!(2);
+    bench_n!(4);
+    bench_n!(8);
+    bench_n!(16);
+    bench_n!(32);
+
+    group.finish();
+}
+
+fn bench_dx_t_q5(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dx_t_q5_batch");
+
+    group.throughput(Throughput::Elements(6));
+    let v_in_1 = seeded_vec(6);
+    let mut v_out_1 = vec![0.0_f64; 6];
+    group.bench_function(BenchmarkId::new("hc", 1), |b| {
+        b.iter(|| dx_t_q5_q5::<1>(black_box(&v_in_1), &mut v_out_1))
+    });
+    let v_in_gle: Vec<f64> = seeded_vec(6);
+    let mut v_out_gle: Vec<f64> = vec![0.0; 6];
+    let gle = CollocationBasis::new(vec![(6, Gauss::Lobatto)]);
+    group.bench_function(BenchmarkId::new("Basis::diff_transpose", 1), |b| {
+        b.iter(|| gle.diff_transpose(0, black_box(&v_in_gle), &mut v_out_gle))
+    });
+
+    macro_rules! bench_n {
+        ($n:literal) => {{
+            group.throughput(Throughput::Elements($n * 6));
+            let v_in = aos_to_soa(&seeded_vec(6 * $n), $n, 1, 6);
+            let mut v_out = vec![0.0_f64; 6 * $n];
+            group.bench_function(BenchmarkId::new("hc", $n), |b| {
+                b.iter(|| dx_t_q5_q5::<$n>(black_box(&v_in), &mut v_out))
+            });
+        }};
+    }
+
+    bench_n!(2);
+    bench_n!(4);
+    bench_n!(8);
+    bench_n!(16);
+    bench_n!(32);
+
+    group.finish();
+}
+
+fn bench_dx_t_q55(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dx_t_q55_batch");
+
+    group.throughput(Throughput::Elements(36));
+    let v_in_1 = seeded_vec(36);
+    let mut v_out_1 = vec![0.0_f64; 36];
+    group.bench_function(BenchmarkId::new("hc", 1), |b| {
+        b.iter(|| dx_t_q55_q55::<1>(black_box(&v_in_1), &mut v_out_1))
+    });
+    let v_in_gle: Vec<f64> = seeded_vec(36);
+    let mut v_out_gle: Vec<f64> = vec![0.0; 36];
+    let gle = CollocationBasis::new(vec![(6, Gauss::Lobatto), (6, Gauss::Lobatto)]);
+    group.bench_function(BenchmarkId::new("Basis::diff_transpose", 1), |b| {
+        b.iter(|| gle.diff_transpose(0, black_box(&v_in_gle), &mut v_out_gle))
+    });
+
+    macro_rules! bench_n {
+        ($n:literal) => {{
+            group.throughput(Throughput::Elements($n * 36));
+            let v_in = aos_to_soa(&seeded_vec(36 * $n), $n, 6, 6);
+            let mut v_out = vec![0.0_f64; 36 * $n];
+            group.bench_function(BenchmarkId::new("hc", $n), |b| {
+                b.iter(|| dx_t_q55_q55::<$n>(black_box(&v_in), &mut v_out))
+            });
+        }};
+    }
+
+    bench_n!(2);
+    bench_n!(4);
+    bench_n!(8);
+    bench_n!(16);
+    bench_n!(32);
+
+    group.finish();
+}
+
+fn bench_dx_t_q6(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dx_t_q6_batch");
+
+    group.throughput(Throughput::Elements(7));
+    let v_in_1 = seeded_vec(7);
+    let mut v_out_1 = vec![0.0_f64; 7];
+    group.bench_function(BenchmarkId::new("hc", 1), |b| {
+        b.iter(|| dx_t_q6_q6::<1>(black_box(&v_in_1), &mut v_out_1))
+    });
+    let v_in_gle: Vec<f64> = seeded_vec(7);
+    let mut v_out_gle: Vec<f64> = vec![0.0; 7];
+    let gle = CollocationBasis::new(vec![(7, Gauss::Lobatto)]);
+    group.bench_function(BenchmarkId::new("Basis::diff_transpose", 1), |b| {
+        b.iter(|| gle.diff_transpose(0, black_box(&v_in_gle), &mut v_out_gle))
+    });
+
+    macro_rules! bench_n {
+        ($n:literal) => {{
+            group.throughput(Throughput::Elements($n * 7));
+            let v_in = aos_to_soa(&seeded_vec(7 * $n), $n, 1, 7);
+            let mut v_out = vec![0.0_f64; 7 * $n];
+            group.bench_function(BenchmarkId::new("hc", $n), |b| {
+                b.iter(|| dx_t_q6_q6::<$n>(black_box(&v_in), &mut v_out))
+            });
+        }};
+    }
+
+    bench_n!(2);
+    bench_n!(4);
+    bench_n!(8);
+    bench_n!(16);
+    bench_n!(32);
+
+    group.finish();
+}
+
+fn bench_dx_t_q66(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dx_t_q66_batch");
+
+    group.throughput(Throughput::Elements(49));
+    let v_in_1 = seeded_vec(49);
+    let mut v_out_1 = vec![0.0_f64; 49];
+    group.bench_function(BenchmarkId::new("hc", 1), |b| {
+        b.iter(|| dx_t_q66_q66::<1>(black_box(&v_in_1), &mut v_out_1))
+    });
+    let v_in_gle: Vec<f64> = seeded_vec(49);
+    let mut v_out_gle: Vec<f64> = vec![0.0; 49];
+    let gle = CollocationBasis::new(vec![(7, Gauss::Lobatto), (7, Gauss::Lobatto)]);
+    group.bench_function(BenchmarkId::new("Basis::diff_transpose", 1), |b| {
+        b.iter(|| gle.diff_transpose(0, black_box(&v_in_gle), &mut v_out_gle))
+    });
+
+    macro_rules! bench_n {
+        ($n:literal) => {{
+            group.throughput(Throughput::Elements($n * 49));
+            let v_in = aos_to_soa(&seeded_vec(49 * $n), $n, 7, 7);
+            let mut v_out = vec![0.0_f64; 49 * $n];
+            group.bench_function(BenchmarkId::new("hc", $n), |b| {
+                b.iter(|| dx_t_q66_q66::<$n>(black_box(&v_in), &mut v_out))
+            });
+        }};
+    }
+
+    bench_n!(2);
+    bench_n!(4);
+    bench_n!(8);
+    bench_n!(16);
+    bench_n!(32);
+
+    group.finish();
+}
+
 fn bench_eval(c: &mut Criterion) {
     const N_PTS: usize = 1000;
 
@@ -383,12 +669,20 @@ criterion_group!(
     benches,
     bench_dx_q3,
     bench_dx_q33,
+    bench_dx_t_q3,
+    bench_dx_t_q33,
     bench_dx_q4,
     bench_dx_q44,
+    bench_dx_t_q4,
+    bench_dx_t_q44,
     bench_dx_q5,
     bench_dx_q55,
+    bench_dx_t_q5,
+    bench_dx_t_q55,
     bench_dx_q6,
     bench_dx_q66,
+    bench_dx_t_q6,
+    bench_dx_t_q66,
     bench_eval,
 );
 criterion_main!(benches);

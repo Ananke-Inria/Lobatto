@@ -121,6 +121,9 @@ pub struct CollocationBasis {
     /// of direction $k$.
     diff_matrices: Vec<DMatrix<f64>>,
 
+    /// Transposes of the 1D differentiation matrices, one per direction.
+    diff_matrices_t: Vec<DMatrix<f64>>,
+
     /// Total number of DOFs: $\prod_k n_k$.
     n_points: usize,
     /// Prefix products of point counts: `n_points_acc[k]` $= n_0 \cdots n_k$.
@@ -174,6 +177,7 @@ impl CollocationBasis {
         let mut weights_1d = vec![vec![1.0]; n];
         let mut points_1d = vec![vec![0.5]; n];
         let mut diff_matrices = vec![DMatrix::<f64>::zeros(1, 1); n];
+        let mut diff_matrices_t = vec![DMatrix::<f64>::zeros(1, 1); n];
 
         for k in 0..n {
             assert!(
@@ -197,6 +201,8 @@ impl CollocationBasis {
                         lagrangian_derivative_interpolation(&points_1d[k], points_1d[k][j], i);
                 }
             }
+
+            diff_matrices_t[k] = diff_matrices[k].transpose();
         }
 
         let mut step = vec![1; n];
@@ -213,12 +219,9 @@ impl CollocationBasis {
             n_points_acc[k] = basis[k].0 * n_points_acc[k - 1];
         }
 
+        step[0] = 0;
         for k in 1..n {
-            step[k] = step[k - 1] * basis[k].0;
-        }
-
-        for k in 0..n {
-            step[k] -= 1;
+            step[k] = n_points_acc[k - 1] - 1;
         }
 
         for k in 0..n {
@@ -252,6 +255,7 @@ impl CollocationBasis {
             weights,
             points,
             diff_matrices,
+            diff_matrices_t,
             n_points,
             n_points_acc,
             step,
@@ -337,6 +341,40 @@ impl CollocationBasis {
             let sol_view = sol_na.rows_with_step(*k, n, step);
             let mut sol_diff_view = sol_diff_na.rows_with_step_mut(*k, n, step);
             diff_matrix.mul_to(&sol_view, &mut sol_diff_view);
+        }
+    }
+
+    /// Apply the transpose of the differentiation operator along direction `dim` in place.
+    /// The matrix $(D^{(\mathrm{dim})})^\top$ is applied fibre-by-fibre over the tensor-product grid.
+    ///
+    /// # Panics
+    /// Panics if `dim ≥ d`, or if `sol`/`sol_diff` have the wrong length.
+    pub fn diff_transpose(&self, dim: usize, sol: &[f64], sol_diff: &mut [f64]) {
+        assert!(
+            dim < self.basis.len(),
+            "Differentiation is not defined in this direction"
+        );
+        assert!(
+            self.n_points == sol.len(),
+            "The input vector does not have the adequate size"
+        );
+        assert!(
+            self.n_points == sol_diff.len(),
+            "The output vector does not have the adequate size"
+        );
+
+        let step = self.step[dim];
+        let start = &self.start[dim];
+        let diff_matrix_t = &self.diff_matrices_t[dim];
+        let n = self.basis[dim].0;
+
+        let sol_na = DVectorView::from_slice(sol, sol.len());
+        let mut sol_diff_na = DVectorViewMut::from_slice(sol_diff, sol_diff.len());
+
+        for k in start {
+            let sol_view = sol_na.rows_with_step(*k, n, step);
+            let mut sol_diff_view = sol_diff_na.rows_with_step_mut(*k, n, step);
+            diff_matrix_t.mul_to(&sol_view, &mut sol_diff_view);
         }
     }
 
