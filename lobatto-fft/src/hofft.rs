@@ -574,24 +574,19 @@ impl Engine {
     /// Evaluate the interpolant of `u` at position `x`.
     ///
     /// `u` must be in the x-increasing layout matching [`get_x`](Self::get_x).
-    /// - `Periodic`: `x` is folded into `[xl, xl+l)` before lookup.
-    /// - `Odd` (Dirichlet) / `Even` (Neumann): `x` must lie in `[xl, xl+l]`.
+    /// `x` must lie in `[xl, xl+l]` for **every** extension; use
+    /// [`eval_extended`](Self::eval_extended) to evaluate the underlying
+    /// extension at positions outside the domain.
     pub fn eval(&self, x: f64, u: &[Complex<f64>]) -> Complex<f64> {
-        let y = match self.extension {
-            Extension::Periodic => (x - self.xl).rem_euclid(self.l) + self.xl,
-            _ => {
-                assert!(
-                    x >= self.xl && x <= self.xl + self.l,
-                    "eval: x={x} outside [{}, {}]",
-                    self.xl,
-                    self.xl + self.l
-                );
-                x
-            }
-        };
+        assert!(
+            x >= self.xl && x <= self.xl + self.l,
+            "eval: x={x} outside [{}, {}]",
+            self.xl,
+            self.xl + self.l
+        );
         let h = self.l / (self.n as f64);
-        let k = (((y - self.xl) / h) as usize).min(self.n - 1);
-        let xi = (y - self.xl - (k as f64) * h) / h;
+        let k = (((x - self.xl) / h) as usize).min(self.n - 1);
+        let xi = (x - self.xl - (k as f64) * h) / h;
         let phi = lagrangian_interpolation(&self.gauss_lobatto_points, &self.bary_weights, xi);
 
         let mut val = Complex::new(0.0_f64, 0.0);
@@ -622,7 +617,43 @@ impl Engine {
         val
     }
 
+    /// Fold `x` into `[xl, xl+l]` according to the extension, returning the folded
+    /// coordinate and the sign of the extended interpolant there
+    /// ($-1$ on odd-reflected copies, $+1$ otherwise).
+    pub(crate) fn fold_extended(&self, x: f64) -> (f64, f64) {
+        match self.extension {
+            Extension::Periodic => ((x - self.xl).rem_euclid(self.l) + self.xl, 1.0),
+            Extension::Odd | Extension::Even => {
+                let t = (x - self.xl).rem_euclid(2.0 * self.l);
+                if t <= self.l {
+                    (self.xl + t, 1.0)
+                } else {
+                    let sign = match self.extension {
+                        Extension::Odd => -1.0,
+                        _ => 1.0,
+                    };
+                    (self.xl + (2.0 * self.l - t), sign)
+                }
+            }
+        }
+    }
+
+    /// Evaluate the extension of the interpolant of `u` at position `x`.
+    ///
+    /// Unlike [`eval`](Self::eval), `x` may lie anywhere: it is folded back into
+    /// `[xl, xl+l]` according to the extension — periodic wrap (`Periodic`),
+    /// even reflection (`Even`/Neumann), or odd reflection with a sign flip
+    /// (`Odd`/Dirichlet) — so the result is consistent with the underlying
+    /// FFT representation.
+    pub fn eval_extended(&self, x: f64, u: &[Complex<f64>]) -> Complex<f64> {
+        let (y, sign) = self.fold_extended(x);
+        self.eval(y, u) * sign
+    }
+
     /// Apply a flow map `lambda` to every grid node and interpolate `u` at the resulting positions.
+    ///
+    /// Positions outside `[xl, xl+l]` are handled by [`eval_extended`](Self::eval_extended),
+    /// i.e. folded back according to the extension.
     ///
     /// Returns a `Vec<Complex<f64>>` of the same length as `u`.
     pub fn convect<F>(&self, lambda: F, u: &[Complex<f64>]) -> Vec<Complex<f64>>
@@ -631,7 +662,7 @@ impl Engine {
     {
         self.get_x()
             .iter()
-            .map(|&x| self.eval(lambda(x), u))
+            .map(|&x| self.eval_extended(lambda(x), u))
             .collect()
     }
 
@@ -982,6 +1013,9 @@ impl<const N: usize> EngineND<N> {
     /// Evaluate the ND interpolant of `u` at a batch of positions.
     ///
     /// - `xs`: query points (length `m`); each `xs[i]` is a coordinate array `[f64; N]`.
+    ///   Every coordinate must lie inside its direction's domain `[xl, xl+l]`,
+    ///   for **every** extension; use [`eval_extended`](Self::eval_extended) to
+    ///   evaluate the underlying extension at positions outside the domain.
     /// - `u`: DOF vector in the column-major tensor-product Gauss-Lobatto layout from [`get_x`](Self::get_x).
     /// - `fu`: output buffer of length `m`; `fu[i]` receives the interpolated value at `xs[i]`.
     ///
@@ -1010,8 +1044,14 @@ impl<const N: usize> EngineND<N> {
             .par_iter()
             .map(|x| {
                 (0..N).fold(0, |acc, d| {
-                    let y = (x[d] - xls[d]).rem_euclid(ls[d]);
-                    let k_d = ((y / hs[d]) as usize).min(ns[d] - 1);
+                    assert!(
+                        x[d] >= xls[d] && x[d] <= xls[d] + ls[d],
+                        "eval: x[{d}]={} outside [{}, {}]",
+                        x[d],
+                        xls[d],
+                        xls[d] + ls[d]
+                    );
+                    let k_d = (((x[d] - xls[d]) / hs[d]) as usize).min(ns[d] - 1);
                     acc + k_d * n_strides[d]
                 })
             })
@@ -1058,13 +1098,7 @@ impl<const N: usize> EngineND<N> {
                     .par_iter()
                     .map(|&i| {
                         let phi: [Vec<f64>; N] = std::array::from_fn(|d| {
-                            let y = match self.planners[d].extension {
-                                Extension::Periodic => {
-                                    (xs[i][d] - xls[d]).rem_euclid(ls[d]) + xls[d]
-                                }
-                                _ => xs[i][d],
-                            };
-                            let xi = (y - xls[d] - (ks[d] as f64) * hs[d]) / hs[d];
+                            let xi = (xs[i][d] - xls[d] - (ks[d] as f64) * hs[d]) / hs[d];
                             lagrangian_interpolation(
                                 &self.planners[d].gauss_lobatto_points,
                                 &self.planners[d].bary_weights,
@@ -1108,7 +1142,37 @@ impl<const N: usize> EngineND<N> {
         }
     }
 
+    /// Evaluate the extension of the ND interpolant of `u` at a batch of positions.
+    ///
+    /// Unlike [`eval`](Self::eval), coordinates may lie anywhere: each direction is
+    /// folded back into its domain according to that direction's extension —
+    /// periodic wrap (`Periodic`), even reflection (`Even`/Neumann), or odd
+    /// reflection with a sign flip (`Odd`/Dirichlet) — so the result is
+    /// consistent with the underlying FFT representation.
+    pub fn eval_extended(&self, xs: &[[f64; N]], u: &[Complex<f64>], fu: &mut [Complex<f64>]) {
+        let folded: Vec<([f64; N], f64)> = xs
+            .par_iter()
+            .map(|x| {
+                let mut sign = 1.0_f64;
+                let y: [f64; N] = std::array::from_fn(|d| {
+                    let (y_d, s_d) = self.planners[d].fold_extended(x[d]);
+                    sign *= s_d;
+                    y_d
+                });
+                (y, sign)
+            })
+            .collect();
+        let ys: Vec<[f64; N]> = folded.iter().map(|&(y, _)| y).collect();
+        self.eval(&ys, u, fu);
+        for (v, &(_, sign)) in fu.iter_mut().zip(&folded) {
+            *v *= sign;
+        }
+    }
+
     /// Apply a flow map `lambda` to every DOF node and interpolate `u` at the resulting positions.
+    ///
+    /// Positions outside the domain are handled by [`eval_extended`](Self::eval_extended),
+    /// i.e. folded back according to each direction's extension.
     ///
     /// Returns a `Vec<Complex<f64>>` of length equal to `u`.
     pub fn convect<F>(&self, lambda: F, u: &[Complex<f64>]) -> Vec<Complex<f64>>
@@ -1118,7 +1182,7 @@ impl<const N: usize> EngineND<N> {
         let xs = self.get_x();
         let shifted: Vec<[f64; N]> = xs.par_iter().map(|&pt| lambda(pt)).collect();
         let mut out = vec![Complex::new(0.0_f64, 0.0); u.len()];
-        self.eval(&shifted, u, &mut out);
+        self.eval_extended(&shifted, u, &mut out);
         out
     }
 

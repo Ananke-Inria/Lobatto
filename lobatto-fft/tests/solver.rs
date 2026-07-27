@@ -1779,3 +1779,163 @@ fn convect_4d_q6() {
         "4D Q6 convect: max error {max_err:.2e} > 1e-10"
     );
 }
+
+// ── eval domain guard and eval_extended ───────────────────────────────────────
+
+mod eval_extended {
+    use lobatto_fft::hofft::{Engine, EngineND, Extension};
+    use nalgebra::Complex;
+    use std::f64::consts::PI;
+
+    /// Reference fold: map `x` into `[xl, xl+l]` per the extension, with the
+    /// sign of the extended interpolant (−1 on odd-reflected copies).
+    fn fold(x: f64, xl: f64, l: f64, ext: Extension) -> (f64, f64) {
+        match ext {
+            Extension::Periodic => ((x - xl).rem_euclid(l) + xl, 1.0),
+            Extension::Even | Extension::Odd => {
+                let t = (x - xl).rem_euclid(2.0 * l);
+                if t <= l {
+                    (xl + t, 1.0)
+                } else {
+                    let s = if matches!(ext, Extension::Odd) { -1.0 } else { 1.0 };
+                    (xl + (2.0 * l - t), s)
+                }
+            }
+        }
+    }
+
+    fn nodal_u(eng: &Engine, xl: f64, l: f64) -> Vec<Complex<f64>> {
+        eng.get_x()
+            .iter()
+            .map(|&x| Complex::new((1.7 * PI * (x - xl) / l).sin().exp(), 0.0))
+            .collect()
+    }
+
+    #[test]
+    fn extended_1d_matches_folded_eval() {
+        let (n, r, l, xl) = (8_usize, 4_usize, 2.5_f64, -1.2_f64);
+        for ext in [Extension::Periodic, Extension::Even, Extension::Odd] {
+            let eng = Engine::new(n, r, l, xl, ext);
+            let u = nodal_u(&eng, xl, l);
+            for i in 0..200 {
+                let x = -9.0 + 0.093 * i as f64; // well outside [-1.2, 1.3]
+                let (y, sign) = fold(x, xl, l, ext);
+                let got = eng.eval_extended(x, &u);
+                let expected = eng.eval(y, &u) * sign;
+                assert!(
+                    (got - expected).norm() < 1e-12,
+                    "{ext:?}: eval_extended({x}) = {got}, expected {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn eval_1d_at_exact_boundaries() {
+        let (n, r, l, xl) = (8_usize, 4_usize, 2.5_f64, -1.2_f64);
+        for ext in [Extension::Periodic, Extension::Even, Extension::Odd] {
+            let eng = Engine::new(n, r, l, xl, ext);
+            let u = nodal_u(&eng, xl, l);
+            // Both endpoints are in-domain and must not panic or blow up.
+            for x in [xl, xl + l] {
+                let v = eng.eval(x, &u);
+                assert!(v.norm() < 1e3, "{ext:?}: eval({x}) = {v} blew up");
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "outside")]
+    fn eval_1d_out_of_domain_panics() {
+        let eng = Engine::new(8, 4, 2.5, -1.2, Extension::Even);
+        let u = nodal_u(&eng, -1.2, 2.5);
+        eng.eval(1.31, &u);
+    }
+
+    #[test]
+    fn extended_nd_matches_folded_eval() {
+        let (n, r) = (6_usize, 4_usize);
+        let ls = [2.0_f64, 3.0];
+        let xls = [-1.0_f64, 0.5];
+        let exts = [Extension::Even, Extension::Odd];
+        let eng = EngineND::<2>::new([n; 2], [r; 2], ls, xls, exts);
+        let u: Vec<Complex<f64>> = eng
+            .get_x()
+            .iter()
+            .map(|p| {
+                let s = (1.3 * PI * (p[0] - xls[0]) / ls[0]).cos()
+                    * (0.8 * PI * (p[1] - xls[1]) / ls[1]).sin();
+                Complex::new(s, 0.0)
+            })
+            .collect();
+
+        // Query points far outside the domain (as a flow map φ⁻¹ can produce).
+        let pts: Vec<[f64; 2]> = (0..100)
+            .map(|i| [-20.0 + 0.41 * i as f64, 25.0 - 0.47 * i as f64])
+            .collect();
+        let (folded, signs): (Vec<[f64; 2]>, Vec<f64>) = pts
+            .iter()
+            .map(|p| {
+                let (y0, s0) = fold(p[0], xls[0], ls[0], exts[0]);
+                let (y1, s1) = fold(p[1], xls[1], ls[1], exts[1]);
+                ([y0, y1], s0 * s1)
+            })
+            .unzip();
+
+        let mut got = vec![Complex::new(0.0_f64, 0.0); pts.len()];
+        eng.eval_extended(&pts, &u, &mut got);
+        let mut expected = vec![Complex::new(0.0_f64, 0.0); pts.len()];
+        eng.eval(&folded, &u, &mut expected);
+
+        for i in 0..pts.len() {
+            let e = expected[i] * signs[i];
+            assert!(
+                (got[i] - e).norm() < 1e-12,
+                "point {:?}: eval_extended = {}, expected {}",
+                pts[i],
+                got[i],
+                e
+            );
+        }
+    }
+
+    /// Regression: an in-domain point exactly on the right boundary used to be
+    /// folded to k=0 while ξ was computed from the raw coordinate (ξ = n),
+    /// extrapolating the Lagrange basis far outside the element.
+    #[test]
+    fn eval_nd_at_exact_right_boundary() {
+        let ls = [2.0_f64, 3.0];
+        let xls = [-1.0_f64, 0.5];
+        let eng = EngineND::<2>::new([6; 2], [4; 2], ls, xls, [Extension::Even; 2]);
+        let x = eng.get_x();
+        let u: Vec<Complex<f64>> = x
+            .iter()
+            .map(|p| Complex::new((p[0] + 0.3 * p[1]).sin(), 0.0))
+            .collect();
+
+        // The top-right corner node is a stored Neumann DOF: eval there must
+        // reproduce the nodal value exactly.
+        let corner = [xls[0] + ls[0], xls[1] + ls[1]];
+        let idx = x
+            .iter()
+            .position(|p| p[0] == corner[0] && p[1] == corner[1])
+            .expect("corner node not found in grid");
+        let mut out = vec![Complex::new(0.0_f64, 0.0); 1];
+        eng.eval(&[corner], &u, &mut out);
+        assert!(
+            (out[0] - u[idx]).norm() < 1e-12,
+            "corner eval {} != nodal value {}",
+            out[0],
+            u[idx]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "outside")]
+    fn eval_nd_out_of_domain_panics() {
+        let eng = EngineND::<2>::new([6; 2], [4; 2], [2.0, 3.0], [-1.0, 0.5], [Extension::Even; 2]);
+        let u = vec![Complex::new(0.0_f64, 0.0); 25 * 25];
+        let mut out = vec![Complex::new(0.0_f64, 0.0); 1];
+        eng.eval(&[[-1.5, 1.0]], &u, &mut out);
+    }
+}

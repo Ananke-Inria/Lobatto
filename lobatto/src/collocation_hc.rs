@@ -136,10 +136,18 @@ fn _d_t_q3_q3<const N: usize, const M: usize>(in_q3: &[f64], out_q3: &mut [f64])
     let c = &in_q3[2 * M * N..2 * M * N + N];
     let d = &in_q3[3 * M * N..3 * M * N + N];
 
-    for i in 0..N { out_q3[i] = -6.0 * a[i] - DX3[2] * b[i] + DX3[4] * c[i] - 1.0 * d[i]; }
-    for i in 0..N { out_q3[1 * M * N + i] = DX3[0] * a[i] - DX3[3] * c[i] + DX3[1] * d[i]; }
-    for i in 0..N { out_q3[2 * M * N + i] = -DX3[1] * a[i] + DX3[3] * b[i] - DX3[0] * d[i]; }
-    for i in 0..N { out_q3[3 * M * N + i] = 1.0 * a[i] - DX3[4] * b[i] + DX3[2] * c[i] + 6.0 * d[i]; }
+    for i in 0..N {
+        out_q3[i] = -6.0 * a[i] - DX3[2] * b[i] + DX3[4] * c[i] - 1.0 * d[i];
+    }
+    for i in 0..N {
+        out_q3[1 * M * N + i] = DX3[0] * a[i] - DX3[3] * c[i] + DX3[1] * d[i];
+    }
+    for i in 0..N {
+        out_q3[2 * M * N + i] = -DX3[1] * a[i] + DX3[3] * b[i] - DX3[0] * d[i];
+    }
+    for i in 0..N {
+        out_q3[3 * M * N + i] = 1.0 * a[i] - DX3[4] * b[i] + DX3[2] * c[i] + 6.0 * d[i];
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -168,7 +176,10 @@ pub fn dx_t_q33_q33<const N: usize>(input: &[f64], output: &mut [f64]) {
 pub fn dy_t_q33_q33<const N: usize>(input: &[f64], output: &mut [f64]) {
     for i in 0..4 {
         let start = N * i;
-        _d_t_q3_q3::<N, 4>(&input[start..start + 13 * N], &mut output[start..start + 13 * N]);
+        _d_t_q3_q3::<N, 4>(
+            &input[start..start + 13 * N],
+            &mut output[start..start + 13 * N],
+        );
     }
 }
 
@@ -190,7 +201,10 @@ pub fn dy_t_q333_q333<const N: usize>(input: &[f64], output: &mut [f64]) {
     for k in 0..4 {
         for i in 0..4 {
             let start = N * (i + 16 * k);
-            _d_t_q3_q3::<N, 4>(&input[start..start + 13 * N], &mut output[start..start + 13 * N]);
+            _d_t_q3_q3::<N, 4>(
+                &input[start..start + 13 * N],
+                &mut output[start..start + 13 * N],
+            );
         }
     }
 }
@@ -200,7 +214,10 @@ pub fn dz_t_q333_q333<const N: usize>(input: &[f64], output: &mut [f64]) {
     for j in 0..4 {
         for i in 0..4 {
             let start = N * (i + 4 * j);
-            _d_t_q3_q3::<N, 16>(&input[start..start + 49 * N], &mut output[start..start + 49 * N]);
+            _d_t_q3_q3::<N, 16>(
+                &input[start..start + 49 * N],
+                &mut output[start..start + 49 * N],
+            );
         }
     }
 }
@@ -341,11 +358,22 @@ fn _d_t_q4_q4<const N: usize, const M: usize>(in_q4: &[f64], out_q4: &mut [f64])
     let d = &in_q4[3 * M * N..3 * M * N + N];
     let e = &in_q4[4 * M * N..4 * M * N + N];
 
-    for i in 0..N { out_q4[i] = -10.0 * a[i] - DX4[3] * b[i] + DX4[7] * c[i] - DX4[6] * d[i] + 1.0 * e[i]; }
-    for i in 0..N { out_q4[1 * M * N + i] = DX4[0] * a[i] - DX4[8] * c[i] + DX4[5] * d[i] - DX4[2] * e[i]; }
-    for i in 0..N { out_q4[2 * M * N + i] = -DX4[1] * a[i] + DX4[4] * b[i] - DX4[4] * d[i] + DX4[1] * e[i]; }
-    for i in 0..N { out_q4[3 * M * N + i] = DX4[2] * a[i] - DX4[5] * b[i] + DX4[8] * c[i] - DX4[0] * e[i]; }
-    for i in 0..N { out_q4[4 * M * N + i] = -1.0 * a[i] + DX4[6] * b[i] - DX4[7] * c[i] + DX4[3] * d[i] + 10.0 * e[i]; }
+    for i in 0..N {
+        out_q4[i] = -10.0 * a[i] - DX4[3] * b[i] + DX4[7] * c[i] - DX4[6] * d[i] + 1.0 * e[i];
+    }
+    for i in 0..N {
+        out_q4[1 * M * N + i] = DX4[0] * a[i] - DX4[8] * c[i] + DX4[5] * d[i] - DX4[2] * e[i];
+    }
+    for i in 0..N {
+        out_q4[2 * M * N + i] = -DX4[1] * a[i] + DX4[4] * b[i] - DX4[4] * d[i] + DX4[1] * e[i];
+    }
+    for i in 0..N {
+        out_q4[3 * M * N + i] = DX4[2] * a[i] - DX4[5] * b[i] + DX4[8] * c[i] - DX4[0] * e[i];
+    }
+    for i in 0..N {
+        out_q4[4 * M * N + i] =
+            -1.0 * a[i] + DX4[6] * b[i] - DX4[7] * c[i] + DX4[3] * d[i] + 10.0 * e[i];
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -374,7 +402,10 @@ pub fn dx_t_q44_q44<const N: usize>(input: &[f64], output: &mut [f64]) {
 pub fn dy_t_q44_q44<const N: usize>(input: &[f64], output: &mut [f64]) {
     for i in 0..5 {
         let start = N * i;
-        _d_t_q4_q4::<N, 5>(&input[start..start + 21 * N], &mut output[start..start + 21 * N]);
+        _d_t_q4_q4::<N, 5>(
+            &input[start..start + 21 * N],
+            &mut output[start..start + 21 * N],
+        );
     }
 }
 
@@ -396,7 +427,10 @@ pub fn dy_t_q444_q444<const N: usize>(input: &[f64], output: &mut [f64]) {
     for k in 0..5 {
         for i in 0..5 {
             let start = N * (i + 25 * k);
-            _d_t_q4_q4::<N, 5>(&input[start..start + 21 * N], &mut output[start..start + 21 * N]);
+            _d_t_q4_q4::<N, 5>(
+                &input[start..start + 21 * N],
+                &mut output[start..start + 21 * N],
+            );
         }
     }
 }
@@ -406,7 +440,10 @@ pub fn dz_t_q444_q444<const N: usize>(input: &[f64], output: &mut [f64]) {
     for j in 0..5 {
         for i in 0..5 {
             let start = N * (i + 5 * j);
-            _d_t_q4_q4::<N, 25>(&input[start..start + 101 * N], &mut output[start..start + 101 * N]);
+            _d_t_q4_q4::<N, 25>(
+                &input[start..start + 101 * N],
+                &mut output[start..start + 101 * N],
+            );
         }
     }
 }
@@ -562,12 +599,31 @@ fn _d_t_q5_q5<const N: usize, const M: usize>(in_q5: &[f64], out_q5: &mut [f64])
     let e = &in_q5[4 * M * N..4 * M * N + N];
     let f = &in_q5[5 * M * N..5 * M * N + N];
 
-    for i in 0..N { out_q5[i] = -15.0 * a[i] - DX5[4] * b[i] + DX5[9] * c[i] - DX5[13] * d[i] + DX5[8] * e[i] - 1.0 * f[i]; }
-    for i in 0..N { out_q5[1 * M * N + i] = DX5[0] * a[i] - DX5[10] * c[i] + DX5[12] * d[i] - DX5[7] * e[i] + DX5[3] * f[i]; }
-    for i in 0..N { out_q5[2 * M * N + i] = -DX5[1] * a[i] + DX5[5] * b[i] - DX5[11] * d[i] + DX5[6] * e[i] - DX5[2] * f[i]; }
-    for i in 0..N { out_q5[3 * M * N + i] = DX5[2] * a[i] - DX5[6] * b[i] + DX5[11] * c[i] - DX5[5] * e[i] + DX5[1] * f[i]; }
-    for i in 0..N { out_q5[4 * M * N + i] = -DX5[3] * a[i] + DX5[7] * b[i] - DX5[12] * c[i] + DX5[10] * d[i] - DX5[0] * f[i]; }
-    for i in 0..N { out_q5[5 * M * N + i] = 1.0 * a[i] - DX5[8] * b[i] + DX5[13] * c[i] - DX5[9] * d[i] + DX5[4] * e[i] + 15.0 * f[i]; }
+    for i in 0..N {
+        out_q5[i] = -15.0 * a[i] - DX5[4] * b[i] + DX5[9] * c[i] - DX5[13] * d[i] + DX5[8] * e[i]
+            - 1.0 * f[i];
+    }
+    for i in 0..N {
+        out_q5[1 * M * N + i] =
+            DX5[0] * a[i] - DX5[10] * c[i] + DX5[12] * d[i] - DX5[7] * e[i] + DX5[3] * f[i];
+    }
+    for i in 0..N {
+        out_q5[2 * M * N + i] =
+            -DX5[1] * a[i] + DX5[5] * b[i] - DX5[11] * d[i] + DX5[6] * e[i] - DX5[2] * f[i];
+    }
+    for i in 0..N {
+        out_q5[3 * M * N + i] =
+            DX5[2] * a[i] - DX5[6] * b[i] + DX5[11] * c[i] - DX5[5] * e[i] + DX5[1] * f[i];
+    }
+    for i in 0..N {
+        out_q5[4 * M * N + i] =
+            -DX5[3] * a[i] + DX5[7] * b[i] - DX5[12] * c[i] + DX5[10] * d[i] - DX5[0] * f[i];
+    }
+    for i in 0..N {
+        out_q5[5 * M * N + i] = 1.0 * a[i] - DX5[8] * b[i] + DX5[13] * c[i] - DX5[9] * d[i]
+            + DX5[4] * e[i]
+            + 15.0 * f[i];
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -596,7 +652,10 @@ pub fn dx_t_q55_q55<const N: usize>(input: &[f64], output: &mut [f64]) {
 pub fn dy_t_q55_q55<const N: usize>(input: &[f64], output: &mut [f64]) {
     for i in 0..6 {
         let start = N * i;
-        _d_t_q5_q5::<N, 6>(&input[start..start + 31 * N], &mut output[start..start + 31 * N]);
+        _d_t_q5_q5::<N, 6>(
+            &input[start..start + 31 * N],
+            &mut output[start..start + 31 * N],
+        );
     }
 }
 
@@ -618,7 +677,10 @@ pub fn dy_t_q555_q555<const N: usize>(input: &[f64], output: &mut [f64]) {
     for k in 0..6 {
         for i in 0..6 {
             let start = N * (i + 36 * k);
-            _d_t_q5_q5::<N, 6>(&input[start..start + 31 * N], &mut output[start..start + 31 * N]);
+            _d_t_q5_q5::<N, 6>(
+                &input[start..start + 31 * N],
+                &mut output[start..start + 31 * N],
+            );
         }
     }
 }
@@ -628,7 +690,10 @@ pub fn dz_t_q555_q555<const N: usize>(input: &[f64], output: &mut [f64]) {
     for j in 0..6 {
         for i in 0..6 {
             let start = N * (i + 6 * j);
-            _d_t_q5_q5::<N, 36>(&input[start..start + 181 * N], &mut output[start..start + 181 * N]);
+            _d_t_q5_q5::<N, 36>(
+                &input[start..start + 181 * N],
+                &mut output[start..start + 181 * N],
+            );
         }
     }
 }
@@ -804,13 +869,42 @@ fn _d_t_q6_q6<const N: usize, const M: usize>(in_q6: &[f64], out_q6: &mut [f64])
     let f = &in_q6[5 * M * N..5 * M * N + N];
     let g = &in_q6[6 * M * N..6 * M * N + N];
 
-    for i in 0..N { out_q6[i] = -21.0 * a[i] - DX6[5] * b[i] + DX6[11] * c[i] - DX6[17] * d[i] + DX6[16] * e[i] - DX6[10] * f[i] + 1.0 * g[i]; }
-    for i in 0..N { out_q6[1 * M * N + i] = DX6[0] * a[i] - DX6[12] * c[i] + DX6[18] * d[i] - DX6[15] * e[i] + DX6[9] * f[i] - DX6[4] * g[i]; }
-    for i in 0..N { out_q6[2 * M * N + i] = -DX6[1] * a[i] + DX6[6] * b[i] - DX6[19] * d[i] + DX6[14] * e[i] - DX6[8] * f[i] + DX6[3] * g[i]; }
-    for i in 0..N { out_q6[3 * M * N + i] = DX6[2] * a[i] - DX6[7] * b[i] + DX6[13] * c[i] - DX6[13] * e[i] + DX6[7] * f[i] - DX6[2] * g[i]; }
-    for i in 0..N { out_q6[4 * M * N + i] = -DX6[3] * a[i] + DX6[8] * b[i] - DX6[14] * c[i] + DX6[19] * d[i] - DX6[6] * f[i] + DX6[1] * g[i]; }
-    for i in 0..N { out_q6[5 * M * N + i] = DX6[4] * a[i] - DX6[9] * b[i] + DX6[15] * c[i] - DX6[18] * d[i] + DX6[12] * e[i] - DX6[0] * g[i]; }
-    for i in 0..N { out_q6[6 * M * N + i] = -1.0 * a[i] + DX6[10] * b[i] - DX6[16] * c[i] + DX6[17] * d[i] - DX6[11] * e[i] + DX6[5] * f[i] + 21.0 * g[i]; }
+    for i in 0..N {
+        out_q6[i] = -21.0 * a[i] - DX6[5] * b[i] + DX6[11] * c[i] - DX6[17] * d[i] + DX6[16] * e[i]
+            - DX6[10] * f[i]
+            + 1.0 * g[i];
+    }
+    for i in 0..N {
+        out_q6[1 * M * N + i] = DX6[0] * a[i] - DX6[12] * c[i] + DX6[18] * d[i] - DX6[15] * e[i]
+            + DX6[9] * f[i]
+            - DX6[4] * g[i];
+    }
+    for i in 0..N {
+        out_q6[2 * M * N + i] = -DX6[1] * a[i] + DX6[6] * b[i] - DX6[19] * d[i] + DX6[14] * e[i]
+            - DX6[8] * f[i]
+            + DX6[3] * g[i];
+    }
+    for i in 0..N {
+        out_q6[3 * M * N + i] = DX6[2] * a[i] - DX6[7] * b[i] + DX6[13] * c[i] - DX6[13] * e[i]
+            + DX6[7] * f[i]
+            - DX6[2] * g[i];
+    }
+    for i in 0..N {
+        out_q6[4 * M * N + i] = -DX6[3] * a[i] + DX6[8] * b[i] - DX6[14] * c[i] + DX6[19] * d[i]
+            - DX6[6] * f[i]
+            + DX6[1] * g[i];
+    }
+    for i in 0..N {
+        out_q6[5 * M * N + i] = DX6[4] * a[i] - DX6[9] * b[i] + DX6[15] * c[i] - DX6[18] * d[i]
+            + DX6[12] * e[i]
+            - DX6[0] * g[i];
+    }
+    for i in 0..N {
+        out_q6[6 * M * N + i] = -1.0 * a[i] + DX6[10] * b[i] - DX6[16] * c[i] + DX6[17] * d[i]
+            - DX6[11] * e[i]
+            + DX6[5] * f[i]
+            + 21.0 * g[i];
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -839,7 +933,10 @@ pub fn dx_t_q66_q66<const N: usize>(input: &[f64], output: &mut [f64]) {
 pub fn dy_t_q66_q66<const N: usize>(input: &[f64], output: &mut [f64]) {
     for i in 0..7 {
         let start = N * i;
-        _d_t_q6_q6::<N, 7>(&input[start..start + 43 * N], &mut output[start..start + 43 * N]);
+        _d_t_q6_q6::<N, 7>(
+            &input[start..start + 43 * N],
+            &mut output[start..start + 43 * N],
+        );
     }
 }
 
@@ -861,7 +958,10 @@ pub fn dy_t_q666_q666<const N: usize>(input: &[f64], output: &mut [f64]) {
     for k in 0..7 {
         for i in 0..7 {
             let start = N * (i + 49 * k);
-            _d_t_q6_q6::<N, 7>(&input[start..start + 43 * N], &mut output[start..start + 43 * N]);
+            _d_t_q6_q6::<N, 7>(
+                &input[start..start + 43 * N],
+                &mut output[start..start + 43 * N],
+            );
         }
     }
 }
@@ -871,7 +971,10 @@ pub fn dz_t_q666_q666<const N: usize>(input: &[f64], output: &mut [f64]) {
     for j in 0..7 {
         for i in 0..7 {
             let start = N * (i + 7 * j);
-            _d_t_q6_q6::<N, 49>(&input[start..start + 295 * N], &mut output[start..start + 295 * N]);
+            _d_t_q6_q6::<N, 49>(
+                &input[start..start + 295 * N],
+                &mut output[start..start + 295 * N],
+            );
         }
     }
 }
