@@ -294,9 +294,9 @@ impl Engine {
     pub fn get_values(&self, k: usize, g: &[Complex<f64>], g_k: &mut [Complex<f64>]) {
         debug_assert_eq!(g.len(), self.n_dof);
         debug_assert_eq!(g_k.len(), self.r);
-        for j in 0..self.r {
+        for (j, v) in g_k.iter_mut().enumerate() {
             let (i_g, coeff) = self.unpack_table[j * self.n_fft + k];
-            g_k[j] = coeff * g[i_g];
+            *v = coeff * g[i_g];
         }
     }
 
@@ -346,15 +346,13 @@ impl Engine {
                 } else if k == 0 {
                     // Chunk 2: j=0..⌊r/2⌋ (rest derived).
                     let base = self.r * (self.n - 1);
-                    for j in 0..=self.r / 2 {
-                        g[base + j] = g_k[j];
-                    }
+                    let m = self.r / 2;
+                    g[base..=base + m].copy_from_slice(&g_k[..=m]);
                 } else {
                     // k == n — Chunk 3: j=0..⌊(r−1)/2⌋ (j=r/2 zero if r even, rest derived).
                     let base = self.r * (self.n - 1) + self.r / 2 + 1;
-                    for j in 0..=(self.r - 1) / 2 {
-                        g[base + j] = g_k[j];
-                    }
+                    let m = (self.r - 1) / 2;
+                    g[base..=base + m].copy_from_slice(&g_k[..=m]);
                 }
             }
         }
@@ -449,7 +447,7 @@ impl Engine {
                     if j == 0 {
                         return (0, zero_coeff);
                     } // always zero
-                    if self.r % 2 == 0 && j == self.r / 2 {
+                    if self.r.is_multiple_of(2) && j == self.r / 2 {
                         return (0, zero_coeff);
                     } // zero
 
@@ -497,7 +495,7 @@ impl Engine {
                     (c1 + j_stored, one)
                 } else if k == self.n {
                     // High-frequency row; anti-symmetric: F̂_{n,r−j} = −F̂_{n,j}.
-                    if self.r % 2 == 0 && j == self.r / 2 {
+                    if self.r.is_multiple_of(2) && j == self.r / 2 {
                         return (0, zero_coeff);
                     } // zero
                     if j <= (self.r - 1) / 2 {
@@ -571,13 +569,15 @@ impl Engine {
         }
     }
 
-    /// Evaluate the interpolant of `u` at position `x`.
+    /// Evaluate the interpolant of `u` at a single position `x`.
     ///
     /// `u` must be in the x-increasing layout matching [`get_x`](Self::get_x).
     /// `x` must lie in `[xl, xl+l]` for **every** extension; use
-    /// [`eval_extended`](Self::eval_extended) to evaluate the underlying
+    /// [`eval_extended_at`](Self::eval_extended_at) to evaluate the underlying
     /// extension at positions outside the domain.
-    pub fn eval(&self, x: f64, u: &[Complex<f64>]) -> Complex<f64> {
+    ///
+    /// Batch variant with a caller-provided output buffer: [`eval`](Self::eval).
+    pub fn eval_at(&self, x: f64, u: &[Complex<f64>]) -> Complex<f64> {
         assert!(
             x >= self.xl && x <= self.xl + self.l,
             "eval: x={x} outside [{}, {}]",
@@ -617,6 +617,20 @@ impl Engine {
         val
     }
 
+    /// Evaluate the interpolant of `u` at a batch of positions.
+    ///
+    /// - `xs`: query points (length `m`); every `xs[i]` must lie in `[xl, xl+l]`,
+    ///   for **every** extension; use [`eval_extended`](Self::eval_extended) to
+    ///   evaluate the underlying extension at positions outside the domain.
+    /// - `u`: DOF vector in the x-increasing layout matching [`get_x`](Self::get_x).
+    /// - `fu`: output buffer of length `m`; `fu[i]` receives the interpolated value at `xs[i]`.
+    pub fn eval(&self, xs: &[f64], u: &[Complex<f64>], fu: &mut [Complex<f64>]) {
+        debug_assert_eq!(fu.len(), xs.len());
+        fu.par_iter_mut()
+            .zip(xs.par_iter())
+            .for_each(|(f, &x)| *f = self.eval_at(x, u));
+    }
+
     /// Fold `x` into `[xl, xl+l]` according to the extension, returning the folded
     /// coordinate and the sign of the extended interpolant there
     /// ($-1$ on odd-reflected copies, $+1$ otherwise).
@@ -638,16 +652,37 @@ impl Engine {
         }
     }
 
-    /// Evaluate the extension of the interpolant of `u` at position `x`.
+    /// Evaluate the extension of the interpolant of `u` at a single position `x`.
     ///
-    /// Unlike [`eval`](Self::eval), `x` may lie anywhere: it is folded back into
+    /// Unlike [`eval_at`](Self::eval_at), `x` may lie anywhere: it is folded back into
     /// `[xl, xl+l]` according to the extension — periodic wrap (`Periodic`),
     /// even reflection (`Even`/Neumann), or odd reflection with a sign flip
     /// (`Odd`/Dirichlet) — so the result is consistent with the underlying
     /// FFT representation.
-    pub fn eval_extended(&self, x: f64, u: &[Complex<f64>]) -> Complex<f64> {
+    ///
+    /// Batch variant with a caller-provided output buffer:
+    /// [`eval_extended`](Self::eval_extended).
+    pub fn eval_extended_at(&self, x: f64, u: &[Complex<f64>]) -> Complex<f64> {
         let (y, sign) = self.fold_extended(x);
-        self.eval(y, u) * sign
+        self.eval_at(y, u) * sign
+    }
+
+    /// Evaluate the extension of the interpolant of `u` at a batch of positions.
+    ///
+    /// Unlike [`eval`](Self::eval), positions may lie anywhere: each is folded
+    /// back into `[xl, xl+l]` according to the extension — periodic wrap
+    /// (`Periodic`), even reflection (`Even`/Neumann), or odd reflection with a
+    /// sign flip (`Odd`/Dirichlet) — so the result is consistent with the
+    /// underlying FFT representation.
+    ///
+    /// - `xs`: query points (length `m`).
+    /// - `u`: DOF vector in the x-increasing layout matching [`get_x`](Self::get_x).
+    /// - `fu`: output buffer of length `m`; `fu[i]` receives the value at `xs[i]`.
+    pub fn eval_extended(&self, xs: &[f64], u: &[Complex<f64>], fu: &mut [Complex<f64>]) {
+        debug_assert_eq!(fu.len(), xs.len());
+        fu.par_iter_mut()
+            .zip(xs.par_iter())
+            .for_each(|(f, &x)| *f = self.eval_extended_at(x, u));
     }
 
     /// Apply a flow map `lambda` to every grid node and interpolate `u` at the resulting positions.
@@ -655,15 +690,17 @@ impl Engine {
     /// Positions outside `[xl, xl+l]` are handled by [`eval_extended`](Self::eval_extended),
     /// i.e. folded back according to the extension.
     ///
-    /// Returns a `Vec<Complex<f64>>` of the same length as `u`.
-    pub fn convect<F>(&self, lambda: F, u: &[Complex<f64>]) -> Vec<Complex<f64>>
+    /// - `u`: DOF vector in the x-increasing layout matching [`get_x`](Self::get_x).
+    /// - `out`: output buffer of the same length as `u`; receives the convected values.
+    pub fn convect<F>(&self, lambda: F, u: &[Complex<f64>], out: &mut [Complex<f64>])
     where
-        F: Fn(f64) -> f64,
+        F: Fn(f64) -> f64 + Sync,
     {
-        self.get_x()
-            .iter()
-            .map(|&x| self.eval_extended(lambda(x), u))
-            .collect()
+        debug_assert_eq!(out.len(), u.len());
+        let xs = self.get_x();
+        out.par_iter_mut()
+            .zip(xs.par_iter())
+            .for_each(|(o, &x)| *o = self.eval_extended_at(lambda(x), u));
     }
 
     /// Returns the flat DOF index for local node `j` (0..=r) of element `k` (0..n).
@@ -671,10 +708,10 @@ impl Engine {
     /// Used by `EngineND::eval` to gather local patch values.
     ///
     /// - `Periodic`: right endpoint (j==r) wraps to next element's j=0.
-    /// - `Odd`:      left boundary (k=0,j=0) and right boundary (k=n-1,j=r) are Dirichlet zeros,
-    ///               returned as `n_dof` (sentinel for "zero, not stored").
-    ///               Otherwise: flat index `k*r + j - 1`.
-    /// - `Even`:     flat index `k*r + j`.
+    /// - `Odd`: left boundary (k=0,j=0) and right boundary (k=n-1,j=r) are Dirichlet zeros,
+    ///   returned as `n_dof` (sentinel for "zero, not stored").
+    ///   Otherwise: flat index `k*r + j - 1`.
+    /// - `Even`: flat index `k*r + j`.
     pub(crate) fn eval_dof_index(&self, k: usize, j: usize) -> usize {
         match self.extension {
             Extension::Periodic => {
@@ -797,9 +834,9 @@ impl Engine {
                 buf.copy_from_slice(g);
             }
             Extension::Odd | Extension::Even => {
-                for i in 0..self.r * self.n_fft {
+                for (i, b) in buf.iter_mut().enumerate() {
                     let (i_g, coeff_g) = self.unpack_table[i];
-                    buf[i] = coeff_g * g[i_g];
+                    *b = coeff_g * g[i_g];
                 }
             }
         }
@@ -962,17 +999,17 @@ impl<const N: usize> EngineND<N> {
         debug_assert_eq!(g.len(), self.total);
         debug_assert_eq!(g_k.len(), self.r_total);
 
-        for j_flat in 0..self.r_total {
+        for (j_flat, v) in g_k.iter_mut().enumerate() {
             let mut compact_idx = 0usize;
             let mut coeff = Complex::new(1.0_f64, 0.0);
-            for d in 0..N {
+            for (d, &k_d) in ks.iter().enumerate() {
                 let j_d = (j_flat / self.r_strides[d]) % self.rs[d];
                 let (c_d, coeff_d) =
-                    self.planners[d].unpack_table[j_d * self.planners[d].n_fft + ks[d]];
+                    self.planners[d].unpack_table[j_d * self.planners[d].n_fft + k_d];
                 compact_idx += c_d * self.strides[d];
                 coeff *= coeff_d;
             }
-            g_k[j_flat] = coeff * g[compact_idx];
+            *v = coeff * g[compact_idx];
         }
     }
 
@@ -991,12 +1028,12 @@ impl<const N: usize> EngineND<N> {
         debug_assert_eq!(g.len(), self.total);
         debug_assert_eq!(g_k.len(), self.r_total);
 
-        for j_flat in 0..self.r_total {
+        for (j_flat, &v) in g_k.iter().enumerate() {
             let mut canonical = true;
             let mut compact_idx = 0usize;
-            for d in 0..N {
+            for (d, &k_d) in ks.iter().enumerate() {
                 let j_d = (j_flat / self.r_strides[d]) % self.rs[d];
-                let full_1d = j_d * self.planners[d].n_fft + ks[d];
+                let full_1d = j_d * self.planners[d].n_fft + k_d;
                 let (c_d, _) = self.planners[d].unpack_table[full_1d];
                 if !self.planners[d].canonical_table[full_1d] {
                     canonical = false;
@@ -1005,7 +1042,7 @@ impl<const N: usize> EngineND<N> {
                 compact_idx += c_d * self.strides[d];
             }
             if canonical {
-                g[compact_idx] = g_k[j_flat];
+                g[compact_idx] = v;
             }
         }
     }
@@ -1174,16 +1211,16 @@ impl<const N: usize> EngineND<N> {
     /// Positions outside the domain are handled by [`eval_extended`](Self::eval_extended),
     /// i.e. folded back according to each direction's extension.
     ///
-    /// Returns a `Vec<Complex<f64>>` of length equal to `u`.
-    pub fn convect<F>(&self, lambda: F, u: &[Complex<f64>]) -> Vec<Complex<f64>>
+    /// - `u`: DOF vector in the column-major tensor-product layout from [`get_x`](Self::get_x).
+    /// - `out`: output buffer of the same length as `u`; receives the convected values.
+    pub fn convect<F>(&self, lambda: F, u: &[Complex<f64>], out: &mut [Complex<f64>])
     where
         F: Fn([f64; N]) -> [f64; N] + Sync,
     {
+        debug_assert_eq!(out.len(), u.len());
         let xs = self.get_x();
         let shifted: Vec<[f64; N]> = xs.par_iter().map(|&pt| lambda(pt)).collect();
-        let mut out = vec![Complex::new(0.0_f64, 0.0); u.len()];
-        self.eval_extended(&shifted, u, &mut out);
-        out
+        self.eval_extended(&shifted, u, out);
     }
 
     /// Apply forward HoFFT direction by direction, in place.
@@ -1211,8 +1248,8 @@ impl<const N: usize> EngineND<N> {
                     .map(|m| unsafe { *ptr.add(base + m * stride_d) })
                     .collect();
                 self.planners[d].forward(fiber.as_mut_slice());
-                for m in 0..dim_d {
-                    unsafe { *ptr.add(base + m * stride_d) = fiber[m] };
+                for (m, &v) in fiber.iter().enumerate() {
+                    unsafe { *ptr.add(base + m * stride_d) = v };
                 }
             });
         }
@@ -1240,8 +1277,8 @@ impl<const N: usize> EngineND<N> {
                     .map(|m| unsafe { *ptr.add(base + m * stride_d) })
                     .collect();
                 self.planners[d].inverse(fiber.as_mut_slice());
-                for m in 0..dim_d {
-                    unsafe { *ptr.add(base + m * stride_d) = fiber[m] };
+                for (m, &v) in fiber.iter().enumerate() {
+                    unsafe { *ptr.add(base + m * stride_d) = v };
                 }
             });
         }

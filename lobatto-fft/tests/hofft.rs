@@ -138,8 +138,8 @@ fn even_extension_symmetry() {
 
         // j = 0: predicted = F̂_{k, 0}
         {
-            let predicted = buf[0 * n_fft + k]; // F̂_{k, 0}
-            let actual = buf[0 * n_fft + km]; // F̂_{2n−k, 0}
+            let predicted = buf[k]; // F̂_{k, 0} (index j·n_fft + k with j = 0)
+            let actual = buf[km]; // F̂_{2n−k, 0}
             let residual = (actual - predicted).norm();
             max_residual = max_residual.max(residual);
             println!(

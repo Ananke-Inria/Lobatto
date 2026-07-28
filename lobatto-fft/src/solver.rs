@@ -188,7 +188,7 @@ impl Poisson {
             diff_matrix.transpose() * mass_matrix.clone() * diff_matrix;
 
         // Compute the symbol of the operator for each frequency
-        for k in 0..n_freq {
+        for (k, s) in symbol.iter_mut().enumerate() {
             let phase = -coeff_phase * PI * (k as f64) / (n as f64);
             let cos = phase.cos();
             let sin = phase.sin();
@@ -196,21 +196,21 @@ impl Poisson {
 
             for i in 1..r {
                 for j in 1..r {
-                    symbol[k][(i, j)] = (alpha * h * mass_matrix[(i, j)]
+                    s[(i, j)] = (alpha * h * mass_matrix[(i, j)]
                         + beta * stiffness_matrix[(i, j)] / h)
                         .into();
                 }
             }
 
-            symbol[k][(0, 0)] = (2.0 * alpha * h * mass_matrix[(0, 0)]
+            s[(0, 0)] = (2.0 * alpha * h * mass_matrix[(0, 0)]
                 + 2.0 * beta * stiffness_matrix[(0, 0)] / h
                 + 2.0 * beta * stiffness_matrix[(0, r)] * cos / h)
                 .into();
 
             for i in 1..r {
-                symbol[k][(0, i)] =
+                s[(0, i)] =
                     beta * stiffness_matrix[(0, i)] / h + beta * stiffness_matrix[(r, i)] * exp / h;
-                symbol[k][(i, 0)] = symbol[k][(0, i)].conj();
+                s[(i, 0)] = s[(0, i)].conj();
             }
         }
 

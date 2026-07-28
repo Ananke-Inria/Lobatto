@@ -105,7 +105,9 @@ let solver = Poisson::new(l, xl, n, r, alpha, beta, bc);
 let x: Vec<f64>         = solver.get_x();          // N_dof GLL nodes
 solver.solve_in_place(&mut f);                      // overwrites f with u
 // access the underlying engine for interpolation or advection:
-let val = solver.planner.eval(x_pt, &f);
+let val = solver.planner.eval_at(x_pt, &f);          // single point
+let mut vals = vec![Complex::default(); pts.len()];
+solver.planner.eval(&pts, &f, &mut vals);            // batch, caller-provided buffer
 ```
 
 ### `solver::PoissonND<N>` — N-dimensional solver
@@ -117,8 +119,9 @@ solver.solve_in_place(&mut f);                      // overwrites f with u
 // interpolate at arbitrary off-grid points:
 let mut vals = vec![Complex::default(); pts.len()];
 solver.fft.eval(&pts, &f, &mut vals);
-// advect the solution by a flow map λ:
-let f_advected = solver.fft.convect(|x| lambda(x), &f);
+// advect the solution by a flow map λ (caller-provided output buffer):
+let mut f_advected = vec![Complex::default(); f.len()];
+solver.fft.convect(|x| lambda(x), &f, &mut f_advected);
 ```
 
 ### `hofft::Engine` / `hofft::EngineND<N>` — transform engines

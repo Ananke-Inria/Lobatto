@@ -3,7 +3,11 @@ use nalgebra::Complex;
 use std::f64::consts::PI;
 use std::time::Instant;
 
+/// A test case: (name, exact solution u(x), right-hand side f(x)).
+type TestCase<'a> = (&'a str, Box<dyn Fn(f64) -> f64>, Box<dyn Fn(f64) -> f64>);
+
 /// Solve (alpha - beta * d^2/dx^2) u = f and return the max error against exact_u.
+#[allow(clippy::too_many_arguments)]
 fn compute_error(
     l: f64,
     n: usize,
@@ -37,7 +41,7 @@ fn convergence_periodic_1d() {
     let w = 2.0 * PI / l;
 
     // Each test case: (name, u(x), f(x) = alpha*u - beta*u'')
-    let test_functions: Vec<(&str, Box<dyn Fn(f64) -> f64>, Box<dyn Fn(f64) -> f64>)> = vec![
+    let test_functions: Vec<TestCase> = vec![
         // Single Fourier mode
         {
             let c = alpha + beta * w * w;
@@ -163,7 +167,7 @@ fn convergence_dirichlet_1d() {
     let w = PI / l; // fundamental sine mode on [0, l]
 
     // Each test function satisfies u(0) = 0 and u(l) = 0.
-    let test_functions: Vec<(&str, Box<dyn Fn(f64) -> f64>, Box<dyn Fn(f64) -> f64>)> = vec![
+    let test_functions: Vec<TestCase> = vec![
         // Single Dirichlet eigenfunction: u = sin(πx/l)
         // u'' = -w²·u  →  f = (α + βw²)·u
         {
@@ -298,7 +302,7 @@ fn convergence_neumann_1d() {
     let w = PI / l; // fundamental cosine mode on [0, l]
 
     // Each test function satisfies u'(0) = 0 and u'(l) = 0.
-    let test_functions: Vec<(&str, Box<dyn Fn(f64) -> f64>, Box<dyn Fn(f64) -> f64>)> = vec![
+    let test_functions: Vec<TestCase> = vec![
         // Single Neumann eigenfunction: u = cos(πx/l)
         // u'' = -w²·u  →  f = (α + βw²)·u
         {
@@ -470,7 +474,7 @@ fn convergence_periodic_1d_eval() {
 
         let max_err = pts
             .iter()
-            .map(|&p| (solver.planner.eval(p, &f).re - exact(p)).abs())
+            .map(|&p| (solver.planner.eval_at(p, &f).re - exact(p)).abs())
             .fold(0.0_f64, f64::max);
 
         let rate = match (prev_h, prev_err) {
@@ -536,7 +540,7 @@ fn convergence_dirichlet_1d_eval() {
 
         let max_err = pts
             .iter()
-            .map(|&p| (solver.planner.eval(p, &f).re - exact(p)).abs())
+            .map(|&p| (solver.planner.eval_at(p, &f).re - exact(p)).abs())
             .fold(0.0_f64, f64::max);
 
         let rate = match (prev_h, prev_err) {
@@ -602,7 +606,7 @@ fn convergence_neumann_1d_eval() {
 
         let max_err = pts
             .iter()
-            .map(|&p| (solver.planner.eval(p, &f).re - exact(p)).abs())
+            .map(|&p| (solver.planner.eval_at(p, &f).re - exact(p)).abs())
             .fold(0.0_f64, f64::max);
 
         let rate = match (prev_h, prev_err) {
@@ -1040,7 +1044,7 @@ fn convergence_3d() {
     // Each entry: (name, u1d(x), u1d''(x))
     // Exact solution: u(x,y,z) = u1d(x)*u1d(y)*u1d(z)
     // RHS: alpha*u - beta*(u1d''(x)*u1d(y)*u1d(z) + u1d(x)*u1d''(y)*u1d(z) + u1d(x)*u1d(y)*u1d''(z))
-    let test_functions: Vec<(&str, Box<dyn Fn(f64) -> f64>, Box<dyn Fn(f64) -> f64>)> = vec![
+    let test_functions: Vec<TestCase> = vec![
         // Fourier polynomial with multiple modes
         (
             "fourier_poly",
@@ -1762,7 +1766,8 @@ fn convect_4d_q6() {
 
     let u_cx: Vec<Complex<f64>> = u.iter().map(|&v| Complex::new(v, 0.0)).collect();
     let t0 = Instant::now();
-    let result = solver.fft.convect(lambda, &u_cx);
+    let mut result = vec![Complex::new(0.0_f64, 0.0); u_cx.len()];
+    solver.fft.convect(lambda, &u_cx, &mut result);
     let elapsed = t0.elapsed();
 
     let max_err = result
@@ -1820,8 +1825,8 @@ mod eval_extended {
             for i in 0..200 {
                 let x = -9.0 + 0.093 * i as f64; // well outside [-1.2, 1.3]
                 let (y, sign) = fold(x, xl, l, ext);
-                let got = eng.eval_extended(x, &u);
-                let expected = eng.eval(y, &u) * sign;
+                let got = eng.eval_extended_at(x, &u);
+                let expected = eng.eval_at(y, &u) * sign;
                 assert!(
                     (got - expected).norm() < 1e-12,
                     "{ext:?}: eval_extended({x}) = {got}, expected {expected}"
@@ -1838,7 +1843,7 @@ mod eval_extended {
             let u = nodal_u(&eng, xl, l);
             // Both endpoints are in-domain and must not panic or blow up.
             for x in [xl, xl + l] {
-                let v = eng.eval(x, &u);
+                let v = eng.eval_at(x, &u);
                 assert!(v.norm() < 1e3, "{ext:?}: eval({x}) = {v} blew up");
             }
         }
@@ -1849,7 +1854,7 @@ mod eval_extended {
     fn eval_1d_out_of_domain_panics() {
         let eng = Engine::new(8, 4, 2.5, -1.2, Extension::Even);
         let u = nodal_u(&eng, -1.2, 2.5);
-        eng.eval(1.31, &u);
+        eng.eval_at(1.31, &u);
     }
 
     #[test]
