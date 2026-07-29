@@ -1,6 +1,6 @@
 [package]
 name = "lobatto"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "Gauss–Lobatto quadrature and interpolation points, spectral finite-element lagrangian basis operations with efficient hardcoded versions for low order low dimensions cases."
 license = "LGPL-3.0-only"
