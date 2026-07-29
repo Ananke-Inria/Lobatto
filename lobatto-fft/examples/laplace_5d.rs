@@ -72,9 +72,9 @@ fn main() {
     let ndof_hofft: usize = ndof_1d.pow(5);
     let ndof_1: usize = r_hot.pow(5); // HoFFT-1 and HoT share the same DOF count
 
-    println!("╔══════════════════════════════════════════════════════════╗");
-    println!("║    5-D Laplace solver comparison: HoFFT / HoFFT-1 / HoT  ║");
-    println!("╚══════════════════════════════════════════════════════════╝");
+    println!("╔═════════════════════════════════════════════════════╗");
+    println!("║    5-D Laplace solver comparison: HoFFT / HoFFT-1   ║");
+    println!("╚═════════════════════════════════════════════════════╝");
     println!();
     println!("  HoFFT   : n={n}×r={r} → {ndof_1d} DOF/direction, {ndof_hofft} total");
     println!("  HoFFT-1 : n=1×r={r_hot} → {r_hot} DOF/direction, {ndof_1} total");
