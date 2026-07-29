@@ -308,6 +308,21 @@ impl Poisson {
         // Step 3: recover symmetric modes, inverse FFT.
         self.planner.inverse(f);
     }
+
+    /// Real-input variant of [`solve_in_place`](Self::solve_in_place).
+    ///
+    /// The operator $(\alpha M + \beta K)$ is real, so a real right-hand side
+    /// has an exactly real solution: `f` is copied into an internal complex
+    /// buffer, solved, and the real parts are written back. Costs the same as
+    /// the complex solve plus the two conversion passes and one temporary
+    /// complex buffer of `f.len()` entries.
+    pub fn solve_in_place_real(&self, f: &mut [f64]) {
+        let mut buf: Vec<Complex<f64>> = f.iter().map(|&v| Complex::new(v, 0.0)).collect();
+        self.solve_in_place(&mut buf);
+        for (o, b) in f.iter_mut().zip(&buf) {
+            *o = b.re;
+        }
+    }
 }
 
 // ── ND solver ────────────────────────────────────────────────────────────────
@@ -525,6 +540,21 @@ impl<const N: usize> PoissonND<N> {
 
         // Step 3: inverse FFT.
         self.fft.inverse(f);
+    }
+
+    /// Real-input variant of [`solve_in_place`](Self::solve_in_place).
+    ///
+    /// The operator $(\alpha M + \beta K)$ is real, so a real right-hand side
+    /// has an exactly real solution: `f` is copied into an internal complex
+    /// buffer, solved, and the real parts are written back. Costs the same as
+    /// the complex solve plus the two (parallel) conversion passes and one
+    /// temporary complex buffer of `f.len()` entries.
+    pub fn solve_in_place_real(&self, f: &mut [f64]) {
+        let mut buf: Vec<Complex<f64>> = f.par_iter().map(|&v| Complex::new(v, 0.0)).collect();
+        self.solve_in_place(&mut buf);
+        f.par_iter_mut()
+            .zip(buf.par_iter())
+            .for_each(|(o, b)| *o = b.re);
     }
 }
 

@@ -1402,3 +1402,43 @@ fn convergence_periodic_2d() {
 
 
 
+
+/// `solve_in_place_real` must reproduce the real part of the complex solve
+/// exactly (the imaginary parts stay identically zero through the pipeline).
+#[test]
+fn solve_in_place_real_matches_complex() {
+    // 1D, Dirichlet.
+    let solver = Poisson::new(1.0, 0.0, 8, 3, 1.0, 1.0, BoundaryCondition::Dirichlet);
+    let x = solver.get_x();
+    let f_re: Vec<f64> = x.iter().map(|&xi| (2.7 * xi + 0.3).sin()).collect();
+    let mut f_cx: Vec<Complex<f64>> = f_re.iter().map(|&v| Complex::new(v, 0.0)).collect();
+    let mut f_real = f_re.clone();
+    solver.solve_in_place(&mut f_cx);
+    solver.solve_in_place_real(&mut f_real);
+    for (a, b) in f_real.iter().zip(f_cx.iter()) {
+        assert_eq!(*a, b.re);
+    }
+
+    // 2D, mixed BCs.
+    let solver = PoissonND::<2>::new(
+        [1.0; 2],
+        [0.0; 2],
+        [6; 2],
+        [3; 2],
+        1.0,
+        1.0,
+        [BoundaryCondition::Periodic, BoundaryCondition::Neumann],
+    );
+    let x = solver.get_x();
+    let f_re: Vec<f64> = x
+        .iter()
+        .map(|&[a, b]| (2.1 * a).sin() * (1.3 * b + 0.2).cos())
+        .collect();
+    let mut f_cx: Vec<Complex<f64>> = f_re.iter().map(|&v| Complex::new(v, 0.0)).collect();
+    let mut f_real = f_re.clone();
+    solver.solve_in_place(&mut f_cx);
+    solver.solve_in_place_real(&mut f_real);
+    for (a, b) in f_real.iter().zip(f_cx.iter()) {
+        assert_eq!(*a, b.re);
+    }
+}

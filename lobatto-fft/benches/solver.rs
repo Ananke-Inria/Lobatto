@@ -189,10 +189,63 @@ fn bench_solve_in_place_3d(c: &mut Criterion) {
     group.finish();
 }
 
+
+/// 5D solve at ~1.9M DOFs ((9*2)^5), periodic.
+///
+/// The solve is applied repeatedly in place — no per-iteration clone, so the
+/// measurement is pure solve cost (data-independent). Compares the complex
+/// path with `solve_in_place_real`.
+fn bench_solve_in_place_5d(c: &mut Criterion) {
+    let n = 9;
+    let r = 2; // (n*r)^5 = 18^5 = 1_889_568 DOFs
+    let alpha = 1.0;
+    let beta = 1.0;
+
+    let solver = PoissonND::<5>::new(
+        [1.0; 5],
+        [0.0; 5],
+        [n; 5],
+        [r; 5],
+        alpha,
+        beta,
+        [BoundaryCondition::Periodic; 5],
+    );
+    let total = (n * r).pow(5);
+
+    // Pseudo-random RHS (the solve cost does not depend on the data).
+    let mut state = 0x9e3779b97f4a7c15_u64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 11) as f64 / (1u64 << 53) as f64 - 0.5
+    };
+
+    let mut group = c.benchmark_group("hofft_solve_in_place_5d");
+    group.sample_size(10);
+    group.throughput(Throughput::Elements(total as u64));
+
+    {
+        let mut f: Vec<Complex<f64>> = (0..total).map(|_| Complex::new(next(), 0.0)).collect();
+        group.bench_function(BenchmarkId::from_parameter("complex"), |b| {
+            b.iter(|| solver.solve_in_place(black_box(&mut f)))
+        });
+    }
+    {
+        let mut f: Vec<f64> = (0..total).map(|_| next()).collect();
+        group.bench_function(BenchmarkId::from_parameter("real"), |b| {
+            b.iter(|| solver.solve_in_place_real(black_box(&mut f)))
+        });
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_solve_in_place,
     bench_solve_in_place_2d,
-    bench_solve_in_place_3d
+    bench_solve_in_place_3d,
+    bench_solve_in_place_5d
 );
 criterion_main!(benches);
