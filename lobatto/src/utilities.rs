@@ -84,14 +84,26 @@ pub fn barycentric_weights(x: &[f64]) -> Vec<f64> {
 ///
 /// Cost: $O(n)$ after the $O(n^2)$ weight precomputation.
 pub fn lagrangian_interpolation(pos: &[f64], w: &[f64], p: f64) -> Vec<f64> {
-    let n = pos.len();
+    let mut res = vec![0.0_f64; pos.len()];
+    lagrangian_interpolation_into(pos, w, p, &mut res);
+    res
+}
 
-    // diffs[r] = p - pos[r]; i_min is the index of the closest node.
-    let mut diffs = vec![0.0_f64; n];
+/// Allocation-free variant of [`lagrangian_interpolation`]: writes
+/// $(L_0(p), \ldots, L_{n-1}(p))$ into `out` (length `n`).
+///
+/// Same barycentric algorithm and stability property; `out` doubles as the
+/// scratch buffer for the node differences, so no allocation is performed.
+pub fn lagrangian_interpolation_into(pos: &[f64], w: &[f64], p: f64, out: &mut [f64]) {
+    let n = pos.len();
+    debug_assert_eq!(out.len(), n);
+    debug_assert_eq!(w.len(), n);
+
+    // out[r] = p - pos[r]; i_min is the index of the closest node.
     let mut i_min = 0;
     for r in 0..n {
-        diffs[r] = p - pos[r];
-        if diffs[r].abs() < diffs[i_min].abs() {
+        out[r] = p - pos[r];
+        if out[r].abs() < out[i_min].abs() {
             i_min = r;
         }
     }
@@ -100,21 +112,19 @@ pub fn lagrangian_interpolation(pos: &[f64], w: &[f64], p: f64) -> Vec<f64> {
     let mut prod_skip = 1.0_f64;
     for r in 0..n {
         if r != i_min {
-            prod_skip *= diffs[r];
+            prod_skip *= out[r];
         }
     }
 
     // L_i(p) = w[i] * Π_{r≠i}(p - pos[r]).
     //   i = i_min : Π_{r≠i} = prod_skip                      (no division by small term)
     //   i ≠ i_min : Π_{r≠i} = prod_skip * diffs[i_min] / diffs[i]
-    let mut res = vec![0.0_f64; n];
+    let d_min = out[i_min];
     for i in 0..n {
-        res[i] = if i == i_min {
+        out[i] = if i == i_min {
             w[i] * prod_skip
         } else {
-            w[i] * prod_skip * diffs[i_min] / diffs[i]
+            w[i] * prod_skip * d_min / out[i]
         };
     }
-
-    res
 }
