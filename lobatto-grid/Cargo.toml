@@ -1,0 +1,24 @@
+[package]
+name = "lobatto-grid"
+version = "0.1.0"
+edition = "2021"
+description = "Multi-element Gauss–Lobatto grids on tensor-product domains: geometry, boundary extensions, and high-order Lagrange interpolation (point evaluation, convection, precomputed evaluation plans)."
+license = "LGPL-3.0-only"
+repository = "https://github.com/OndoMathX/QuadratiX/tree/main/lobatto-grid"
+keywords = ["gauss-lobatto", "spectral-element", "interpolation", "grid", "tensor-product"]
+categories = ["mathematics", "science"]
+
+[[bench]]
+name = "interp"
+harness = false
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--html-in-header", "katex.html"]
+
+[dependencies]
+lobatto = "0.1.3"
+rayon = "1"
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }
+num-complex = "0.4"

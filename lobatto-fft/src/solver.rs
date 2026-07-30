@@ -252,6 +252,14 @@ impl Poisson {
         self.planner.get_x()
     }
 
+    /// The [`lobatto_grid::Grid1D`] the solver is built on.
+    ///
+    /// Interpolation of the solution (e.g. [`lobatto_grid::Grid1D::eval`],
+    /// [`lobatto_grid::Grid1D::convect`]) is provided by the grid directly.
+    pub fn grid(&self) -> &lobatto_grid::Grid1D {
+        self.planner.grid()
+    }
+
     /// Solve $(\alpha M + \beta K)\, u = f$ in place.
     ///
     /// On input, `f` holds the strong-form right-hand side at the Gauss-Lobatto nodes
@@ -447,6 +455,15 @@ impl<const N: usize> PoissonND<N> {
     /// Direction 0 ($x$) varies fastest.
     pub fn get_x(&self) -> Vec<[f64; N]> {
         self.fft.get_x()
+    }
+
+    /// The [`lobatto_grid::GridND`] the solver is built on.
+    ///
+    /// Interpolation of the solution (e.g. [`lobatto_grid::GridND::eval`],
+    /// [`lobatto_grid::GridND::convect`], the [`lobatto_grid::EvalPlan`] API)
+    /// is provided by the grid directly.
+    pub fn grid(&self) -> &lobatto_grid::GridND<N> {
+        self.fft.grid()
     }
 
     /// Solve $(\alpha M + \beta K)\, u = f$ in place using the ND HoFFT algorithm.

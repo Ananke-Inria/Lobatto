@@ -136,7 +136,7 @@ fn main() {
     let mut hofft_vals =
         vec![rustfft::num_complex::Complex::new(0.0_f64, 0.0); eval_hofft_pts.len()];
     solver_hofft
-        .fft
+        .grid()
         .eval(&eval_hofft_pts, &f_hofft, &mut hofft_vals);
     let hofft_eval_err = eval_hofft_pts
         .iter()
@@ -209,7 +209,7 @@ fn main() {
     let mut hofft1_vals =
         vec![rustfft::num_complex::Complex::new(0.0_f64, 0.0); eval_hot_pts.len()];
     solver_hofft1
-        .fft
+        .grid()
         .eval(&eval_hot_pts, &f_hofft1, &mut hofft1_vals);
     let hofft1_eval_err = eval_hot_pts
         .iter()

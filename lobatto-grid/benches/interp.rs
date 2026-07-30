@@ -1,9 +1,9 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use lobatto_fft::solver::*;
-use rustfft::num_complex::Complex;
+use lobatto_grid::{Extension, GridND};
+use num_complex::Complex;
 use std::hint::black_box;
 
-/// Benchmark `EngineND::<4>::eval` alone (interpolation only) on a ~10M-DOF
+/// Benchmark `GridND::<4>::eval` alone (interpolation only) on a ~10M-DOF
 /// 4D grid.
 ///
 /// The grid size is fixed at (n*r)^4 = 56^4 ≈ 9.83M DOFs, with 10M query
@@ -14,16 +14,8 @@ fn bench_eval_4d(c: &mut Criterion) {
     let r = 4;
     let n = 14; // (n*r)^4 = 56^4 ≈ 9.83M DOFs
 
-    let solver = PoissonND::<4>::new(
-        [1.0; 4],
-        [0.0; 4],
-        [n; 4],
-        [r; 4],
-        1.0,
-        1.0,
-        [BoundaryCondition::Periodic; 4],
-    );
-    let x = solver.get_x();
+    let grid = GridND::<4>::new([n; 4], [r; 4], [1.0; 4], [0.0; 4], [Extension::Periodic; 4]);
+    let x = grid.get_x();
     let total = x.len();
 
     // Smooth field at the DOF nodes.
@@ -52,7 +44,7 @@ fn bench_eval_4d(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::from_parameter(format!("m={m}")), |b| {
         b.iter(|| {
-            solver.fft.eval(black_box(&xs), black_box(&u), &mut fu);
+            grid.eval(black_box(&xs), black_box(&u), &mut fu);
             black_box(fu[0])
         })
     });
@@ -60,7 +52,7 @@ fn bench_eval_4d(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark `EngineND::<4>::convect` on the same ~10M-DOF 4D grid.
+/// Benchmark `GridND::<4>::convect` on the same ~10M-DOF 4D grid.
 ///
 /// The flow map shifts every node out of the domain, so the periodic folding
 /// path of `eval_extended` is exercised; m = n_dof ≈ 9.83M by construction.
@@ -68,16 +60,8 @@ fn bench_convect_4d(c: &mut Criterion) {
     let r = 4;
     let n = 14; // (n*r)^4 = 56^4 ≈ 9.83M DOFs
 
-    let solver = PoissonND::<4>::new(
-        [1.0; 4],
-        [0.0; 4],
-        [n; 4],
-        [r; 4],
-        1.0,
-        1.0,
-        [BoundaryCondition::Periodic; 4],
-    );
-    let x = solver.get_x();
+    let grid = GridND::<4>::new([n; 4], [r; 4], [1.0; 4], [0.0; 4], [Extension::Periodic; 4]);
+    let x = grid.get_x();
     let total = x.len();
 
     // Smooth field at the DOF nodes.
@@ -96,7 +80,7 @@ fn bench_convect_4d(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::from_parameter(format!("m={total}")), |b| {
         b.iter(|| {
-            solver.fft.convect(black_box(lambda), black_box(&u), &mut out);
+            grid.convect(black_box(lambda), black_box(&u), &mut out);
             black_box(out[0])
         })
     });
@@ -104,23 +88,15 @@ fn bench_convect_4d(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark `EngineND::<4>::eval_with_plan` — the repeated-`convect`
+/// Benchmark `GridND::<4>::eval_with_plan` — the repeated-`convect`
 /// configuration: the plan (flow map, folding, element grouping, gather
 /// tables, local coordinates) is built once, only the apply is measured.
 fn bench_convect_plan_4d(c: &mut Criterion) {
     let r = 4;
     let n = 14; // (n*r)^4 = 56^4 ≈ 9.83M DOFs
 
-    let solver = PoissonND::<4>::new(
-        [1.0; 4],
-        [0.0; 4],
-        [n; 4],
-        [r; 4],
-        1.0,
-        1.0,
-        [BoundaryCondition::Periodic; 4],
-    );
-    let x = solver.get_x();
+    let grid = GridND::<4>::new([n; 4], [r; 4], [1.0; 4], [0.0; 4], [Extension::Periodic; 4]);
+    let x = grid.get_x();
     let total = x.len();
 
     // Smooth field at the DOF nodes.
@@ -132,7 +108,7 @@ fn bench_convect_plan_4d(c: &mut Criterion) {
     let lambda = |pt: [f64; 4]| pt.map(|t| t + 0.13);
 
     let t0 = std::time::Instant::now();
-    let plan = solver.fft.convect_plan(lambda);
+    let plan = grid.convect_plan(lambda);
     println!("convect_plan construction: {:.1} ms", t0.elapsed().as_secs_f64() * 1e3);
 
     let mut out = vec![Complex::new(0.0_f64, 0.0); total];
@@ -143,7 +119,7 @@ fn bench_convect_plan_4d(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::from_parameter(format!("m={total}")), |b| {
         b.iter(|| {
-            solver.fft.eval_with_plan(black_box(&plan), black_box(&u), &mut out);
+            grid.eval_with_plan(black_box(&plan), black_box(&u), &mut out);
             black_box(out[0])
         })
     });
@@ -157,16 +133,8 @@ fn bench_convect_plan_4d_real(c: &mut Criterion) {
     let r = 4;
     let n = 14; // (n*r)^4 = 56^4 ≈ 9.83M DOFs
 
-    let solver = PoissonND::<4>::new(
-        [1.0; 4],
-        [0.0; 4],
-        [n; 4],
-        [r; 4],
-        1.0,
-        1.0,
-        [BoundaryCondition::Periodic; 4],
-    );
-    let x = solver.get_x();
+    let grid = GridND::<4>::new([n; 4], [r; 4], [1.0; 4], [0.0; 4], [Extension::Periodic; 4]);
+    let x = grid.get_x();
     let total = x.len();
 
     let q = |t: f64| t * t * (t - 1.0);
@@ -175,7 +143,7 @@ fn bench_convect_plan_4d_real(c: &mut Criterion) {
         .collect();
 
     let lambda = |pt: [f64; 4]| pt.map(|t| t + 0.13);
-    let plan = solver.fft.convect_plan(lambda);
+    let plan = grid.convect_plan(lambda);
 
     let mut out = vec![0.0_f64; total];
 
@@ -185,7 +153,7 @@ fn bench_convect_plan_4d_real(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::from_parameter(format!("m={total}")), |b| {
         b.iter(|| {
-            solver.fft.eval_with_plan(black_box(&plan), black_box(&u), &mut out);
+            grid.eval_with_plan(black_box(&plan), black_box(&u), &mut out);
             black_box(out[0])
         })
     });

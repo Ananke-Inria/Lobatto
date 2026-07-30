@@ -1,13 +1,13 @@
-//! Interpolation of HoFFT DOF vectors: point evaluation, extension folding,
+//! Interpolation of grid DOF vectors: point evaluation, extension folding,
 //! convection, and precomputed evaluation plans.
 //!
-//! This module gathers the interpolation routines of [`Engine`] (1D) and
-//! [`EngineND`] (ND), plus [`EvalPlan`]: a precomputed plan for the
+//! This module gathers the interpolation routines of [`Grid1D`] (1D) and
+//! [`GridND`] (ND), plus [`EvalPlan`]: a precomputed plan for the
 //! configuration where the same set of evaluation points (typically a fixed
-//! flow map `lambda` in [`EngineND::convect`]) is used many times with varying
+//! flow map `lambda` in [`GridND::convect`]) is used many times with varying
 //! DOF data `u`.
 
-use super::{nd_col_major_strides, Engine, EngineND, Extension};
+use crate::grid::{nd_col_major_strides, Extension, Grid1D, GridND};
 use lobatto::utilities::{lagrangian_interpolation, lagrangian_interpolation_into};
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -31,7 +31,7 @@ impl<T> InterpScalar for T where
 
 // ─── 1D interpolation ─────────────────────────────────────────────────────────
 
-impl Engine {
+impl Grid1D {
     /// Evaluate the interpolant of `u` at a single position `x`.
     ///
     /// `u` must be in the x-increasing layout matching [`get_x`](Self::get_x).
@@ -94,34 +94,13 @@ impl Engine {
             .for_each(|(f, &x)| *f = self.eval_at(x, u));
     }
 
-    /// Fold `x` into `[xl, xl+l]` according to the extension, returning the folded
-    /// coordinate and the sign of the extended interpolant there
-    /// ($-1$ on odd-reflected copies, $+1$ otherwise).
-    pub(crate) fn fold_extended(&self, x: f64) -> (f64, f64) {
-        match self.extension {
-            Extension::Periodic => ((x - self.xl).rem_euclid(self.l) + self.xl, 1.0),
-            Extension::Odd | Extension::Even => {
-                let t = (x - self.xl).rem_euclid(2.0 * self.l);
-                if t <= self.l {
-                    (self.xl + t, 1.0)
-                } else {
-                    let sign = match self.extension {
-                        Extension::Odd => -1.0,
-                        _ => 1.0,
-                    };
-                    (self.xl + (2.0 * self.l - t), sign)
-                }
-            }
-        }
-    }
-
     /// Evaluate the extension of the interpolant of `u` at a single position `x`.
     ///
     /// Unlike [`eval_at`](Self::eval_at), `x` may lie anywhere: it is folded back into
     /// `[xl, xl+l]` according to the extension — periodic wrap (`Periodic`),
     /// even reflection (`Even`/Neumann), or odd reflection with a sign flip
     /// (`Odd`/Dirichlet) — so the result is consistent with the underlying
-    /// FFT representation.
+    /// extended representation.
     ///
     /// Batch variant with a caller-provided output buffer:
     /// [`eval_extended`](Self::eval_extended).
@@ -136,7 +115,7 @@ impl Engine {
     /// back into `[xl, xl+l]` according to the extension — periodic wrap
     /// (`Periodic`), even reflection (`Even`/Neumann), or odd reflection with a
     /// sign flip (`Odd`/Dirichlet) — so the result is consistent with the
-    /// underlying FFT representation.
+    /// underlying extended representation.
     ///
     /// - `xs`: query points (length `m`).
     /// - `u`: DOF vector in the x-increasing layout matching [`get_x`](Self::get_x).
@@ -165,40 +144,11 @@ impl Engine {
             .zip(xs.par_iter())
             .for_each(|(o, &x)| *o = self.eval_extended_at(lambda(x), u));
     }
-
-    /// Returns the flat DOF index for local node `j` (0..=r) of element `k` (0..n).
-    ///
-    /// Used by `EngineND::eval` to gather local patch values.
-    ///
-    /// - `Periodic`: right endpoint (j==r) wraps to next element's j=0.
-    /// - `Odd`: left boundary (k=0,j=0) and right boundary (k=n-1,j=r) are Dirichlet zeros,
-    ///   returned as `n_dof` (sentinel for "zero, not stored").
-    ///   Otherwise: flat index `k*r + j - 1`.
-    /// - `Even`: flat index `k*r + j`.
-    pub(crate) fn eval_dof_index(&self, k: usize, j: usize) -> usize {
-        match self.extension {
-            Extension::Periodic => {
-                if j < self.r {
-                    k * self.r + j
-                } else {
-                    ((k + 1) % self.n) * self.r
-                }
-            }
-            Extension::Odd => {
-                if (k == 0 && j == 0) || (k == self.n - 1 && j == self.r) {
-                    self.n_dof // sentinel: zero boundary
-                } else {
-                    k * self.r + j - 1
-                }
-            }
-            Extension::Even => k * self.r + j,
-        }
-    }
 }
 
 // ─── ND geometry helpers ──────────────────────────────────────────────────────
 
-/// Per-element, per-point geometry shared by [`EngineND::eval`] and the plan
+/// Per-element, per-point geometry shared by [`GridND::eval`] and the plan
 /// construction/application: local node counts, strides, offsets into the flat
 /// basis-value scratch buffer.
 struct EvalGeometry<const N: usize> {
@@ -215,11 +165,11 @@ struct EvalGeometry<const N: usize> {
 }
 
 impl<const N: usize> EvalGeometry<N> {
-    fn new(engine: &EngineND<N>) -> Self {
-        let ns: [usize; N] = std::array::from_fn(|d| engine.planners[d].n);
-        let rs: [usize; N] = std::array::from_fn(|d| engine.planners[d].r);
-        let ls: [f64; N] = std::array::from_fn(|d| engine.planners[d].l);
-        let xls: [f64; N] = std::array::from_fn(|d| engine.planners[d].xl);
+    fn new(grid: &GridND<N>) -> Self {
+        let ns: [usize; N] = std::array::from_fn(|d| grid.grids[d].n);
+        let rs: [usize; N] = std::array::from_fn(|d| grid.grids[d].r);
+        let ls: [f64; N] = std::array::from_fn(|d| grid.grids[d].l);
+        let xls: [f64; N] = std::array::from_fn(|d| grid.grids[d].xl);
         let hs: [f64; N] = std::array::from_fn(|d| ls[d] / ns[d] as f64);
         let counts: [usize; N] = std::array::from_fn(|d| rs[d] + 1);
         let count_strides = nd_col_major_strides(&counts);
@@ -276,7 +226,7 @@ impl<const N: usize> EvalGeometry<N> {
     }
 }
 
-impl<const N: usize> EngineND<N> {
+impl<const N: usize> GridND<N> {
     /// Gather `u` into a contiguous local patch for element `ks`.
     ///
     /// Each direction contributes `dof_d * stride_d`; if any direction returns
@@ -293,8 +243,8 @@ impl<const N: usize> EngineND<N> {
                 let mut is_zero = false;
                 for (d, &k_d) in ks.iter().enumerate() {
                     let j = (p / geo.count_strides[d]) % geo.counts[d];
-                    let dof_d = self.planners[d].eval_dof_index(k_d, j);
-                    if dof_d == self.planners[d].n_dof {
+                    let dof_d = self.grids[d].eval_dof_index(k_d, j);
+                    if dof_d == self.grids[d].n_dof {
                         is_zero = true;
                         break;
                     }
@@ -313,8 +263,8 @@ impl<const N: usize> EngineND<N> {
     fn fill_phi(&self, geo: &EvalGeometry<N>, xi: &[f64; N], phi: &mut [f64]) {
         for d in 0..N {
             lagrangian_interpolation_into(
-                &self.planners[d].gauss_lobatto_points,
-                &self.planners[d].bary_weights,
+                &self.grids[d].gauss_lobatto_points,
+                &self.grids[d].bary_weights,
                 xi[d],
                 &mut phi[geo.phi_off[d]..geo.phi_off[d] + geo.counts[d]],
             );
@@ -378,7 +328,7 @@ fn contract<T: InterpScalar, const N: usize>(
 
 // ─── ND interpolation ─────────────────────────────────────────────────────────
 
-impl<const N: usize> EngineND<N> {
+impl<const N: usize> GridND<N> {
     /// Evaluate the ND interpolant of `u` at a batch of positions.
     ///
     /// - `xs`: query points (length `m`); each `xs[i]` is a coordinate array `[f64; N]`.
@@ -442,7 +392,7 @@ impl<const N: usize> EngineND<N> {
     /// folded back into its domain according to that direction's extension —
     /// periodic wrap (`Periodic`), even reflection (`Even`/Neumann), or odd
     /// reflection with a sign flip (`Odd`/Dirichlet) — so the result is
-    /// consistent with the underlying FFT representation.
+    /// consistent with the underlying extended representation.
     pub fn eval_extended<T: InterpScalar>(&self, xs: &[[f64; N]], u: &[T], fu: &mut [T]) {
         self.eval_extended_iter(xs.par_iter().copied(), u, fu);
     }
@@ -453,7 +403,7 @@ impl<const N: usize> EngineND<N> {
     fn fold_point(&self, x: [f64; N]) -> ([f64; N], f64) {
         let mut sign = 1.0_f64;
         let y: [f64; N] = std::array::from_fn(|d| {
-            let (y_d, s_d) = self.planners[d].fold_extended(x[d]);
+            let (y_d, s_d) = self.grids[d].fold_extended(x[d]);
             sign *= s_d;
             y_d
         });
@@ -463,7 +413,7 @@ impl<const N: usize> EngineND<N> {
     /// `true` iff some direction uses the `Odd` extension, i.e. reflection
     /// signs can differ from $+1$.
     fn has_odd(&self) -> bool {
-        (0..N).any(|d| matches!(self.planners[d].extension, Extension::Odd))
+        (0..N).any(|d| matches!(self.grids[d].extension, Extension::Odd))
     }
 
     /// Shared core of [`eval_extended`](Self::eval_extended) and
@@ -508,7 +458,7 @@ impl<const N: usize> EngineND<N> {
         // Node coordinates are computed from the flat index (as in `get_x`), so
         // the grid, the flow map and the domain fold fuse into a single pass
         // without materialising the grid or the shifted positions.
-        let x1d: [Vec<f64>; N] = std::array::from_fn(|d| self.planners[d].get_x());
+        let x1d: [Vec<f64>; N] = std::array::from_fn(|d| self.grids[d].get_x());
         self.eval_extended_iter(
             (0..self.total).into_par_iter().map(|p| {
                 lambda(std::array::from_fn(|d| {
@@ -538,9 +488,9 @@ struct ElemGroup {
 
 /// Precomputed interpolation plan: fixed evaluation points, varying DOF data.
 ///
-/// Built once by [`EngineND::eval_plan`], [`EngineND::eval_extended_plan`] or
-/// [`EngineND::convect_plan`], then applied any number of times with
-/// [`EngineND::eval_with_plan`]. All position-dependent work — flow map,
+/// Built once by [`GridND::eval_plan`], [`GridND::eval_extended_plan`] or
+/// [`GridND::convect_plan`], then applied any number of times with
+/// [`GridND::eval_with_plan`]. All position-dependent work — flow map,
 /// extension folding, element search, grouping, DOF gather indices, local
 /// coordinates — is done at construction; the apply is pure gather + contraction.
 ///
@@ -552,23 +502,23 @@ struct ElemGroup {
 /// to real (`f64`) and complex (`Complex<f64>`) fields interchangeably.
 ///
 /// ```rust
-/// use lobatto_fft::hofft::{EngineND, Extension};
+/// use lobatto_grid::{Extension, GridND};
 ///
-/// let engine = EngineND::<2>::new([4; 2], [2; 2], [1.0; 2], [0.0; 2], [Extension::Periodic; 2]);
-/// let x = engine.get_x();
+/// let grid = GridND::<2>::new([4; 2], [2; 2], [1.0; 2], [0.0; 2], [Extension::Periodic; 2]);
+/// let x = grid.get_x();
 /// let u: Vec<f64> = x.iter().map(|&[a, b]| a + b).collect();
 ///
 /// // Build the plan once for a fixed flow map ...
-/// let plan = engine.convect_plan(|[a, b]| [a + 0.1, b]);
+/// let plan = grid.convect_plan(|[a, b]| [a + 0.1, b]);
 ///
 /// // ... and reuse it for every new field `u` (real or complex).
 /// let mut out = vec![0.0_f64; u.len()];
-/// engine.eval_with_plan(&plan, &u, &mut out);
+/// grid.eval_with_plan(&plan, &u, &mut out);
 /// ```
 pub struct EvalPlan<const N: usize> {
     /// Number of query points.
     m: usize,
-    /// `EngineND::total` of the engine the plan was built for (compatibility check).
+    /// `GridND::total` of the grid the plan was built for (compatibility check).
     total: usize,
     /// Reflection signs in original point order (`None` when all are +1).
     signs: Option<Vec<f64>>,
@@ -580,7 +530,7 @@ pub struct EvalPlan<const N: usize> {
     xi: Vec<[f64; N]>,
 }
 
-impl<const N: usize> EngineND<N> {
+impl<const N: usize> GridND<N> {
     /// Build an [`EvalPlan`] for a fixed batch of in-domain positions.
     ///
     /// Same domain requirements as [`eval`](Self::eval); use
@@ -615,7 +565,7 @@ impl<const N: usize> EngineND<N> {
     where
         F: Fn([f64; N]) -> [f64; N] + Sync,
     {
-        let x1d: [Vec<f64>; N] = std::array::from_fn(|d| self.planners[d].get_x());
+        let x1d: [Vec<f64>; N] = std::array::from_fn(|d| self.grids[d].get_x());
         let pts: Vec<[f64; N]> = (0..self.total)
             .into_par_iter()
             .map(|p| {
@@ -655,8 +605,8 @@ impl<const N: usize> EngineND<N> {
                     let mut global = 0usize;
                     for (d, &k_d) in ks.iter().enumerate() {
                         let j = (p / geo.count_strides[d]) % geo.counts[d];
-                        let dof_d = self.planners[d].eval_dof_index(k_d, j);
-                        if dof_d == self.planners[d].n_dof {
+                        let dof_d = self.grids[d].eval_dof_index(k_d, j);
+                        if dof_d == self.grids[d].n_dof {
                             return ZERO_DOF;
                         }
                         global += dof_d * self.strides[d];
@@ -691,13 +641,13 @@ impl<const N: usize> EngineND<N> {
     ///
     /// - `plan`: built by [`eval_plan`](Self::eval_plan),
     ///   [`eval_extended_plan`](Self::eval_extended_plan) or
-    ///   [`convect_plan`](Self::convect_plan) **on this engine**.
+    ///   [`convect_plan`](Self::convect_plan) **on this grid**.
     /// - `u`: DOF vector in the column-major tensor-product layout from [`get_x`](Self::get_x).
     /// - `fu`: output buffer; `fu[i]` receives the value at the plan's `i`-th position.
     pub fn eval_with_plan<T: InterpScalar>(&self, plan: &EvalPlan<N>, u: &[T], fu: &mut [T]) {
         assert_eq!(
             plan.total, self.total,
-            "eval_with_plan: plan was built for a different engine"
+            "eval_with_plan: plan was built for a different grid"
         );
         assert_eq!(u.len(), self.total);
         assert_eq!(fu.len(), plan.m);

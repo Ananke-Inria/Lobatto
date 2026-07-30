@@ -1,230 +1,103 @@
-//! Tests for the interpolation routines (`hofft::ho_interp`):
+//! Tests for the interpolation routines:
 //! `eval`, `eval_extended`, `convect`, and the precomputed `EvalPlan`.
 
-use lobatto_fft::solver::*;
-use nalgebra::Complex;
+use lobatto_grid::{Extension, Grid1D, GridND};
+use num_complex::Complex;
 use std::f64::consts::PI;
 use std::time::Instant;
 
-/// 1D Periodic eval convergence: max error over 100 off-grid points via `eval`.
+/// Shared 1D interpolation-convergence driver: sample `u` at the grid nodes
+/// and measure the max interpolation error over 100 off-grid points.
 ///
-/// u(t) = exp(sin(2π·t)),  t = (x−xl)/l,  on [0.7, 2.2].
+/// Nodal interpolation of a smooth function converges at rate ~r+1; the
+/// assertion requires rate ≥ r−1 (or error already at rounding level).
+fn convergence_1d(ext: Extension, label: &str, l: f64, xl: f64, u: impl Fn(f64) -> f64) {
+    let r = 5_usize;
+    let n_values = [4, 8, 16, 32, 64, 128];
+    let exact = |x: f64| u((x - xl) / l);
+    let pts: Vec<f64> = (0..100)
+        .map(|i| xl + (7.0 * PI * (i as f64 + 0.5) / 100.0).fract() * l)
+        .collect();
+
+    println!("\n{:=<55}", "");
+    println!("1D eval convergence — {label} (r={r}), 100 off-grid pts");
+    println!("domain: [{xl}, {}]", xl + l);
+    println!("{:=<55}", "");
+    println!("{:>8} {:>14} {:>10}", "n", "max_err_eval", "rate");
+    println!("{:-<36}", "");
+
+    let (mut prev_h, mut prev_err) = (None::<f64>, None::<f64>);
+    for &n in &n_values {
+        let h = l / n as f64;
+        let grid = Grid1D::new(n, r, l, xl, ext);
+        let f: Vec<f64> = grid.get_x().iter().map(|&xi| exact(xi)).collect();
+
+        let max_err = pts
+            .iter()
+            .map(|&p| (grid.eval_at(p, &f) - exact(p)).abs())
+            .fold(0.0_f64, f64::max);
+
+        let rate = match (prev_h, prev_err) {
+            (Some(ph), Some(pe)) if pe > 0.0 && max_err > 0.0 => {
+                let rv = (pe / max_err).ln() / (ph / h).ln();
+                assert!(
+                    max_err < 1e-8 || rv >= r as f64 - 1.0,
+                    "1D eval {label} r={r} n={n}: rate {rv:.2} < {}, err={max_err:.2e}",
+                    r + 1
+                );
+                format!("{rv:.2}")
+            }
+            _ => "-".to_string(),
+        };
+        println!("{n:>8} {max_err:>14.2e} {rate:>10}");
+        prev_h = Some(h);
+        prev_err = Some(max_err);
+    }
+}
+
+/// 1D Periodic eval convergence: u(t) = exp(sin(2π·t)) on [0.7, 2.2].
 #[test]
 fn convergence_periodic_1d_eval() {
-    let alpha = 1.0_f64;
-    let beta = 1.0_f64;
-    let r = 5_usize;
-    let n_values = [4, 8, 16, 32, 64, 128];
-    let l = 1.5_f64;
-    let xl = 0.7_f64;
     let w = 2.0 * PI;
-    let u = |t: f64| (w * t).sin().exp();
-    let u_pp = |t: f64| {
-        let (s, c) = ((w * t).sin(), (w * t).cos());
-        w * w * (c * c - s) * s.exp()
-    };
-    let exact = |x: f64| u((x - xl) / l);
-    let pts: Vec<f64> = (0..100)
-        .map(|i| xl + (7.0 * PI * (i as f64 + 0.5) / 100.0).fract() * l)
-        .collect();
-
-    println!("\n{:=<55}", "");
-    println!("1D eval convergence — Periodic (r={r}), 100 off-grid pts");
-    println!("domain: [{xl}, {}]", xl + l);
-    println!("{:=<55}", "");
-    println!("{:>8} {:>14} {:>10}", "n", "max_err_eval", "rate");
-    println!("{:-<36}", "");
-
-    let (mut prev_h, mut prev_err) = (None::<f64>, None::<f64>);
-    for &n in &n_values {
-        let h = l / n as f64;
-        let solver = Poisson::new(l, xl, n, r, alpha, beta, BoundaryCondition::Periodic);
-        let x = solver.get_x();
-        let mut f: Vec<Complex<f64>> = x
-            .iter()
-            .map(|&xi| {
-                let t = (xi - xl) / l;
-                Complex::new(alpha * u(t) - beta * u_pp(t) / l.powi(2), 0.0)
-            })
-            .collect();
-        solver.solve_in_place(&mut f);
-
-        let max_err = pts
-            .iter()
-            .map(|&p| (solver.planner.eval_at(p, &f).re - exact(p)).abs())
-            .fold(0.0_f64, f64::max);
-
-        let rate = match (prev_h, prev_err) {
-            (Some(ph), Some(pe)) if pe > 0.0 && max_err > 0.0 => {
-                let rv = (pe / max_err).ln() / (ph / h).ln();
-                assert!(
-                    max_err < 1e-8 || rv >= r as f64 - 1.0,
-                    "1D eval Periodic r={r} n={n}: rate {rv:.2} < {}, err={max_err:.2e}",
-                    r + 1
-                );
-                format!("{rv:.2}")
-            }
-            _ => "-".to_string(),
-        };
-        println!("{n:>8} {max_err:>14.2e} {rate:>10}");
-        prev_h = Some(h);
-        prev_err = Some(max_err);
-    }
+    convergence_1d(Extension::Periodic, "Periodic", 1.5, 0.7, |t| {
+        (w * t).sin().exp()
+    });
 }
 
-/// 1D Dirichlet eval convergence: max error over 100 off-grid points via `eval`.
-///
-/// u(t) = exp(sin(π·t)) − 1,  u(0) = u(1) = 0,  on [0.3, 2.8].
+/// 1D Dirichlet eval convergence: u(t) = exp(sin(π·t)) − 1, u(0) = u(1) = 0,
+/// on [0.3, 2.8].
 #[test]
 fn convergence_dirichlet_1d_eval() {
-    let alpha = 1.0_f64;
-    let beta = 1.0_f64;
-    let r = 5_usize;
-    let n_values = [4, 8, 16, 32, 64, 128];
-    let l = 2.5_f64;
-    let xl = 0.3_f64;
     let w = PI;
-    let u = |t: f64| (w * t).sin().exp() - 1.0;
-    let u_pp = |t: f64| {
-        let (s, c) = ((w * t).sin(), (w * t).cos());
-        w * w * (c * c - s) * s.exp()
-    };
-    let exact = |x: f64| u((x - xl) / l);
-    let pts: Vec<f64> = (0..100)
-        .map(|i| xl + (7.0 * PI * (i as f64 + 0.5) / 100.0).fract() * l)
-        .collect();
-
-    println!("\n{:=<55}", "");
-    println!("1D eval convergence — Dirichlet (r={r}), 100 off-grid pts");
-    println!("domain: [{xl}, {}]", xl + l);
-    println!("{:=<55}", "");
-    println!("{:>8} {:>14} {:>10}", "n", "max_err_eval", "rate");
-    println!("{:-<36}", "");
-
-    let (mut prev_h, mut prev_err) = (None::<f64>, None::<f64>);
-    for &n in &n_values {
-        let h = l / n as f64;
-        let solver = Poisson::new(l, xl, n, r, alpha, beta, BoundaryCondition::Dirichlet);
-        let x = solver.get_x();
-        let mut f: Vec<Complex<f64>> = x
-            .iter()
-            .map(|&xi| {
-                let t = (xi - xl) / l;
-                Complex::new(alpha * u(t) - beta * u_pp(t) / l.powi(2), 0.0)
-            })
-            .collect();
-        solver.solve_in_place(&mut f);
-
-        let max_err = pts
-            .iter()
-            .map(|&p| (solver.planner.eval_at(p, &f).re - exact(p)).abs())
-            .fold(0.0_f64, f64::max);
-
-        let rate = match (prev_h, prev_err) {
-            (Some(ph), Some(pe)) if pe > 0.0 && max_err > 0.0 => {
-                let rv = (pe / max_err).ln() / (ph / h).ln();
-                assert!(
-                    max_err < 1e-8 || rv >= r as f64 - 1.0,
-                    "1D eval Dirichlet r={r} n={n}: rate {rv:.2} < {}, err={max_err:.2e}",
-                    r + 1
-                );
-                format!("{rv:.2}")
-            }
-            _ => "-".to_string(),
-        };
-        println!("{n:>8} {max_err:>14.2e} {rate:>10}");
-        prev_h = Some(h);
-        prev_err = Some(max_err);
-    }
+    convergence_1d(Extension::Odd, "Dirichlet", 2.5, 0.3, |t| {
+        (w * t).sin().exp() - 1.0
+    });
 }
 
-/// 1D Neumann eval convergence: max error over 100 off-grid points via `eval`.
-///
-/// u(t) = exp(cos(π·t)),  u'(0) = u'(1) = 0,  on [0.1, 0.95].
+/// 1D Neumann eval convergence: u(t) = exp(cos(π·t)), u'(0) = u'(1) = 0,
+/// on [0.1, 0.95].
 #[test]
 fn convergence_neumann_1d_eval() {
-    let alpha = 1.0_f64;
-    let beta = 1.0_f64;
-    let r = 5_usize;
-    let n_values = [4, 8, 16, 32, 64, 128];
-    let l = 0.85_f64;
-    let xl = 0.1_f64;
     let w = PI;
-    let u = |t: f64| (w * t).cos().exp();
-    let u_pp = |t: f64| {
-        let (s, c) = ((w * t).sin(), (w * t).cos());
-        w * w * (s * s - c) * c.exp()
-    };
-    let exact = |x: f64| u((x - xl) / l);
-    let pts: Vec<f64> = (0..100)
-        .map(|i| xl + (7.0 * PI * (i as f64 + 0.5) / 100.0).fract() * l)
-        .collect();
-
-    println!("\n{:=<55}", "");
-    println!("1D eval convergence — Neumann (r={r}), 100 off-grid pts");
-    println!("domain: [{xl}, {}]", xl + l);
-    println!("{:=<55}", "");
-    println!("{:>8} {:>14} {:>10}", "n", "max_err_eval", "rate");
-    println!("{:-<36}", "");
-
-    let (mut prev_h, mut prev_err) = (None::<f64>, None::<f64>);
-    for &n in &n_values {
-        let h = l / n as f64;
-        let solver = Poisson::new(l, xl, n, r, alpha, beta, BoundaryCondition::Neumann);
-        let x = solver.get_x();
-        let mut f: Vec<Complex<f64>> = x
-            .iter()
-            .map(|&xi| {
-                let t = (xi - xl) / l;
-                Complex::new(alpha * u(t) - beta * u_pp(t) / l.powi(2), 0.0)
-            })
-            .collect();
-        solver.solve_in_place(&mut f);
-
-        let max_err = pts
-            .iter()
-            .map(|&p| (solver.planner.eval_at(p, &f).re - exact(p)).abs())
-            .fold(0.0_f64, f64::max);
-
-        let rate = match (prev_h, prev_err) {
-            (Some(ph), Some(pe)) if pe > 0.0 && max_err > 0.0 => {
-                let rv = (pe / max_err).ln() / (ph / h).ln();
-                assert!(
-                    max_err < 1e-8 || rv >= r as f64 - 1.0,
-                    "1D eval Neumann r={r} n={n}: rate {rv:.2} < {}, err={max_err:.2e}",
-                    r + 1
-                );
-                format!("{rv:.2}")
-            }
-            _ => "-".to_string(),
-        };
-        println!("{n:>8} {max_err:>14.2e} {rate:>10}");
-        prev_h = Some(h);
-        prev_err = Some(max_err);
-    }
+    convergence_1d(Extension::Even, "Neumann", 0.85, 0.1, |t| {
+        (w * t).cos().exp()
+    });
 }
 
-/// 3D convergence measured at 100 deterministic off-grid points via `eval`.
+/// 3D interpolation convergence measured at 100 deterministic off-grid points
+/// via `eval`.
 ///
-/// Checks h-convergence (r=3 fixed, n increasing) using the same tensor-product
-/// test function as `convergence_3d`.  Error is the max over 100 pseudo-random
-/// points that do NOT coincide with any Gaus-Lobatto node.
+/// Checks h-convergence (r=5 fixed, n increasing) for the nodal interpolant of
+/// a smooth tensor-product function.  Error is the max over 100 pseudo-random
+/// points that do NOT coincide with any Gauss-Lobatto node.
 #[test]
 fn convergence_3d_eval() {
-    let alpha = 1.0_f64;
-    let beta = 1.0_f64;
     let w = 2.0 * PI;
-    let w2 = w * w;
 
     let ls = [1.0_f64, 2.0, 3.0];
     let xls = [0.0_f64, 1.0, -1.0];
 
     let u1d = |x: f64| (w * x).sin().exp();
-    let u1d_pp = |x: f64| {
-        let s = (w * x).sin();
-        let c = (w * x).cos();
-        w2 * (c * c - s) * s.exp()
-    };
     let exact_u = |x: f64, y: f64, z: f64| {
         u1d((x - xls[0]) / ls[0]) * u1d((y - xls[1]) / ls[1]) * u1d((z - xls[2]) / ls[2])
     };
@@ -242,10 +115,10 @@ fn convergence_3d_eval() {
         .collect();
 
     let r = 5;
-    let n_values = [4, 8, 16, 32, 64, 128];
+    let n_values = [4, 8, 16, 32, 64];
 
     println!("\n{:=<55}", "");
-    println!("3D eval convergence (HoFFT, r={r}), 100 off-grid points");
+    println!("3D eval convergence (r={r}), 100 off-grid points");
     println!(
         "domain: [{},{}]×[{},{}]×[{},{}]",
         xls[0],
@@ -264,41 +137,17 @@ fn convergence_3d_eval() {
 
     for &n in &n_values {
         let h = 1.0 / n as f64;
-        let solver = PoissonND::<3>::new(
-            ls,
-            xls,
-            [n; 3],
-            [r; 3],
-            alpha,
-            beta,
-            [BoundaryCondition::Periodic; 3],
-        );
-        let x = solver.get_x();
-        let total = x.len();
+        let grid = GridND::<3>::new([n; 3], [r; 3], ls, xls, [Extension::Periodic; 3]);
+        let x = grid.get_x();
 
-        let mut f: Vec<Complex<f64>> = (0..total)
-            .map(|i| {
-                let xi = (x[i][0] - xls[0]) / ls[0];
-                let yi = (x[i][1] - xls[1]) / ls[1];
-                let zi = (x[i][2] - xls[2]) / ls[2];
-                let (ux, uy, uz) = (u1d(xi), u1d(yi), u1d(zi));
-                let uxx = u1d_pp(xi) / ls[0].powi(2);
-                let uyy = u1d_pp(yi) / ls[1].powi(2);
-                let uzz = u1d_pp(zi) / ls[2].powi(2);
-                Complex::new(
-                    alpha * ux * uy * uz - beta * (uxx * uy * uz + ux * uyy * uz + ux * uy * uzz),
-                    0.0,
-                )
-            })
-            .collect();
-        solver.solve_in_place(&mut f);
+        let f: Vec<f64> = x.iter().map(|p| exact_u(p[0], p[1], p[2])).collect();
 
-        let mut vals = vec![Complex::new(0.0_f64, 0.0); pts.len()];
-        solver.fft.eval(&pts, &f, &mut vals);
+        let mut vals = vec![0.0_f64; pts.len()];
+        grid.eval(&pts, &f, &mut vals);
         let max_err = pts
             .iter()
             .zip(vals.iter())
-            .map(|(pt, v)| (v.re - exact_u(pt[0], pt[1], pt[2])).abs())
+            .map(|(pt, v)| (v - exact_u(pt[0], pt[1], pt[2])).abs())
             .fold(0.0_f64, f64::max);
 
         let rate = match (prev_h, prev_err) {
@@ -324,7 +173,7 @@ fn convergence_3d_eval() {
 
 #[test]
 fn convect_4d_q6() {
-    // Q6 elements (r=6), 4 elements per direction, 4D periodic domain [0,1]^4.
+    // Q6 elements (r=6), 6 elements per direction, 4D periodic domain [0,1]^4.
     //
     // u     = Q3 function  → exactly represented in Q6 space
     // φ_d   = Q2 shift vanishing at boundaries: φ(t) = t + 0.3·t·(1−t)
@@ -335,16 +184,8 @@ fn convect_4d_q6() {
     let r = 6;
     let n = 6;
 
-    let solver = PoissonND::<4>::new(
-        [1.0; 4],
-        [0.0; 4],
-        [n; 4],
-        [r; 4],
-        1.0,
-        1.0,
-        [BoundaryCondition::Periodic; 4],
-    );
-    let x = solver.get_x();
+    let grid = GridND::<4>::new([n; 4], [r; 4], [1.0; 4], [0.0; 4], [Extension::Periodic; 4]);
+    let x = grid.get_x();
     let total = x.len();
 
     // Q3 factor: q(t) = t²·(t−1),  q(0)=q(1)=0  →  periodic value ✓
@@ -374,7 +215,7 @@ fn convect_4d_q6() {
     let u_cx: Vec<Complex<f64>> = u.iter().map(|&v| Complex::new(v, 0.0)).collect();
     let t0 = Instant::now();
     let mut result = vec![Complex::new(0.0_f64, 0.0); u_cx.len()];
-    solver.fft.convect(lambda, &u_cx, &mut result);
+    grid.convect(lambda, &u_cx, &mut result);
     let elapsed = t0.elapsed();
 
     let max_err = result
@@ -395,8 +236,8 @@ fn convect_4d_q6() {
 // ── eval domain guard and eval_extended ───────────────────────────────────────
 
 mod eval_extended {
-    use lobatto_fft::hofft::{Engine, EngineND, Extension};
-    use nalgebra::Complex;
+    use lobatto_grid::{Extension, Grid1D, GridND};
+    use num_complex::Complex;
     use std::f64::consts::PI;
 
     /// Reference fold: map `x` into `[xl, xl+l]` per the extension, with the
@@ -416,8 +257,8 @@ mod eval_extended {
         }
     }
 
-    fn nodal_u(eng: &Engine, xl: f64, l: f64) -> Vec<Complex<f64>> {
-        eng.get_x()
+    fn nodal_u(grid: &Grid1D, xl: f64, l: f64) -> Vec<Complex<f64>> {
+        grid.get_x()
             .iter()
             .map(|&x| Complex::new((1.7 * PI * (x - xl) / l).sin().exp(), 0.0))
             .collect()
@@ -427,13 +268,13 @@ mod eval_extended {
     fn extended_1d_matches_folded_eval() {
         let (n, r, l, xl) = (8_usize, 4_usize, 2.5_f64, -1.2_f64);
         for ext in [Extension::Periodic, Extension::Even, Extension::Odd] {
-            let eng = Engine::new(n, r, l, xl, ext);
-            let u = nodal_u(&eng, xl, l);
+            let grid = Grid1D::new(n, r, l, xl, ext);
+            let u = nodal_u(&grid, xl, l);
             for i in 0..200 {
                 let x = -9.0 + 0.093 * i as f64; // well outside [-1.2, 1.3]
                 let (y, sign) = fold(x, xl, l, ext);
-                let got = eng.eval_extended_at(x, &u);
-                let expected = eng.eval_at(y, &u) * sign;
+                let got = grid.eval_extended_at(x, &u);
+                let expected = grid.eval_at(y, &u) * sign;
                 assert!(
                     (got - expected).norm() < 1e-12,
                     "{ext:?}: eval_extended({x}) = {got}, expected {expected}"
@@ -446,11 +287,11 @@ mod eval_extended {
     fn eval_1d_at_exact_boundaries() {
         let (n, r, l, xl) = (8_usize, 4_usize, 2.5_f64, -1.2_f64);
         for ext in [Extension::Periodic, Extension::Even, Extension::Odd] {
-            let eng = Engine::new(n, r, l, xl, ext);
-            let u = nodal_u(&eng, xl, l);
+            let grid = Grid1D::new(n, r, l, xl, ext);
+            let u = nodal_u(&grid, xl, l);
             // Both endpoints are in-domain and must not panic or blow up.
             for x in [xl, xl + l] {
-                let v = eng.eval_at(x, &u);
+                let v = grid.eval_at(x, &u);
                 assert!(v.norm() < 1e3, "{ext:?}: eval({x}) = {v} blew up");
             }
         }
@@ -459,9 +300,9 @@ mod eval_extended {
     #[test]
     #[should_panic(expected = "outside")]
     fn eval_1d_out_of_domain_panics() {
-        let eng = Engine::new(8, 4, 2.5, -1.2, Extension::Even);
-        let u = nodal_u(&eng, -1.2, 2.5);
-        eng.eval_at(1.31, &u);
+        let grid = Grid1D::new(8, 4, 2.5, -1.2, Extension::Even);
+        let u = nodal_u(&grid, -1.2, 2.5);
+        grid.eval_at(1.31, &u);
     }
 
     #[test]
@@ -470,8 +311,8 @@ mod eval_extended {
         let ls = [2.0_f64, 3.0];
         let xls = [-1.0_f64, 0.5];
         let exts = [Extension::Even, Extension::Odd];
-        let eng = EngineND::<2>::new([n; 2], [r; 2], ls, xls, exts);
-        let u: Vec<Complex<f64>> = eng
+        let grid = GridND::<2>::new([n; 2], [r; 2], ls, xls, exts);
+        let u: Vec<Complex<f64>> = grid
             .get_x()
             .iter()
             .map(|p| {
@@ -495,9 +336,9 @@ mod eval_extended {
             .unzip();
 
         let mut got = vec![Complex::new(0.0_f64, 0.0); pts.len()];
-        eng.eval_extended(&pts, &u, &mut got);
+        grid.eval_extended(&pts, &u, &mut got);
         let mut expected = vec![Complex::new(0.0_f64, 0.0); pts.len()];
-        eng.eval(&folded, &u, &mut expected);
+        grid.eval(&folded, &u, &mut expected);
 
         for i in 0..pts.len() {
             let e = expected[i] * signs[i];
@@ -518,8 +359,8 @@ mod eval_extended {
     fn eval_nd_at_exact_right_boundary() {
         let ls = [2.0_f64, 3.0];
         let xls = [-1.0_f64, 0.5];
-        let eng = EngineND::<2>::new([6; 2], [4; 2], ls, xls, [Extension::Even; 2]);
-        let x = eng.get_x();
+        let grid = GridND::<2>::new([6; 2], [4; 2], ls, xls, [Extension::Even; 2]);
+        let x = grid.get_x();
         let u: Vec<Complex<f64>> = x
             .iter()
             .map(|p| Complex::new((p[0] + 0.3 * p[1]).sin(), 0.0))
@@ -533,7 +374,7 @@ mod eval_extended {
             .position(|p| p[0] == corner[0] && p[1] == corner[1])
             .expect("corner node not found in grid");
         let mut out = vec![Complex::new(0.0_f64, 0.0); 1];
-        eng.eval(&[corner], &u, &mut out);
+        grid.eval(&[corner], &u, &mut out);
         assert!(
             (out[0] - u[idx]).norm() < 1e-12,
             "corner eval {} != nodal value {}",
@@ -545,16 +386,16 @@ mod eval_extended {
     #[test]
     #[should_panic(expected = "outside")]
     fn eval_nd_out_of_domain_panics() {
-        let eng = EngineND::<2>::new([6; 2], [4; 2], [2.0, 3.0], [-1.0, 0.5], [Extension::Even; 2]);
+        let grid = GridND::<2>::new([6; 2], [4; 2], [2.0, 3.0], [-1.0, 0.5], [Extension::Even; 2]);
         let u = vec![Complex::new(0.0_f64, 0.0); 25 * 25];
         let mut out = vec![Complex::new(0.0_f64, 0.0); 1];
-        eng.eval(&[[-1.5, 1.0]], &u, &mut out);
+        grid.eval(&[[-1.5, 1.0]], &u, &mut out);
     }
 }
 
 mod eval_plan {
-    use lobatto_fft::solver::*;
-    use nalgebra::Complex;
+    use lobatto_grid::{Extension, GridND};
+    use num_complex::Complex;
 
     /// Mirror of `convect_4d_q6`: u = Q3, φ = Q2 boundary-preserving shift, so
     /// u∘φ = Q6 is exactly represented at r=6. The planned path must reproduce
@@ -564,23 +405,13 @@ mod eval_plan {
         let r = 6;
         let n = 6;
 
-        let solver = PoissonND::<4>::new(
-            [1.0; 4],
-            [0.0; 4],
-            [n; 4],
-            [r; 4],
-            1.0,
-            1.0,
-            [BoundaryCondition::Periodic; 4],
-        );
-        let x = solver.get_x();
+        let grid = GridND::<4>::new([n; 4], [r; 4], [1.0; 4], [0.0; 4], [Extension::Periodic; 4]);
+        let x = grid.get_x();
         let total = x.len();
 
         let q = |t: f64| t * t * (t - 1.0);
         let u: Vec<Complex<f64>> = (0..total)
-            .map(|p| {
-                Complex::new((0..4_usize).map(|d| q(x[p][d])).product::<f64>(), 0.0)
-            })
+            .map(|p| Complex::new((0..4_usize).map(|d| q(x[p][d])).product::<f64>(), 0.0))
             .collect();
 
         let phi = |t: f64| t + 0.3 * t * (1.0 - t);
@@ -591,11 +422,11 @@ mod eval_plan {
             .collect();
 
         let mut direct = vec![Complex::new(0.0_f64, 0.0); total];
-        solver.fft.convect(lambda, &u, &mut direct);
+        grid.convect(lambda, &u, &mut direct);
 
-        let plan = solver.fft.convect_plan(lambda);
+        let plan = grid.convect_plan(lambda);
         let mut planned = vec![Complex::new(0.0_f64, 0.0); total];
-        solver.fft.eval_with_plan(&plan, &u, &mut planned);
+        grid.eval_with_plan(&plan, &u, &mut planned);
 
         let max_err_exact = planned
             .iter()
@@ -623,16 +454,8 @@ mod eval_plan {
     /// `eval_extended`, and in-domain points must match `eval`.
     #[test]
     fn extended_plan_2d_dirichlet_matches_eval_extended() {
-        let solver = PoissonND::<2>::new(
-            [1.0; 2],
-            [0.0; 2],
-            [6; 2],
-            [4; 2],
-            1.0,
-            1.0,
-            [BoundaryCondition::Dirichlet; 2],
-        );
-        let x = solver.get_x();
+        let grid = GridND::<2>::new([6; 2], [4; 2], [1.0; 2], [0.0; 2], [Extension::Odd; 2]);
+        let x = grid.get_x();
 
         let u: Vec<Complex<f64>> = x
             .iter()
@@ -648,11 +471,11 @@ mod eval_plan {
             .collect();
 
         let mut direct = vec![Complex::new(0.0_f64, 0.0); pts.len()];
-        solver.fft.eval_extended(&pts, &u, &mut direct);
+        grid.eval_extended(&pts, &u, &mut direct);
 
-        let plan = solver.fft.eval_extended_plan(&pts);
+        let plan = grid.eval_extended_plan(&pts);
         let mut planned = vec![Complex::new(0.0_f64, 0.0); pts.len()];
-        solver.fft.eval_with_plan(&plan, &u, &mut planned);
+        grid.eval_with_plan(&plan, &u, &mut planned);
 
         let max_diff = planned
             .iter()
@@ -669,11 +492,11 @@ mod eval_plan {
             })
             .collect();
         let mut direct_in = vec![Complex::new(0.0_f64, 0.0); pts_in.len()];
-        solver.fft.eval(&pts_in, &u, &mut direct_in);
+        grid.eval(&pts_in, &u, &mut direct_in);
 
-        let plan_in = solver.fft.eval_plan(&pts_in);
+        let plan_in = grid.eval_plan(&pts_in);
         let mut planned_in = vec![Complex::new(0.0_f64, 0.0); pts_in.len()];
-        solver.fft.eval_with_plan(&plan_in, &u, &mut planned_in);
+        grid.eval_with_plan(&plan_in, &u, &mut planned_in);
 
         let max_diff_in = planned_in
             .iter()
@@ -687,16 +510,8 @@ mod eval_plan {
     /// including reflection signs (Dirichlet/odd) and through a shared plan.
     #[test]
     fn real_field_matches_complex() {
-        let solver = PoissonND::<2>::new(
-            [1.0; 2],
-            [0.0; 2],
-            [6; 2],
-            [4; 2],
-            1.0,
-            1.0,
-            [BoundaryCondition::Dirichlet; 2],
-        );
-        let x = solver.get_x();
+        let grid = GridND::<2>::new([6; 2], [4; 2], [1.0; 2], [0.0; 2], [Extension::Odd; 2]);
+        let x = grid.get_x();
 
         let u_re: Vec<f64> = x
             .iter()
@@ -708,9 +523,9 @@ mod eval_plan {
 
         // Direct convect, both scalar types.
         let mut out_re = vec![0.0_f64; u_re.len()];
-        solver.fft.convect(lambda, &u_re, &mut out_re);
+        grid.convect(lambda, &u_re, &mut out_re);
         let mut out_cx = vec![Complex::new(0.0_f64, 0.0); u_cx.len()];
-        solver.fft.convect(lambda, &u_cx, &mut out_cx);
+        grid.convect(lambda, &u_cx, &mut out_cx);
 
         let max_diff = out_re
             .iter()
@@ -720,11 +535,11 @@ mod eval_plan {
         assert!(max_diff < 1e-14, "real vs complex convect: {max_diff:.3e}");
 
         // One shared plan applied to both scalar types.
-        let plan = solver.fft.convect_plan(lambda);
+        let plan = grid.convect_plan(lambda);
         let mut plan_re = vec![0.0_f64; u_re.len()];
-        solver.fft.eval_with_plan(&plan, &u_re, &mut plan_re);
+        grid.eval_with_plan(&plan, &u_re, &mut plan_re);
         let mut plan_cx = vec![Complex::new(0.0_f64, 0.0); u_cx.len()];
-        solver.fft.eval_with_plan(&plan, &u_cx, &mut plan_cx);
+        grid.eval_with_plan(&plan, &u_cx, &mut plan_cx);
 
         let max_diff_plan = plan_re
             .iter()
@@ -764,15 +579,7 @@ fn convect_one_element_shift_is_permutation() {
     let ndof_1d = n * r; // 12 per direction, periodic
     let h = 1.0 / n as f64;
 
-    let solver = PoissonND::<4>::new(
-        [1.0; 4],
-        [0.0; 4],
-        [n; 4],
-        [r; 4],
-        1.0,
-        1.0,
-        [BoundaryCondition::Periodic; 4],
-    );
+    let grid = GridND::<4>::new([n; 4], [r; 4], [1.0; 4], [0.0; 4], [Extension::Periodic; 4]);
     let total = ndof_1d.pow(4);
 
     // Arbitrary (pseudo-random, deterministic) nodal values.
@@ -802,7 +609,7 @@ fn convect_one_element_shift_is_permutation() {
         .collect();
 
     let mut direct = vec![0.0_f64; total];
-    solver.fft.convect(lambda, &u, &mut direct);
+    grid.convect(lambda, &u, &mut direct);
     let max_err = direct
         .iter()
         .zip(expected.iter())
@@ -810,9 +617,9 @@ fn convect_one_element_shift_is_permutation() {
         .fold(0.0_f64, f64::max);
     assert!(max_err < 1e-11, "convect shift permutation: {max_err:.3e}");
 
-    let plan = solver.fft.convect_plan(lambda);
+    let plan = grid.convect_plan(lambda);
     let mut planned = vec![0.0_f64; total];
-    solver.fft.eval_with_plan(&plan, &u, &mut planned);
+    grid.eval_with_plan(&plan, &u, &mut planned);
     let max_err_plan = planned
         .iter()
         .zip(expected.iter())

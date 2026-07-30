@@ -18,9 +18,14 @@
 //!
 //! | Type | Description |
 //! |------|-------------|
-//! | [`Engine`] | 1D HoFFT engine: forward/inverse transform, DOF layout, interpolation. |
+//! | [`Engine`] | 1D HoFFT engine: forward/inverse transform, DOF layout. |
 //! | [`EngineND`] | ND HoFFT engine: applies [`Engine`] direction by direction. |
-//! | [`Extension`] | Internal variant that encodes the FFT extension strategy. |
+//! | [`Extension`] | Boundary extension (re-exported from [`lobatto_grid`]); selects the FFT extension strategy. |
+//!
+//! Each engine holds the [`lobatto_grid`] grid it is built on, exposed via
+//! [`Engine::grid`] / [`EngineND::grid`]; interpolation and convection of DOF
+//! vectors are provided by [`lobatto_grid::Grid1D`] / [`lobatto_grid::GridND`]
+//! directly.
 //!
 //! ## Reference
 //!
@@ -57,38 +62,26 @@
 //! independent coefficients by discarding modes determined by the spectral symmetry.
 
 use lobatto::collocation::{CollocationBasis, Gauss};
-use lobatto::utilities::barycentric_weights;
+use lobatto_grid::{Grid1D, GridND};
 use rayon::prelude::*;
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use std::f64::consts::PI;
 use std::sync::Arc;
 
-mod ho_interp;
-pub use ho_interp::{EvalPlan, InterpScalar};
-
-// ── Extension ────────────────────────────────────────────────────────────────
-
-/// Extension strategy for an [`Engine`].
+/// Boundary extension (re-exported from [`lobatto_grid`]).
 ///
-/// Non-periodic boundary conditions are handled by extending the $n$-element physical
-/// domain to a $2n$-element periodic domain with the appropriate symmetry, then
-/// applying a single FFT of length $n_\mathrm{fft}$ and discarding the redundant
-/// Fourier coefficients.
+/// Selects the FFT extension strategy of an [`Engine`]: non-periodic boundary
+/// conditions are handled by extending the $n$-element physical domain to a
+/// $2n$-element periodic domain with the appropriate symmetry, then applying a
+/// single FFT of length $n_\mathrm{fft}$ and discarding the redundant Fourier
+/// coefficients.
 ///
 /// | Variant    | BC          | $n_\mathrm{fft}$ | $N_\mathrm{dof}$ |
 /// |------------|-------------|------------------|------------------|
 /// | `Periodic` | Periodic    | $n$              | $n r$            |
 /// | `Odd`      | Dirichlet   | $2n$             | $n r - 1$        |
 /// | `Even`     | Neumann     | $2n$             | $n r + 1$        |
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Extension {
-    /// Standard periodic FFT; no extension needed.
-    Periodic,
-    /// Odd (anti-symmetric) extension — enforces homogeneous Dirichlet values at both endpoints.
-    Odd,
-    /// Even (symmetric) extension — enforces zero normal derivative (Neumann) at both endpoints.
-    Even,
-}
+pub use lobatto_grid::Extension;
 
 // ── 1D ──────────────────────────────────────────────────────────────────────
 
@@ -199,6 +192,8 @@ impl RawEngine {
 /// - **Unpacking table**: maps full-buffer index $i$ → `(compact_index, phase_coefficient)`.
 ///   Used by [`inverse`](Self::inverse) to reconstruct the full buffer from the compact one.
 pub struct Engine {
+    /// Grid geometry: elements, order, domain, extension, DOF layout.
+    grid: Grid1D,
     /// Number of physical elements $n$.
     n: usize,
     /// FFT length: $n$ for `Periodic`, $2n$ for `Odd`/`Even`.
@@ -207,16 +202,8 @@ pub struct Engine {
     n_dof: usize,
     /// Polynomial order $r$.
     r: usize,
-    /// Physical domain length $L$.
-    l: f64,
-    /// Left boundary position $x_l$.
-    xl: f64,
     /// Extension type.
     extension: Extension,
-    /// Gauss-Lobatto nodes on $[0,1]$ (length $r+1$).
-    gauss_lobatto_points: Vec<f64>,
-    /// Barycentric weights for the $r+1$ Gauss-Lobatto nodes (used in [`eval`](Self::eval)).
-    bary_weights: Vec<f64>,
     /// Forward FFT engine of length $n_\mathrm{fft}$.
     fw_fft: Arc<dyn Fft<f64>>,
     /// Inverse FFT engine of length $n_\mathrm{fft}$.
@@ -254,20 +241,15 @@ impl Engine {
         let mut fft_planner = FftPlanner::<f64>::new();
         let fw_fft = fft_planner.plan_fft_forward(n_fft);
         let i_fft = fft_planner.plan_fft_inverse(n_fft);
-        let gauss_lobatto_points = CollocationBasis::new(vec![(r + 1, Gauss::Lobatto)])
-            .points_1d(0)
-            .to_vec();
-        let bary_weights: Vec<f64> = barycentric_weights(&gauss_lobatto_points);
+        let grid = Grid1D::new(n, r, l, xl, extension);
+        debug_assert_eq!(grid.n_dof(), n_dof);
         let mut s = Self {
+            grid,
             n,
             n_fft,
             n_dof,
             r,
-            l,
-            xl,
             extension,
-            gauss_lobatto_points,
-            bary_weights,
             fw_fft,
             i_fft,
             unpack_table: vec![],
@@ -525,6 +507,15 @@ impl Engine {
         }
     }
 
+    /// The [`Grid1D`] this engine is built on.
+    ///
+    /// Interpolation and convection of DOF vectors ([`Grid1D::eval`],
+    /// [`Grid1D::eval_extended`], [`Grid1D::convect`], …) are provided by the
+    /// grid directly.
+    pub fn grid(&self) -> &Grid1D {
+        &self.grid
+    }
+
     /// Gauss-Lobatto nodes in x-increasing order on `[xl, xl+l]`, matching
     /// [`crate::solver::Poisson::get_x`].
     ///
@@ -532,43 +523,7 @@ impl Engine {
     /// - `Odd`:      `n * r − 1` nodes — both boundary endpoints excluded.
     /// - `Even`:     `n * r + 1` nodes — both boundary endpoints included.
     pub fn get_x(&self) -> Vec<f64> {
-        let h = self.l / (self.n as f64);
-        let mut x = Vec::with_capacity(self.n_dof);
-
-        match self.extension {
-            Extension::Periodic => {
-                for k in 0..self.n {
-                    for j in 0..self.r {
-                        x.push(self.xl + h * ((k as f64) + self.gauss_lobatto_points[j]));
-                    }
-                }
-                x
-            }
-            Extension::Odd => {
-                // Skip xl (k=0,j=0) and xl+l (k=n-1,j=r): both are Dirichlet zeros.
-                for j in 1..self.r {
-                    x.push(self.xl + h * self.gauss_lobatto_points[j]);
-                }
-                for k in 1..self.n {
-                    for j in 0..self.r {
-                        x.push(self.xl + h * ((k as f64) + self.gauss_lobatto_points[j]));
-                    }
-                }
-                x
-            }
-            Extension::Even => {
-                // Element 0: all r+1 nodes; elements 1..n: skip shared left endpoint.
-                for j in 0..=self.r {
-                    x.push(self.xl + h * self.gauss_lobatto_points[j]);
-                }
-                for k in 1..self.n {
-                    for j in 1..=self.r {
-                        x.push(self.xl + h * ((k as f64) + self.gauss_lobatto_points[j]));
-                    }
-                }
-                x
-            }
-        }
+        self.grid.get_x()
     }
 
     /// Forward HoFFT: extend, reorder, FFT, and compact in place.
@@ -728,6 +683,8 @@ impl Engine {
 pub struct EngineND<const N: usize> {
     /// One 1D engine per spatial direction.
     planners: [Engine; N],
+    /// Grid geometry for the tensor-product domain.
+    grid: GridND<N>,
     /// Physical (= frequency) DOF counts per direction: `ndofs[d] = planners[d].n_dof`.
     pub(crate) ndofs: [usize; N],
     /// Total DOFs: `∏_d ndofs[d]`.
@@ -763,6 +720,7 @@ impl<const N: usize> EngineND<N> {
     ) -> Self {
         let planners: [Engine; N] =
             std::array::from_fn(|d| Engine::new(ns[d], rs[d], ls[d], xls[d], exts[d]));
+        let grid = GridND::new(ns, rs, ls, xls, exts);
         let ndofs: [usize; N] = std::array::from_fn(|d| planners[d].n_dof);
         let total = ndofs.iter().product();
         let strides = nd_col_major_strides(&ndofs);
@@ -773,6 +731,7 @@ impl<const N: usize> EngineND<N> {
         let full_strides = nd_col_major_strides(&full_sizes);
         Self {
             planners,
+            grid,
             ndofs,
             total,
             strides,
@@ -784,16 +743,22 @@ impl<const N: usize> EngineND<N> {
         }
     }
 
+    /// The [`GridND`] this engine is built on.
+    ///
+    /// Interpolation and convection of DOF vectors ([`GridND::eval`],
+    /// [`GridND::eval_extended`], [`GridND::convect`], the
+    /// [`lobatto_grid::EvalPlan`] API, …) are provided by the grid directly.
+    pub fn grid(&self) -> &GridND<N> {
+        &self.grid
+    }
+
     /// Tensor-product Gauss-Lobatto grid in x-increasing column-major order.
     ///
     /// Returns `Vec<[f64; N]>` of length `total = ∏_d ndofs[d]`.
     /// `result[p][d]` is the coordinate of point `p` in direction `d`.
     /// Direction 0 varies fastest; within each direction nodes are x-increasing.
     pub fn get_x(&self) -> Vec<[f64; N]> {
-        let x1d: [Vec<f64>; N] = std::array::from_fn(|d| self.planners[d].get_x());
-        (0..self.total)
-            .map(|p| std::array::from_fn(|d| x1d[d][(p / self.strides[d]) % self.ndofs[d]]))
-            .collect()
+        self.grid.get_x()
     }
 
     /// Maps a compact ND flat index `i ∈ [0, total)` to the corresponding index

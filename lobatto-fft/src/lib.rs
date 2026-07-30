@@ -22,6 +22,10 @@
 //! | [`hofft`] | HoFFT transform engine: [`hofft::Engine`] (1D) and [`hofft::EngineND`] (ND).|
 //! | [`solver`] | Screened Poisson solvers: [`solver::Poisson`] (1D) and [`solver::PoissonND`] (ND). Supports `Periodic`, `Dirichlet`, and `Neumann` boundary conditions per direction. |
 //!
+//! Grid geometry and interpolation (point evaluation, convection, precomputed
+//! evaluation plans) live in the [`lobatto_grid`] crate; engines and solvers
+//! expose the grid they are built on via their `grid()` accessors.
+//!
 //! ## Quick start
 //!
 //! ```rust
