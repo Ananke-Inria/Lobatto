@@ -10,6 +10,8 @@
 //! `g*M*N + e`, where `M` is the stride between consecutive nodes in the
 //! chosen direction.
 
+#![allow(clippy::excessive_precision)]
+
 // ============================================================================
 // Q3  (4 nodes, degree 3)
 // ============================================================================
@@ -44,13 +46,13 @@ fn _d_q3_q3<const N: usize, const M: usize>(in_q3: &[f64], out_q3: &mut [f64]) {
         out_q3[i] = -6.0 * a[i] + DX3[0] * b[i] - DX3[1] * c[i] + 1.0 * d[i];
     }
     for i in 0..N {
-        out_q3[1 * M * N + i] = -DX3[2] * a[i] + DX3[3] * c[i] - DX3[4] * d[i];
+        out_q3[M * N + i] = -DX3[2] * a[i] + DX3[3] * c[i] - DX3[4] * d[i];
     }
     for i in 0..N {
         out_q3[2 * M * N + i] = DX3[4] * a[i] - DX3[3] * b[i] + DX3[2] * d[i];
     }
     for i in 0..N {
-        out_q3[3 * M * N + i] = -1.0 * a[i] + DX3[1] * b[i] - DX3[0] * c[i] + 6.0 * d[i];
+        out_q3[3 * M * N + i] = -a[i] + DX3[1] * b[i] - DX3[0] * c[i] + 6.0 * d[i];
     }
 }
 
@@ -140,7 +142,7 @@ fn _d_t_q3_q3<const N: usize, const M: usize>(in_q3: &[f64], out_q3: &mut [f64])
         out_q3[i] = -6.0 * a[i] - DX3[2] * b[i] + DX3[4] * c[i] - 1.0 * d[i];
     }
     for i in 0..N {
-        out_q3[1 * M * N + i] = DX3[0] * a[i] - DX3[3] * c[i] + DX3[1] * d[i];
+        out_q3[M * N + i] = DX3[0] * a[i] - DX3[3] * c[i] + DX3[1] * d[i];
     }
     for i in 0..N {
         out_q3[2 * M * N + i] = -DX3[1] * a[i] + DX3[3] * b[i] - DX3[0] * d[i];
@@ -261,7 +263,7 @@ fn _d_q4_q4<const N: usize, const M: usize>(in_q4: &[f64], out_q4: &mut [f64]) {
         out_q4[i] = -10.0 * a[i] + DX4[0] * b[i] - DX4[1] * c[i] + DX4[2] * d[i] - 1.0 * e[i];
     }
     for i in 0..N {
-        out_q4[1 * M * N + i] = -DX4[3] * a[i] + DX4[4] * c[i] - DX4[5] * d[i] + DX4[6] * e[i];
+        out_q4[M * N + i] = -DX4[3] * a[i] + DX4[4] * c[i] - DX4[5] * d[i] + DX4[6] * e[i];
     }
     for i in 0..N {
         out_q4[2 * M * N + i] = DX4[7] * a[i] - DX4[8] * b[i] + DX4[8] * d[i] - DX4[7] * e[i];
@@ -362,7 +364,7 @@ fn _d_t_q4_q4<const N: usize, const M: usize>(in_q4: &[f64], out_q4: &mut [f64])
         out_q4[i] = -10.0 * a[i] - DX4[3] * b[i] + DX4[7] * c[i] - DX4[6] * d[i] + 1.0 * e[i];
     }
     for i in 0..N {
-        out_q4[1 * M * N + i] = DX4[0] * a[i] - DX4[8] * c[i] + DX4[5] * d[i] - DX4[2] * e[i];
+        out_q4[M * N + i] = DX4[0] * a[i] - DX4[8] * c[i] + DX4[5] * d[i] - DX4[2] * e[i];
     }
     for i in 0..N {
         out_q4[2 * M * N + i] = -DX4[1] * a[i] + DX4[4] * b[i] - DX4[4] * d[i] + DX4[1] * e[i];
@@ -372,7 +374,7 @@ fn _d_t_q4_q4<const N: usize, const M: usize>(in_q4: &[f64], out_q4: &mut [f64])
     }
     for i in 0..N {
         out_q4[4 * M * N + i] =
-            -1.0 * a[i] + DX4[6] * b[i] - DX4[7] * c[i] + DX4[3] * d[i] + 10.0 * e[i];
+            -a[i] + DX4[6] * b[i] - DX4[7] * c[i] + DX4[3] * d[i] + 10.0 * e[i];
     }
 }
 
@@ -604,7 +606,7 @@ fn _d_t_q5_q5<const N: usize, const M: usize>(in_q5: &[f64], out_q5: &mut [f64])
             - 1.0 * f[i];
     }
     for i in 0..N {
-        out_q5[1 * M * N + i] =
+        out_q5[M * N + i] =
             DX5[0] * a[i] - DX5[10] * c[i] + DX5[12] * d[i] - DX5[7] * e[i] + DX5[3] * f[i];
     }
     for i in 0..N {
@@ -752,7 +754,7 @@ fn _d_q6_q6<const N: usize, const M: usize>(in_q6: &[f64], out_q6: &mut [f64]) {
             - 1.0 * g[i];
     }
     for i in 0..N {
-        out_q6[1 * M * N + i] = -DX6[5] * a[i] + DX6[6] * c[i] - DX6[7] * d[i] + DX6[8] * e[i]
+        out_q6[M * N + i] = -DX6[5] * a[i] + DX6[6] * c[i] - DX6[7] * d[i] + DX6[8] * e[i]
             - DX6[9] * f[i]
             + DX6[10] * g[i];
     }
@@ -875,7 +877,7 @@ fn _d_t_q6_q6<const N: usize, const M: usize>(in_q6: &[f64], out_q6: &mut [f64])
             + 1.0 * g[i];
     }
     for i in 0..N {
-        out_q6[1 * M * N + i] = DX6[0] * a[i] - DX6[12] * c[i] + DX6[18] * d[i] - DX6[15] * e[i]
+        out_q6[M * N + i] = DX6[0] * a[i] - DX6[12] * c[i] + DX6[18] * d[i] - DX6[15] * e[i]
             + DX6[9] * f[i]
             - DX6[4] * g[i];
     }
@@ -900,7 +902,7 @@ fn _d_t_q6_q6<const N: usize, const M: usize>(in_q6: &[f64], out_q6: &mut [f64])
             - DX6[0] * g[i];
     }
     for i in 0..N {
-        out_q6[6 * M * N + i] = -1.0 * a[i] + DX6[10] * b[i] - DX6[16] * c[i] + DX6[17] * d[i]
+        out_q6[6 * M * N + i] = -a[i] + DX6[10] * b[i] - DX6[16] * c[i] + DX6[17] * d[i]
             - DX6[11] * e[i]
             + DX6[5] * f[i]
             + 21.0 * g[i];

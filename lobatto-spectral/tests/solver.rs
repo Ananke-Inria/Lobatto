@@ -1,6 +1,17 @@
 use lobatto_spectral::solver::*;
 use std::f64::consts::PI;
 
+/// A 1D test case: (label, exact solution u, rhs f, starting order, maximal
+/// order, expected final error).
+type Case1D = (
+    &'static str,
+    Box<dyn Fn(f64) -> f64>,
+    Box<dyn Fn(f64) -> f64>,
+    usize,
+    usize,
+    f64,
+);
+
 // ── 1D p-convergence ─────────────────────────────────────────────────────────
 
 #[test]
@@ -12,14 +23,7 @@ fn convergence_1d() {
 
     // Multi-mode smooth functions only — single-frequency trig would trigger
     // superconvergence when GLL nodes happen to land on zeros.
-    let tests: Vec<(
-        &str,
-        Box<dyn Fn(f64) -> f64>,
-        Box<dyn Fn(f64) -> f64>,
-        usize,
-        usize,
-        f64,
-    )> = vec![
+    let tests: Vec<Case1D> = vec![
         (
             "exp(sin(2πx))",
             Box::new(move |x| (w * x).sin().exp()),

@@ -156,10 +156,9 @@ impl CollocationBasis {
 
     /// Convert a multi-index $(i_0, \ldots, i_{d-1})$ to a flat DOF index.
     pub fn get_index(&self, multi_index: &[usize]) -> usize {
-        let n = self.n_points_acc.len();
         let mut i = multi_index[0];
-        for k in 1..n {
-            i += multi_index[k] * self.n_points_acc[k - 1];
+        for (mi, acc) in multi_index[1..].iter().zip(&self.n_points_acc) {
+            i += mi * acc;
         }
         i
     }
@@ -208,12 +207,9 @@ impl CollocationBasis {
         let mut step = vec![1; n];
         let mut start = vec![Vec::<usize>::new(); n];
 
-        let mut n_points = 1;
         let mut n_points_acc = vec![basis[0].0; n];
 
-        for k in 0..n {
-            n_points *= basis[k].0;
-        }
+        let n_points: usize = basis.iter().map(|b| b.0).product();
 
         for k in 1..n {
             n_points_acc[k] = basis[k].0 * n_points_acc[k - 1];
@@ -464,13 +460,13 @@ impl CollocationBasis {
                 // Sum-factorised evaluation: contract one direction at a time,
                 // direction 0 varies fastest.
                 let mut v = u.to_vec();
-                for d in 0..ndim {
-                    let n_d = self.basis[d].0;
+                for (phi_d, b) in phi.iter().zip(&self.basis) {
+                    let n_d = b.0;
                     let rest = v.len() / n_d;
                     let mut v_next = vec![0.0_f64; rest];
-                    for s in 0..rest {
-                        for j in 0..n_d {
-                            v_next[s] += phi[d][j] * v[s * n_d + j];
+                    for (s, v_s) in v_next.iter_mut().enumerate() {
+                        for (j, phi_j) in phi_d.iter().enumerate() {
+                            *v_s += phi_j * v[s * n_d + j];
                         }
                     }
                     v = v_next;

@@ -195,7 +195,7 @@ impl Poisson {
         let symbol_pseudo_inv =
             &eigenvectors * DMatrix::from_diagonal(&lambda_pinv) * eigenvectors.transpose();
 
-        let bary_weights = barycentric_weights(&lobatto_basis.points_1d(0));
+        let bary_weights = barycentric_weights(lobatto_basis.points_1d(0));
 
         Self {
             l,
@@ -238,7 +238,7 @@ impl Poisson {
     ///
     /// The solve is $u = A^+ (M f)$, a single matrix-vector product with the
     /// pre-computed pseudo-inverse.  Cost: $O(N_\mathrm{dof}^2)$.
-    pub fn solve_in_place(&self, f: &mut Vec<f64>) {
+    pub fn solve_in_place(&self, f: &mut [f64]) {
         let g = DVector::from_fn(self.ndof, |i, _| self.mass_diag[i] * f[i]);
         let x = &self.symbol_pseudo_inv * &g;
         for i in 0..self.ndof {
@@ -293,8 +293,8 @@ impl Poisson {
 /// ## Algorithm
 ///
 /// The ND operator has the tensor-product structure
-/// $$A_\mathrm{ND} = \alpha M_0 \otimes \cdots \otimes M_{N-1}
-///   + \beta \sum_{d=0}^{N-1} M_0 \otimes \cdots \otimes K_d \otimes \cdots \otimes M_{N-1}.$$
+/// $$A_\mathrm{ND} = \alpha M_0 \otimes \cdots \otimes M_{N-1} +
+///   \beta \sum_{d=0}^{N-1} M_0 \otimes \cdots \otimes K_d \otimes \cdots \otimes M_{N-1}.$$
 /// Its eigendecomposition factorises direction by direction:
 /// $$V_\mathrm{ND} = V^{(0)} \otimes \cdots \otimes V^{(N-1)},
 ///   \quad \lambda_{j_0,\ldots,j_{N-1}} = \alpha + \beta \sum_d \lambda^{(d)}_{j_d}.$$
@@ -510,20 +510,19 @@ impl<const N: usize> PoissonND<N> {
                 let c0 = self.ndofs[0];
                 let rest0 = u.len() / c0;
                 let mut v = vec![0.0_f64; rest0];
-                for s in 0..rest0 {
+                for (s, v_s) in v.iter_mut().enumerate() {
                     let base = s * c0;
                     for j in 0..c0 {
-                        v[s] += phi[0][j] * u[base + j];
+                        *v_s += phi[0][j] * u[base + j];
                     }
                 }
-                for d in 1..N {
-                    let c_d = self.ndofs[d];
+                for (phi_d, &c_d) in phi.iter().zip(self.ndofs.iter()).skip(1) {
                     let next = v.len() / c_d;
                     let mut v_next = vec![0.0_f64; next];
-                    for s in 0..next {
+                    for (s, v_s) in v_next.iter_mut().enumerate() {
                         let base = s * c_d;
                         for j in 0..c_d {
-                            v_next[s] += phi[d][j] * v[base + j];
+                            *v_s += phi_d[j] * v[base + j];
                         }
                     }
                     v = v_next;

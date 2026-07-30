@@ -37,18 +37,21 @@ fn convergence_1d(ext: Extension, label: &str, l: f64, xl: f64, u: impl Fn(f64) 
             .map(|&p| (grid.eval_at(p, &f) - exact(p)).abs())
             .fold(0.0_f64, f64::max);
 
-        let rate = match (prev_h, prev_err) {
-            (Some(ph), Some(pe)) if pe > 0.0 && max_err > 0.0 => {
-                let rv = (pe / max_err).ln() / (ph / h).ln();
-                assert!(
-                    max_err < 1e-8 || rv >= r as f64 - 1.0,
-                    "1D eval {label} r={r} n={n}: rate {rv:.2} < {}, err={max_err:.2e}",
-                    r + 1
-                );
-                format!("{rv:.2}")
-            }
-            _ => "-".to_string(),
-        };
+        let rate = prev_h
+            .zip(prev_err)
+            .filter(|&(_, pe)| pe > 0.0 && max_err > 0.0)
+            .map_or_else(
+                || "-".to_string(),
+                |(ph, pe)| {
+                    let rv = (pe / max_err).ln() / (ph / h).ln();
+                    assert!(
+                        max_err < 1e-8 || rv >= r as f64 - 1.0,
+                        "1D eval {label} r={r} n={n}: rate {rv:.2} < {}, err={max_err:.2e}",
+                        r + 1
+                    );
+                    format!("{rv:.2}")
+                },
+            );
         println!("{n:>8} {max_err:>14.2e} {rate:>10}");
         prev_h = Some(h);
         prev_err = Some(max_err);
@@ -150,18 +153,21 @@ fn convergence_3d_eval() {
             .map(|(pt, v)| (v - exact_u(pt[0], pt[1], pt[2])).abs())
             .fold(0.0_f64, f64::max);
 
-        let rate = match (prev_h, prev_err) {
-            (Some(ph), Some(pe)) if pe > 0.0 && max_err > 0.0 => {
-                let rv = (pe / max_err).ln() / (ph / h).ln();
-                assert!(
-                    max_err < 1e-8 || rv >= r as f64 - 1.0,
-                    "3D eval r={r} n={n}: rate {rv:.2} < {}, err={max_err:.2e}",
-                    r + 1
-                );
-                format!("{rv:.2}")
-            }
-            _ => "-".to_string(),
-        };
+        let rate = prev_h
+            .zip(prev_err)
+            .filter(|&(_, pe)| pe > 0.0 && max_err > 0.0)
+            .map_or_else(
+                || "-".to_string(),
+                |(ph, pe)| {
+                    let rv = (pe / max_err).ln() / (ph / h).ln();
+                    assert!(
+                        max_err < 1e-8 || rv >= r as f64 - 1.0,
+                        "3D eval r={r} n={n}: rate {rv:.2} < {}, err={max_err:.2e}",
+                        r + 1
+                    );
+                    format!("{rv:.2}")
+                },
+            );
 
         println!("{n:>8} {max_err:>14.2e} {rate:>10}");
         prev_h = Some(h);
@@ -250,7 +256,11 @@ mod eval_extended {
                 if t <= l {
                     (xl + t, 1.0)
                 } else {
-                    let s = if matches!(ext, Extension::Odd) { -1.0 } else { 1.0 };
+                    let s = if matches!(ext, Extension::Odd) {
+                        -1.0
+                    } else {
+                        1.0
+                    };
                     (xl + (2.0 * l - t), s)
                 }
             }
@@ -386,7 +396,13 @@ mod eval_extended {
     #[test]
     #[should_panic(expected = "outside")]
     fn eval_nd_out_of_domain_panics() {
-        let grid = GridND::<2>::new([6; 2], [4; 2], [2.0, 3.0], [-1.0, 0.5], [Extension::Even; 2]);
+        let grid = GridND::<2>::new(
+            [6; 2],
+            [4; 2],
+            [2.0, 3.0],
+            [-1.0, 0.5],
+            [Extension::Even; 2],
+        );
         let u = vec![Complex::new(0.0_f64, 0.0); 25 * 25];
         let mut out = vec![Complex::new(0.0_f64, 0.0); 1];
         grid.eval(&[[-1.5, 1.0]], &u, &mut out);

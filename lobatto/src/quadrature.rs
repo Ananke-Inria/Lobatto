@@ -89,22 +89,22 @@ pub fn gauss_legendre(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     // Exact expressions for order 1, 2, 3
     match n_quad_points {
         1 => {
-            return (vec![0.0], vec![2.0]);
+            (vec![0.0], vec![2.0])
         }
         2 => {
-            return (
-                vec![-(1.0 / 3.0 as f64).sqrt(), (1.0 / 3.0 as f64).sqrt()],
+            (
+                vec![-(1.0 / 3.0_f64).sqrt(), (1.0 / 3.0_f64).sqrt()],
                 vec![1.0, 1.0],
-            );
+            )
         }
         3 => {
-            return (
-                vec![-(3.0 / 5.0 as f64).sqrt(), 0.0, (3.0 / 5.0 as f64).sqrt()],
+            (
+                vec![-(3.0 / 5.0_f64).sqrt(), 0.0, (3.0 / 5.0_f64).sqrt()],
                 vec![5.0 / 9.0, 8.0 / 9.0, 5.0 / 9.0],
-            );
+            )
         }
         _ => {
-            return compute_gauss_quadrature(n_quad_points);
+            compute_gauss_quadrature(n_quad_points)
         }
     }
 }
@@ -124,24 +124,24 @@ pub fn gauss_lobatto(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     // Exact expressions for n = 2, 3, 4
     match n_quad_points {
         2 => {
-            return (vec![-1.0, 1.0], vec![1.0, 1.0]);
+            (vec![-1.0, 1.0], vec![1.0, 1.0])
         }
         3 => {
-            return (vec![-1.0, 0.0, 1.0], vec![1.0 / 3.0, 4.0 / 3.0, 1.0 / 3.0]);
+            (vec![-1.0, 0.0, 1.0], vec![1.0 / 3.0, 4.0 / 3.0, 1.0 / 3.0])
         }
         4 => {
-            return (
+            (
                 vec![
                     -1.0,
-                    -(5.0 as f64).sqrt() / 5.0,
-                    (5.0 as f64).sqrt() / 5.0,
+                    -5.0_f64.sqrt() / 5.0,
+                    5.0_f64.sqrt() / 5.0,
                     1.0,
                 ],
                 vec![1.0 / 6.0, 5.0 / 6.0, 5.0 / 6.0, 1.0 / 6.0],
-            );
+            )
         }
         _ => {
-            return compute_gauss_lobatto_quadrature(n_quad_points);
+            compute_gauss_lobatto_quadrature(n_quad_points)
         }
     }
 }
@@ -161,7 +161,7 @@ pub fn gauss_lobatto_on_unit_interval(n_quad_points: usize) -> (Vec<f64>, Vec<f6
     points.iter_mut().for_each(|x| *x = 0.5 * (*x + 1.0));
     weights.iter_mut().for_each(|w| *w *= 0.5);
 
-    return (points, weights);
+    (points, weights)
 }
 
 /// GL quadrature on the unit interval [0, 1].
@@ -179,7 +179,7 @@ pub fn gauss_legendre_on_unit_interval(n_quad_points: usize) -> (Vec<f64>, Vec<f
     points.iter_mut().for_each(|x| *x = 0.5 * (*x + 1.0));
     weights.iter_mut().for_each(|w| *w *= 0.5);
 
-    return (points, weights);
+    (points, weights)
 }
 
 // Computes the Fourier coefficients of the Legendre polynomial P_n and its
@@ -211,80 +211,66 @@ fn legendre_fourier(n: usize) -> Vec<f64> {
     }
 
     //Correcting factor for the lowest order term (missing in [1] equation (8))
-    ank_vec[0] *= 0.5 as f64;
+    ank_vec[0] *= 0.5_f64;
 
-    return ank_vec;
+    ank_vec
 }
 
 // Evaluate P_n(cos θ) from its Fourier coefficients `ank_vec`.
-fn fourier_value(theta: f64, ank_vec: &Vec<f64>) -> f64 {
-    let m = ank_vec.len();
+fn fourier_value(theta: f64, ank_vec: &[f64]) -> f64 {
     let mut v = 0 as f64;
 
-    for k in 0..m {
-        let ank = ank_vec[k];
-
+    for (k, &ank) in ank_vec.iter().enumerate() {
         if ank != 0.0 {
             v += ank * (k as f64 * theta).cos();
         }
     }
 
-    return v;
+    v
 }
 
 // Evaluate d/dθ P_n(cos θ) from its Fourier coefficients.
-fn fourier_d_value(theta: f64, ank_vec: &Vec<f64>) -> f64 {
-    let m = ank_vec.len();
+fn fourier_d_value(theta: f64, ank_vec: &[f64]) -> f64 {
     let mut dv = 0 as f64;
 
-    for k in 0..m {
-        let ank = ank_vec[k];
+    for (k, &ank) in ank_vec.iter().enumerate() {
         if ank != 0.0 {
             dv -= (k as f64) * ank * (k as f64 * theta).sin();
         }
     }
 
-    return dv;
+    dv
 }
 
 // Evaluate d²/dθ² P_n(cos θ) from its Fourier coefficients.
-fn fourier_dd_value(theta: f64, ank_vec: &Vec<f64>) -> f64 {
-    let m = ank_vec.len();
+fn fourier_dd_value(theta: f64, ank_vec: &[f64]) -> f64 {
     let mut ddv = 0 as f64;
 
-    for k in 0..m {
-        let ank = ank_vec[k];
-
+    for (k, &ank) in ank_vec.iter().enumerate() {
         if ank != 0.0 {
             ddv -= ((k * k) as f64) * ank * (k as f64 * theta).cos();
         }
     }
 
-    return ddv;
+    ddv
 }
 
 // Return the roots (in θ-space) of P_n(cos θ) or P_n'(cos θ), along with the
 // values of P_n and P_n' at those roots.  Only roots in [0, π/2] are returned
 // (the full set is recovered by symmetry).  Newton's method is applied in θ-space.
 fn theta_root_legendre_or_d_legendre(n: usize, d_legendre: bool) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-    const EPS: f64 = std::f64::EPSILON;
+    const EPS: f64 = f64::EPSILON;
     const PI: f64 = core::f64::consts::PI;
 
     let ank_vec = legendre_fourier(n);
 
-    let n_roots;
-
-    if d_legendre == false {
-        n_roots = n / 2;
-    } else {
-        n_roots = (n - 1) / 2;
-    }
+    let n_roots = if !d_legendre { n / 2 } else { (n - 1) / 2 };
 
     let mut roots = vec![0 as f64; n_roots];
     let mut p_at_roots = vec![0 as f64; n_roots];
     let mut dp_at_roots = vec![0 as f64; n_roots];
 
-    let dtheta = (0.5 * PI) as f64 / (n_roots + 1) as f64;
+    let dtheta = (0.5 * PI) / (n_roots + 1) as f64;
 
     roots[0] = dtheta;
 
@@ -295,8 +281,8 @@ fn theta_root_legendre_or_d_legendre(n: usize, d_legendre: bool) -> (Vec<f64>, V
             roots[m] = roots[m - 1] + dtheta;
         }
 
-        let mut count = 0 as usize;
-        let mut residue = 1 as f64;
+        let mut count = 0_usize;
+        let mut residue = 1_f64;
 
         loop {
             count += 1;
@@ -330,19 +316,19 @@ fn theta_root_legendre_or_d_legendre(n: usize, d_legendre: bool) -> (Vec<f64>, V
     }
 
     //Add the root in theta = pi/2
-    if d_legendre == false && n % 2 == 1 {
+    if !d_legendre && n % 2 == 1 {
         roots.push(0.5 * PI);
         p_at_roots.push(fourier_value(0.5 * PI, &ank_vec));
         dp_at_roots.push(fourier_d_value(0.5 * PI, &ank_vec));
     }
 
-    if d_legendre == true && n % 2 == 0 {
+    if d_legendre && n.is_multiple_of(2) {
         roots.push(0.5 * PI);
         p_at_roots.push(fourier_value(0.5 * PI, &ank_vec));
         dp_at_roots.push(fourier_d_value(0.5 * PI, &ank_vec));
     }
 
-    return (roots, p_at_roots, dp_at_roots);
+    (roots, p_at_roots, dp_at_roots)
 }
 
 // Return the normalisation constant 1/P_n(cos π) = 1/P_n(-1) used by the
@@ -351,15 +337,15 @@ fn get_normalized_coefficient(n: usize) -> f64 {
     let ank_vec = legendre_fourier(n);
     const PI: f64 = core::f64::consts::PI;
 
-    return 1.0 / fourier_value(PI, &ank_vec);
+    1.0 / fourier_value(PI, &ank_vec)
 }
 
 fn theta_root_legendre(n: usize) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-    return theta_root_legendre_or_d_legendre(n, false);
+    theta_root_legendre_or_d_legendre(n, false)
 }
 
 fn theta_root_d_legendre(n: usize) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-    return theta_root_legendre_or_d_legendre(n, true);
+    theta_root_legendre_or_d_legendre(n, true)
 }
 
 // Build the full GLL quadrature rule for n_quad_points ≥ 5 using formula (A.1.20) of [2].
@@ -389,7 +375,7 @@ fn compute_gauss_lobatto_quadrature(n_quad_points: usize) -> (Vec<f64>, Vec<f64>
     let m = points.len();
 
     if n_quad_points % 2 == 1 {
-        points[m - 1] = 0.0 as f64;
+        points[m - 1] = 0.0_f64;
 
         for n in 0..m - 1 {
             points.push(-points[m - n - 2]);
@@ -404,7 +390,7 @@ fn compute_gauss_lobatto_quadrature(n_quad_points: usize) -> (Vec<f64>, Vec<f64>
 
     points.reverse();
 
-    return (points, weights);
+    (points, weights)
 }
 
 // Build the full Gauss-Legendre quadrature rule for n_quad_points ≥ 4 using formula (17) of [1].
@@ -427,7 +413,7 @@ fn compute_gauss_quadrature(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
     let m = points.len();
 
     if n_quad_points % 2 == 1 {
-        points[m - 1] = 0.0 as f64;
+        points[m - 1] = 0.0_f64;
 
         for n in 0..m - 1 {
             points.push(-points[m - n - 2]);
@@ -442,5 +428,5 @@ fn compute_gauss_quadrature(n_quad_points: usize) -> (Vec<f64>, Vec<f64>) {
 
     points.reverse();
 
-    return (points, weights);
+    (points, weights)
 }

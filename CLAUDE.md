@@ -10,7 +10,7 @@ Rust workspace for Gauss–Lobatto spectral-element numerics.
 | `lobatto-spectral` | High-order screened Poisson solvers on Gauss–Lobatto grids |
 
 Conventions:
-- Crates are published to crates.io individually with **version-only dependencies** between them (no path deps): publish the upstream crate first, then bump the requirement downstream. (The root `Cargo.toml` carries a **temporary** `[patch.crates-io]` for `lobatto-grid` until its first publish — delete it after `cargo publish -p lobatto-grid`.)
+- Crates are published to crates.io individually with **version-only dependencies** between them (no path deps): publish the upstream crate first, then bump the requirement downstream.
 - Zero clippy warnings (`cargo clippy --benches --tests`); tests in release mode (`cargo test --release`).
 - Benches: `cargo bench --bench interp` in lobatto-grid (interpolation/convection), `cargo bench --bench solver` in lobatto-fft (solves). Criterion group names are stable identifiers — renaming them discards baseline history.
 

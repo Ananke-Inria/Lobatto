@@ -35,9 +35,9 @@ pub fn lagrangian_derivative_interpolation(pos: &[f64], p: f64, i: usize) -> f64
     for r1 in 0..pos.len() {
         if r1 != i {
             let mut c = 1.0;
-            for r2 in 0..pos.len() {
+            for (r2, &x_r2) in pos.iter().enumerate() {
                 if r2 != r1 && r2 != i {
-                    c *= p - pos[r2];
+                    c *= p - x_r2;
                 }
             }
             s += c;
@@ -110,9 +110,9 @@ pub fn lagrangian_interpolation_into(pos: &[f64], w: &[f64], p: f64, out: &mut [
 
     // Common factor: Π_{r ≠ i_min}(p - pos[r])  (never contains the smallest term).
     let mut prod_skip = 1.0_f64;
-    for r in 0..n {
+    for (r, &diff) in out.iter().enumerate() {
         if r != i_min {
-            prod_skip *= out[r];
+            prod_skip *= diff;
         }
     }
 

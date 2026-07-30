@@ -1,9 +1,3 @@
 [workspace]
 members = ["lobatto", "lobatto-grid", "lobatto-fft", "lobatto-spectral"]
 resolver = "3"
-
-# TEMPORARY: lets the workspace resolve `lobatto-fft`'s version-only dependency
-# `lobatto-grid = "0.1.0"` before it exists on crates.io. Delete this section
-# after the first `cargo publish -p lobatto-grid`.
-[patch.crates-io]
-lobatto-grid = { path = "lobatto-grid" }

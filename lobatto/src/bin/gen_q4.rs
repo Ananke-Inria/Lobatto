@@ -50,7 +50,7 @@ fn main() {
     println!();
 
     // ── Unique coefficients (rows 0, 1, 2 — upper half + middle) ─────────────
-    let n_unique = (n + 1) / 2; // = 3 for n=5
+    let n_unique = n.div_ceil(2); // = 3 for n=5
     println!("// Unique entries (rows 0..{n_unique}):");
     let labels = [
         ["D00", "D01", "D02", "D03", "D04"],

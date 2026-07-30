@@ -1,5 +1,7 @@
 //!  Hardcoded GLL nodes and weights on $\[-1,1\]$ for moderate order.
 
+#![allow(clippy::excessive_precision)]
+
 /// Hardcoded Gauss–Lobatto–Legendre (GLL) quadrature on [-1, 1] for n = 2..=14.
 ///
 /// Points and weights are certified: every rule integrates all monomials
