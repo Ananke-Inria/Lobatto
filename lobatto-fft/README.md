@@ -101,7 +101,7 @@ pub enum BoundaryCondition { Periodic, Dirichlet, Neumann }
 ### `solver::Poisson` — 1D solver
 
 ```rust
-let solver = Poisson::new(l, xl, n, r, alpha, beta, bc);
+let solver = Poisson::new(l, xl, n, r, alpha, beta, bc);   // alpha, beta: f64 or Complex<f64>
 let x: Vec<f64>         = solver.get_x();          // N_dof GLL nodes
 solver.solve_in_place(&mut f);                      // overwrites f with u
 // access the underlying engine for interpolation or advection:
@@ -123,6 +123,12 @@ solver.fft.eval(&pts, &f, &mut vals);
 let mut f_advected = vec![Complex::default(); f.len()];
 solver.fft.convect(|x| lambda(x), &f, &mut f_advected);
 ```
+
+Both solvers accept real (`f64`) or complex (`Complex<f64>`) coefficients `alpha`
+and `beta` — e.g. `Complex::new(-omega * omega, omega * c)` for a damped Helmholtz
+problem — at no extra solve cost: the coefficients only enter the per-mode
+eigenvalues `α + β·μ`, the eigendecompositions stay Hermitian.
+`solve_in_place_real` requires real coefficients (`solver.is_real()`).
 
 ### `hofft::Engine` / `hofft::EngineND<N>` — transform engines
 

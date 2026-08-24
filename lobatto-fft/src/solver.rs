@@ -4,10 +4,15 @@
 //! $(\alpha M + \beta K)\, u = f$ on tensor-product Gauss-Lobatto grids using
 //! the HoFFT transform machinery from [`crate::hofft`].
 //!
+//! The coefficients $\alpha$ and $\beta$ may be real or complex (e.g.
+//! $\alpha = -\omega^2 + i\omega c$ for damped time-harmonic problems); the
+//! constructors accept anything convertible into `Complex<f64>`, so plain
+//! `f64` arguments keep working.
+//!
 //! Both solvers are set up once and reused for many right-hand sides.
 //! Construction precomputes the FFT plans and the eigendecomposition of
-//! all independent local symbols; each call to `solve_in_place` runs in
-//! `O(N_dof·log N_dof)` arithmetic operations.
+//! all independent local stiffness symbols; each call to `solve_in_place`
+//! runs in `O(N_dof·log N_dof)` arithmetic operations.
 //!
 //! | Type | Description |
 //! |------|-------------|
@@ -99,15 +104,21 @@ impl BoundaryCondition {
 /// modes, reducing the global `n·r × n·r` system to `n_fft/2 + 1`
 /// independent **local symbols** $S(k)$ of size `r × r`.
 ///
-/// Each $S(k)$ is a Hermitian matrix assembled from the periodic element matrices
-/// modulated by the inter-element phase $e^{-2\pi i k / n}$:
-/// $$S(k)_{ij} = \alpha h M_{ij} + \frac{\beta}{h}\bigl(K_{ij} + K_{ri}\,e^{-2\pi ik/n}\bigr), \quad i,j = 1,\ldots,r-1,$$
+/// Each $S(k)$ splits as $S(k) = \alpha \tilde{M} + \beta \tilde{K}(k)$, where
+/// $\tilde{M}$ is the (phase-free, diagonal) periodic mass matrix and
+/// $\tilde{K}(k)$ is the Hermitian stiffness symbol assembled from the periodic
+/// element matrices modulated by the inter-element phase $e^{-2\pi i k / n}$:
+/// $$\tilde{K}(k)_{ij} = \frac{1}{h}\bigl(K_{ij} + K_{ri}\,e^{-2\pi ik/n}\bigr), \quad i,j = 1,\ldots,r-1,$$
 /// with appropriate modifications for the `(0, 0)` entry that couples the two sides
 /// of an element interface.
 ///
-/// The generalised eigendecomposition $S(k) V_k = M V_k \Lambda_k$,
-/// precomputed at build time, yields the per-mode solve
+/// The generalised eigendecomposition $\tilde{K}(k) V_k = \tilde{M} V_k \mathrm{diag}(\mu_k)$,
+/// precomputed at build time, is independent of $\alpha$ and $\beta$; the
+/// coefficients only enter the per-mode eigenvalues
+/// $\lambda_{k,j} = \alpha + \beta\,\mu_{k,j}$ applied in the solve
 /// $$\hat{u}_k = V_k \Lambda_k^{-1} V_k^\dagger \hat{f}_k.$$
+/// This is what allows complex $\alpha$, $\beta$ with a purely Hermitian
+/// eigensolver.
 ///
 /// Physical DOF layout: `x`-increasing, flat index `k·r + j` for local node `j`
 /// of element `k` (with offset adjustments for Dirichlet; see [`Engine`]).
@@ -118,46 +129,64 @@ pub struct Poisson {
     /// HoFFT engine: handles extension, packing, forward/inverse FFT, and interpolation.
     pub planner: Engine,
 
-    /// Real eigenvalues of the mass-normalised symbol for each independent Fourier mode `k`:
-    /// $\lambda_j(k)$ of $M^{-1/2} S(k) M^{-1/2}$, length `r`.
+    /// Real eigenvalues of the mass-normalised **stiffness** symbol for each
+    /// independent Fourier mode `k`: $\mu_j(k)$ of
+    /// $\tilde{M}^{-1/2} \tilde{K}(k) \tilde{M}^{-1/2}$, length `r`.
     eigenvalues: Vec<DVector<f64>>,
-    /// $M$-orthonormal eigenvectors $V_k$ satisfying $S(k) V_k = M V_k \Lambda_k$;
+    /// $\tilde{M}$-orthonormal eigenvectors $V_k$ satisfying
+    /// $\tilde{K}(k) V_k = \tilde{M} V_k \mathrm{diag}(\mu_k)$;
     /// `eigenvectors[k]` is the `r × r` complex matrix.
     eigenvectors: Vec<DMatrix<Complex<f64>>>,
+    /// Coefficient `α` of the mass term.
+    alpha: Complex<f64>,
+    /// Coefficient `β` of the stiffness term.
+    beta: Complex<f64>,
     /// Diagonal of the **periodic** local mass matrix (length `r`):
     /// $\tilde{M}_{jj} = h w_j$, with DOF 0 accumulating contributions from both sides
     /// of the element interface: $\tilde{M}_{00} = 2h w_0$.
     periodic_mass_matrix: DVector<f64>,
-    /// Pseudo-inverse cutoff for the per-mode solve: `1e-12` × the spectral
-    /// radius over all symbols, so that analytically zero eigenvalues computed
-    /// as roundoff (`~ε·λ_max`) are filtered regardless of problem size.
+    /// Pseudo-inverse cutoff for the per-mode solve: `1e-12` × an upper bound
+    /// `|α| + |β|·max |μ|` on the combined eigenvalue magnitude, so that
+    /// analytically zero eigenvalues computed as roundoff (`~ε·λ_max`) are
+    /// filtered regardless of problem size.
     pinv_tol: f64,
     /// Boundary condition type.
     bc: BoundaryCondition,
 }
 
+/// Spectral radius `max |μ|` over a set of per-mode real eigenvalue vectors.
+fn max_abs_eigenvalue(eigenvalues: &[DVector<f64>]) -> f64 {
+    eigenvalues
+        .iter()
+        .flat_map(|l| l.iter())
+        .fold(0.0f64, |m, &l| m.max(l.abs()))
+}
+
 impl Poisson {
     /// Construct the 1D HoFFT solver.
     ///
-    /// Assembles the local symbol matrices $S(k)$ for all independent Fourier
-    /// modes and precomputes their generalised eigendecompositions.
+    /// Assembles the local stiffness symbols $\tilde{K}(k)$ for all independent
+    /// Fourier modes and precomputes their generalised eigendecompositions.
     ///
     /// # Arguments
     /// - `l`: domain length `L`.
     /// - `xl`: left boundary position `x_l`.
     /// - `n`: number of elements.
     /// - `r`: polynomial order (`r + 1` Gauss-Lobatto nodes per element).
-    /// - `alpha`, `beta`: operator coefficients.
+    /// - `alpha`, `beta`: operator coefficients, real (`f64`) or complex
+    ///   (`Complex<f64>`).
     /// - `bc`: boundary condition type.
     pub fn new(
         l: f64,
         xl: f64,
         n: usize,
         r: usize,
-        alpha: f64,
-        beta: f64,
+        alpha: impl Into<Complex<f64>>,
+        beta: impl Into<Complex<f64>>,
         bc: BoundaryCondition,
     ) -> Self {
+        let alpha = alpha.into();
+        let beta = beta.into();
         let lobatto_basis = CollocationBasis::new(vec![(r + 1, Gauss::Lobatto)]);
 
         let h = l / (n as f64);
@@ -191,7 +220,9 @@ impl Poisson {
         let stiffness_matrix: Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>> =
             diff_matrix.transpose() * mass_matrix.clone() * diff_matrix;
 
-        // Compute the symbol of the operator for each frequency
+        // Compute the stiffness symbol K̃(k) for each frequency. The mass part
+        // α·M̃ is diagonal and phase-free, so α and β are applied to the
+        // eigenvalues at solve time instead of being baked into the symbol.
         for (k, s) in symbol.iter_mut().enumerate() {
             let phase = -coeff_phase * PI * (k as f64) / (n as f64);
             let cos = phase.cos();
@@ -200,20 +231,16 @@ impl Poisson {
 
             for i in 1..r {
                 for j in 1..r {
-                    s[(i, j)] = (alpha * h * mass_matrix[(i, j)]
-                        + beta * stiffness_matrix[(i, j)] / h)
-                        .into();
+                    s[(i, j)] = (stiffness_matrix[(i, j)] / h).into();
                 }
             }
 
-            s[(0, 0)] = (2.0 * alpha * h * mass_matrix[(0, 0)]
-                + 2.0 * beta * stiffness_matrix[(0, 0)] / h
-                + 2.0 * beta * stiffness_matrix[(0, r)] * cos / h)
+            s[(0, 0)] = (2.0 * stiffness_matrix[(0, 0)] / h
+                + 2.0 * stiffness_matrix[(0, r)] * cos / h)
                 .into();
 
             for i in 1..r {
-                s[(0, i)] =
-                    beta * stiffness_matrix[(0, i)] / h + beta * stiffness_matrix[(r, i)] * exp / h;
+                s[(0, i)] = stiffness_matrix[(0, i)] / h + stiffness_matrix[(r, i)] * exp / h;
                 s[(i, 0)] = s[(0, i)].conj();
             }
         }
@@ -224,14 +251,14 @@ impl Poisson {
             }));
 
         // Generalised eigendecomposition via mass normalisation:
-        //   M^{-1/2} S(k) M^{-1/2} W = W Λ   ⟹   eigenvectors V = M^{-1/2} W
+        //   M^{-1/2} K̃(k) M^{-1/2} W = W diag(μ)   ⟹   eigenvectors V = M^{-1/2} W
         let eigs: Vec<SymmetricEigen<Complex<f64>, Dyn>> = symbol
             .iter()
             .map(|s| SymmetricEigen::new(&mass_sqrt_inv_c * s * &mass_sqrt_inv_c))
             .collect();
         let eigenvalues: Vec<DVector<f64>> = eigs.iter().map(|e| e.eigenvalues.clone()).collect();
 
-        // M-orthonormal eigenvectors of α I + β M^{-1} K
+        // M-orthonormal eigenvectors of M^{-1} K̃(k)
         let eigenvectors: Vec<DMatrix<Complex<f64>>> = eigs
             .iter()
             .map(|e| &mass_sqrt_inv_c * e.eigenvectors.clone())
@@ -240,22 +267,37 @@ impl Poisson {
         // Relative pseudo-inverse cutoff: an analytically zero eigenvalue (the
         // constant mode of the k = 0 symbol when α = 0) is computed as roundoff
         // ~ε·λ_max, which outgrows any absolute threshold as the spectral
-        // radius grows with n and r.
-        let pinv_tol = 1e-12
-            * eigenvalues
-                .iter()
-                .flat_map(|l| l.iter())
-                .fold(0.0f64, |m, &l| m.max(l.abs()));
+        // radius grows with n and r. Scale with an upper bound
+        // |α| + |β|·max |μ| on the combined eigenvalue magnitude |α + β·μ|.
+        let pinv_tol = 1e-12 * (alpha.norm() + beta.norm() * max_abs_eigenvalue(&eigenvalues));
 
         Self {
             r,
             planner,
             eigenvalues,
             eigenvectors,
+            alpha,
+            beta,
             periodic_mass_matrix,
             pinv_tol,
             bc,
         }
+    }
+
+    /// Coefficient `α` of the mass term.
+    pub fn alpha(&self) -> Complex<f64> {
+        self.alpha
+    }
+
+    /// Coefficient `β` of the stiffness term.
+    pub fn beta(&self) -> Complex<f64> {
+        self.beta
+    }
+
+    /// Whether both coefficients are real, i.e. the operator maps real
+    /// right-hand sides to real solutions.
+    pub fn is_real(&self) -> bool {
+        self.alpha.im == 0.0 && self.beta.im == 0.0
     }
 
     /// Return the Gauss-Lobatto nodes in `x`-increasing order on `[x_l, x_l + L]`.
@@ -301,18 +343,21 @@ impl Poisson {
         self.planner.forward(f);
 
         // Step 2: symbol solve via eigendecomposition.
-        // For each mode k: v = Q†·g_k, pointwise divide by λ, result = Q·v.
+        // For each mode k: v = Q†·g_k, pointwise divide by λ = α + β·μ, result = Q·v.
         let n_freq = self.eigenvalues.len();
+        let pinv_tol_sqr = self.pinv_tol * self.pinv_tol;
         let mut col = DVector::<Complex<f64>>::zeros(self.r);
         for k in 0..n_freq {
             self.planner.get_values(k, f, col.as_mut_slice());
             // Q† · col
             let mut v = self.eigenvectors[k].ad_mul(&col);
-            // Pointwise pseudo-inverse
+            // Pointwise pseudo-inverse: multiply by λ⁻¹ = conj(λ)/|λ|², one real
+            // division per entry and no square root.
             for j in 0..self.r {
-                let lam = self.eigenvalues[k][j];
-                if lam.abs() > self.pinv_tol {
-                    v[j] /= lam;
+                let lam = self.alpha + self.beta * self.eigenvalues[k][j];
+                let norm_sqr = lam.norm_sqr();
+                if norm_sqr > pinv_tol_sqr {
+                    v[j] *= lam.conj() / norm_sqr;
                 } else {
                     v[j] = Complex::new(0.0, 0.0);
                 }
@@ -333,12 +378,23 @@ impl Poisson {
 
     /// Real-input variant of [`solve_in_place`](Self::solve_in_place).
     ///
-    /// The operator $(\alpha M + \beta K)$ is real, so a real right-hand side
-    /// has an exactly real solution: `f` is copied into an internal complex
-    /// buffer, solved, and the real parts are written back. Costs the same as
-    /// the complex solve plus the two conversion passes and one temporary
-    /// complex buffer of `f.len()` entries.
+    /// For real $\alpha$, $\beta$ the operator $(\alpha M + \beta K)$ is real,
+    /// so a real right-hand side has an exactly real solution: `f` is copied
+    /// into an internal complex buffer, solved, and the real parts are written
+    /// back. Costs the same as the complex solve plus the two conversion passes
+    /// and one temporary complex buffer of `f.len()` entries.
+    ///
+    /// # Panics
+    /// If either coefficient has a nonzero imaginary part (see
+    /// [`is_real`](Self::is_real)): the solution is then genuinely complex and
+    /// must be obtained with [`solve_in_place`](Self::solve_in_place).
     pub fn solve_in_place_real(&self, f: &mut [f64]) {
+        assert!(
+            self.is_real(),
+            "solve_in_place_real requires real α and β (got α = {}, β = {})",
+            self.alpha,
+            self.beta
+        );
         let mut buf: Vec<Complex<f64>> = f.iter().map(|&v| Complex::new(v, 0.0)).collect();
         self.solve_in_place(&mut buf);
         for (o, b) in f.iter_mut().zip(&buf) {
@@ -382,9 +438,9 @@ pub struct PoissonND<const N: usize> {
     /// length $\prod_d r_d$, direction 0 (`x`) varies fastest.
     periodic_mass_matrix: DVector<f64>,
     /// Coefficient `α` of the mass term.
-    alpha: f64,
+    alpha: Complex<f64>,
     /// Coefficient `β` of the stiffness term.
-    beta: f64,
+    beta: Complex<f64>,
     /// Number of independent Fourier modes per direction:
     /// `n_d` for `Periodic`, `n_d + 1` for `Odd`/`Even`.
     n_freqs: [usize; N],
@@ -408,17 +464,20 @@ impl<const N: usize> PoissonND<N> {
     /// - `xls[d]`: left boundary position $x_{l,d}$ in direction `d`.
     /// - `ns[d]`: number of elements in direction `d`.
     /// - `rs[d]`: polynomial order `r_d` in direction `d`.
-    /// - `alpha`, `beta`: operator coefficients.
+    /// - `alpha`, `beta`: operator coefficients, real (`f64`) or complex
+    ///   (`Complex<f64>`).
     /// - `bc[d]`: boundary condition for direction `d`.
     pub fn new(
         ls: [f64; N],
         xls: [f64; N],
         ns: [usize; N],
         rs: [usize; N],
-        alpha: f64,
-        beta: f64,
+        alpha: impl Into<Complex<f64>>,
+        beta: impl Into<Complex<f64>>,
         bc: [BoundaryCondition; N],
     ) -> Self {
+        let alpha = alpha.into();
+        let beta = beta.into();
         let solvers =
             std::array::from_fn(|d| Poisson::new(ls[d], xls[d], ns[d], rs[d], 0.0, 1.0, bc[d]));
 
@@ -453,19 +512,14 @@ impl<const N: usize> PoissonND<N> {
         });
 
         // Relative pseudo-inverse cutoff (see [`Poisson::new`]): scale with an
-        // upper bound `|α| + |β|·Σ_d max |λ^(d)|` on the combined eigenvalue
-        // magnitude `α + β·Σ_d λ^(d)`.
+        // upper bound `|α| + |β|·Σ_d max |μ^(d)|` on the combined eigenvalue
+        // magnitude `|α + β·Σ_d μ^(d)|`.
         let pinv_tol = 1e-12
-            * (alpha.abs()
-                + beta.abs()
+            * (alpha.norm()
+                + beta.norm()
                     * solvers
                         .iter()
-                        .map(|s| {
-                            s.eigenvalues
-                                .iter()
-                                .flat_map(|l| l.iter())
-                                .fold(0.0f64, |m, &l| m.max(l.abs()))
-                        })
+                        .map(|s| max_abs_eigenvalue(&s.eigenvalues))
                         .sum::<f64>());
 
         Self {
@@ -500,6 +554,22 @@ impl<const N: usize> PoissonND<N> {
         self.fft.grid()
     }
 
+    /// Coefficient `α` of the mass term.
+    pub fn alpha(&self) -> Complex<f64> {
+        self.alpha
+    }
+
+    /// Coefficient `β` of the stiffness term.
+    pub fn beta(&self) -> Complex<f64> {
+        self.beta
+    }
+
+    /// Whether both coefficients are real, i.e. the operator maps real
+    /// right-hand sides to real solutions.
+    pub fn is_real(&self) -> bool {
+        self.alpha.im == 0.0 && self.beta.im == 0.0
+    }
+
     /// Solve `(α M + β K) u = f` in place using the ND HoFFT algorithm.
     ///
     /// On input, `f` holds the strong-form right-hand side at the tensor-product
@@ -514,6 +584,7 @@ impl<const N: usize> PoissonND<N> {
         let rs = &self.fft.rs;
         let r_strides = &self.fft.r_strides;
         let r_total = self.fft.r_total;
+        let pinv_tol_sqr = self.pinv_tol * self.pinv_tol;
 
         f.par_iter_mut().enumerate().for_each(|(p, fp)| {
             let lj = (0..N).fold(0, |acc, d| {
@@ -553,17 +624,18 @@ impl<const N: usize> PoissonND<N> {
                 }
             }
 
-            // Pointwise divide by ND eigenvalue λ = α + Σ_d β λ^{(d)}_{k_d, j_d}.
+            // Pointwise divide by ND eigenvalue λ = α + β Σ_d μ^{(d)}_{k_d, j_d}.
             for j_flat in 0..r_total {
-                let lambda = self.alpha
-                    + (0..N)
-                        .map(|d| {
-                            let j_d = (j_flat / r_strides[d]) % rs[d];
-                            self.beta * self.solvers[d].eigenvalues[ks[d]][j_d]
-                        })
-                        .sum::<f64>();
-                if lambda.abs() > self.pinv_tol {
-                    v[j_flat] /= lambda;
+                let mu = (0..N)
+                    .map(|d| {
+                        let j_d = (j_flat / r_strides[d]) % rs[d];
+                        self.solvers[d].eigenvalues[ks[d]][j_d]
+                    })
+                    .sum::<f64>();
+                let lambda = self.alpha + self.beta * mu;
+                let norm_sqr = lambda.norm_sqr();
+                if norm_sqr > pinv_tol_sqr {
+                    v[j_flat] *= lambda.conj() / norm_sqr;
                 } else {
                     v[j_flat] = Complex::new(0.0, 0.0);
                 }
@@ -594,12 +666,23 @@ impl<const N: usize> PoissonND<N> {
 
     /// Real-input variant of [`solve_in_place`](Self::solve_in_place).
     ///
-    /// The operator $(\alpha M + \beta K)$ is real, so a real right-hand side
-    /// has an exactly real solution: `f` is copied into an internal complex
-    /// buffer, solved, and the real parts are written back. Costs the same as
-    /// the complex solve plus the two (parallel) conversion passes and one
-    /// temporary complex buffer of `f.len()` entries.
+    /// For real $\alpha$, $\beta$ the operator $(\alpha M + \beta K)$ is real,
+    /// so a real right-hand side has an exactly real solution: `f` is copied
+    /// into an internal complex buffer, solved, and the real parts are written
+    /// back. Costs the same as the complex solve plus the two (parallel)
+    /// conversion passes and one temporary complex buffer of `f.len()` entries.
+    ///
+    /// # Panics
+    /// If either coefficient has a nonzero imaginary part (see
+    /// [`is_real`](Self::is_real)): the solution is then genuinely complex and
+    /// must be obtained with [`solve_in_place`](Self::solve_in_place).
     pub fn solve_in_place_real(&self, f: &mut [f64]) {
+        assert!(
+            self.is_real(),
+            "solve_in_place_real requires real α and β (got α = {}, β = {})",
+            self.alpha,
+            self.beta
+        );
         let mut buf: Vec<Complex<f64>> = f.par_iter().map(|&v| Complex::new(v, 0.0)).collect();
         self.solve_in_place(&mut buf);
         f.par_iter_mut()
@@ -649,14 +732,17 @@ mod tests {
                         "r={r} n={n} k={k}: V V† ≠ M⁻¹ (err={vvt_err:.2e})"
                     );
 
-                    // 3. Check Q† M Q = I (already covered above) and eigenvalues are real.
-                    //    Also verify round-trip: Q diag(1/λ) Q† M V Λ = V
-                    let lambda_diag = DMatrix::from_diagonal(&DVector::from_fn(r, |i, _| {
-                        Complex::new(solver.eigenvalues[k][i], 0.0)
-                    }));
+                    // 3. Round-trip with the operator eigenvalues λ = α + β·μ and the
+                    //    solver's own pseudo-inverse cutoff: Q diag(1/λ) Q† M V Λ = V
+                    let lambda = |i: usize| solver.alpha + solver.beta * solver.eigenvalues[k][i];
+                    let lambda_diag = DMatrix::from_diagonal(&DVector::from_fn(r, |i, _| lambda(i)));
                     let lambda_inv = DMatrix::from_diagonal(&DVector::from_fn(r, |i, _| {
-                        let lam = solver.eigenvalues[k][i];
-                        Complex::new(if lam.abs() > 1e-12 { 1.0 / lam } else { 0.0 }, 0.0)
+                        let lam = lambda(i);
+                        if lam.norm() > solver.pinv_tol {
+                            1.0 / lam
+                        } else {
+                            Complex::new(0.0, 0.0)
+                        }
                     }));
                     let rhs = v * &lambda_inv * v.adjoint() * &m_c * v * &lambda_diag;
                     let recon_err = (v - &rhs).norm() / v.norm().max(1.0);

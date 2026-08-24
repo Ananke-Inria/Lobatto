@@ -1442,3 +1442,196 @@ fn solve_in_place_real_matches_complex() {
         assert_eq!(*a, b.re);
     }
 }
+
+// ── Complex coefficients ─────────────────────────────────────────────────────
+
+/// Scaling both coefficients by a complex scalar `c` must scale the discrete
+/// solution by exactly `1/c`: `(cα M + cβ K) u = f  ⟺  u = u₀ / c`. This is an
+/// exact algebraic identity of the discrete operator, so it validates the
+/// complex division and the pseudo-inverse scaling in every solve path
+/// independently of any discretisation error.
+#[test]
+fn complex_coefficient_scaling_is_exact() {
+    const TOL: f64 = 1e-13;
+    let c = Complex::new(0.7, -1.9);
+
+    // 1D, all BCs.
+    for bc in [
+        BoundaryCondition::Periodic,
+        BoundaryCondition::Dirichlet,
+        BoundaryCondition::Neumann,
+    ] {
+        let (n, r) = (12, 4);
+        let base = Poisson::new(2.3, -0.4, n, r, 1.5, 0.8, bc);
+        let scaled = Poisson::new(2.3, -0.4, n, r, c * 1.5, c * 0.8, bc);
+        assert!(base.is_real() && !scaled.is_real());
+        let x = base.get_x();
+        let f: Vec<Complex<f64>> = x
+            .iter()
+            .map(|&xi| Complex::new((2.7 * xi + 0.3).sin(), (1.1 * xi).cos()))
+            .collect();
+        let mut u0 = f.clone();
+        let mut u1 = f.clone();
+        base.solve_in_place(&mut u0);
+        scaled.solve_in_place(&mut u1);
+        let scale = u0.iter().map(|v| v.norm()).fold(0.0f64, f64::max);
+        for (a, b) in u0.iter().zip(&u1) {
+            assert!(
+                (a / c - b).norm() <= TOL * scale,
+                "1D {bc:?}: |u0/c - u1| = {:.2e}",
+                (a / c - b).norm()
+            );
+        }
+    }
+
+    // 2D, mixed BCs.
+    let bcs = [BoundaryCondition::Periodic, BoundaryCondition::Neumann];
+    let base = PoissonND::<2>::new([1.0, 1.7], [0.0, 0.2], [6, 5], [3, 4], 1.5, 0.8, bcs);
+    let scaled = PoissonND::<2>::new([1.0, 1.7], [0.0, 0.2], [6, 5], [3, 4], c * 1.5, c * 0.8, bcs);
+    let x = base.get_x();
+    let f: Vec<Complex<f64>> = x
+        .iter()
+        .map(|&[a, b]| Complex::new((2.1 * a).sin() * (1.3 * b + 0.2).cos(), (a * b).sin()))
+        .collect();
+    let mut u0 = f.clone();
+    let mut u1 = f;
+    base.solve_in_place(&mut u0);
+    scaled.solve_in_place(&mut u1);
+    let scale = u0.iter().map(|v| v.norm()).fold(0.0f64, f64::max);
+    for (a, b) in u0.iter().zip(&u1) {
+        assert!(
+            (a / c - b).norm() <= TOL * scale,
+            "2D: |u0/c - u1| = {:.2e}",
+            (a / c - b).norm()
+        );
+    }
+}
+
+/// Damped Helmholtz `(-ω² + iωc) u - u'' = f` with a manufactured solution:
+/// spectral convergence towards the exact solution with a genuinely complex
+/// `α` and real `β`, 1D (all BCs) and 3D mixed.
+#[test]
+fn convergence_complex_alpha() {
+    let omega = 2.0;
+    let damping = 0.7;
+    let alpha = Complex::new(-omega * omega, omega * damping);
+    let beta = 1.0;
+
+    // 1D: u = sin(2πx) (Periodic, Dirichlet) or cos(2πx) (Neumann) on [0, 1],
+    // f = (α + β w²) u.
+    let w = 2.0 * PI;
+    let cw = alpha + beta * w * w;
+    let u_sin = |x: f64| (w * x).sin();
+    let u_cos = |x: f64| (w * x).cos();
+    let cases: [(BoundaryCondition, &dyn Fn(f64) -> f64); 3] = [
+        (BoundaryCondition::Periodic, &u_sin),
+        (BoundaryCondition::Dirichlet, &u_sin),
+        (BoundaryCondition::Neumann, &u_cos),
+    ];
+    for (bc, u1d) in cases {
+        let mut prev: Option<f64> = None;
+        for n in [4, 8, 16, 32] {
+            let r = 4;
+            let solver = Poisson::new(1.0, 0.0, n, r, alpha, beta, bc);
+            let x = solver.get_x();
+            let mut f: Vec<Complex<f64>> = x.iter().map(|&xi| cw * u1d(xi)).collect();
+            solver.solve_in_place(&mut f);
+            let err = x
+                .iter()
+                .zip(&f)
+                .map(|(&xi, u)| (u - u1d(xi)).norm())
+                .fold(0.0f64, f64::max);
+            println!("1D {bc:?} complex α: n={n} r={r} err={err:.2e}");
+            if let Some(pe) = prev {
+                let rate = (pe / err).log2();
+                assert!(
+                    err < 1e-10 || rate >= (r as f64 + 1.0) - 0.1,
+                    "1D {bc:?} n={n}: rate {rate:.2} < {}, err={err:.2e}",
+                    r + 1
+                );
+            }
+            prev = Some(err);
+        }
+    }
+
+    // 3D mixed: u = sin(πx)·cos(πy)·sin(2πz), f = α u − β Δu.
+    let bcs = [
+        BoundaryCondition::Dirichlet,
+        BoundaryCondition::Neumann,
+        BoundaryCondition::Periodic,
+    ];
+    let exact = |p: [f64; 3]| (PI * p[0]).sin() * (PI * p[1]).cos() * (2.0 * PI * p[2]).sin();
+    let lap_coeff = -(PI * PI + PI * PI + 4.0 * PI * PI);
+    let c3 = alpha - beta * lap_coeff;
+    let mut prev: Option<f64> = None;
+    for n in [4, 8, 16] {
+        let r = 4;
+        let solver = PoissonND::<3>::new([1.0; 3], [0.0; 3], [n; 3], [r; 3], alpha, beta, bcs);
+        let x = solver.get_x();
+        let mut f: Vec<Complex<f64>> = x.iter().map(|&p| c3 * exact(p)).collect();
+        solver.solve_in_place(&mut f);
+        let err = x
+            .iter()
+            .zip(&f)
+            .map(|(&p, u)| (u - exact(p)).norm())
+            .fold(0.0f64, f64::max);
+        println!("3D mixed complex α: n={n} r={r} err={err:.2e}");
+        if let Some(pe) = prev {
+            let rate = (pe / err).log2();
+            assert!(
+                err < 1e-10 || rate >= (r as f64 + 1.0) - 0.1,
+                "3D n={n}: rate {rate:.2} < {}, err={err:.2e}",
+                r + 1
+            );
+        }
+        prev = Some(err);
+    }
+}
+
+/// Real coefficients passed as `f64` and as `Complex<f64>` build identical solvers.
+#[test]
+fn f64_and_complex_real_coefficients_agree() {
+    let a = Poisson::new(1.0, 0.0, 8, 3, 2.0, 0.5, BoundaryCondition::Dirichlet);
+    let b = Poisson::new(
+        1.0,
+        0.0,
+        8,
+        3,
+        Complex::new(2.0, 0.0),
+        Complex::new(0.5, 0.0),
+        BoundaryCondition::Dirichlet,
+    );
+    assert_eq!(a.alpha(), b.alpha());
+    assert_eq!(a.beta(), b.beta());
+    assert!(a.is_real() && b.is_real());
+    let x = a.get_x();
+    let f: Vec<Complex<f64>> = x.iter().map(|&xi| Complex::new((3.0 * xi).sin(), 0.0)).collect();
+    let (mut ua, mut ub) = (f.clone(), f);
+    a.solve_in_place(&mut ua);
+    b.solve_in_place(&mut ub);
+    assert_eq!(ua, ub);
+}
+
+#[test]
+#[should_panic(expected = "requires real α and β")]
+fn solve_in_place_real_rejects_complex_coefficients_1d() {
+    let solver = Poisson::new(1.0, 0.0, 8, 3, Complex::new(1.0, 0.5), 1.0, BoundaryCondition::Periodic);
+    let mut f = vec![0.0; solver.get_x().len()];
+    solver.solve_in_place_real(&mut f);
+}
+
+#[test]
+#[should_panic(expected = "requires real α and β")]
+fn solve_in_place_real_rejects_complex_coefficients_nd() {
+    let solver = PoissonND::<2>::new(
+        [1.0; 2],
+        [0.0; 2],
+        [4; 2],
+        [3; 2],
+        1.0,
+        Complex::new(1.0, -0.2),
+        [BoundaryCondition::Neumann; 2],
+    );
+    let mut f = vec![0.0; solver.get_x().len()];
+    solver.solve_in_place_real(&mut f);
+}

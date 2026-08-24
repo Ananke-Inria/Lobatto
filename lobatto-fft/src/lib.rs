@@ -56,6 +56,21 @@
 //!
 //! solver.solve_in_place(&mut f); // f now contains the solution u at the Gauss-Lobatto nodes
 //! ```
+//!
+//! The coefficients may also be complex — e.g. a damped Helmholtz problem
+//! `(-ω² + iωc) M + K` — by passing `Complex<f64>` values for `α` and `β`:
+//!
+//! ```rust
+//! # use lobatto_fft::solver::*;
+//! # use rustfft::num_complex::Complex;
+//! let (omega, c) = (3.0, 0.5);
+//! let solver = PoissonND::<2>::new(
+//!     [1.0; 2], [0.0; 2], [8; 2], [4; 2],
+//!     Complex::new(-omega * omega, omega * c), 1.0,
+//!     [BoundaryCondition::Dirichlet; 2],
+//! );
+//! assert!(!solver.is_real());
+//! ```
 
 pub mod hofft;
 pub mod solver;
