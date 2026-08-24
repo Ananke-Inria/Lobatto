@@ -1,46 +1,46 @@
-//! GL and GLL nodes and weights on $\[-1,1\]$ and $\[0,1\]$.
+//! GL and GLL nodes and weights on `[-1, 1]` and `[0, 1]`.
 //!
 //! Both rules integrate polynomials exactly up to a given order and are based on Legendre polynomials,
 //! but differ in whether the endpoints are included as nodes.
 //!
 //! # Gauss–Legendre (GL)
 //!
-//! An $n$-point GL rule integrates polynomials of degree up to $2n-1$ exactly — the
-//! maximum possible for $n$ free nodes.  The nodes are the roots of $P_n$, the Legendre
-//! polynomial of degree $n$, and the weights are:
+//! An `n`-point GL rule integrates polynomials of degree up to `2n - 1` exactly — the
+//! maximum possible for `n` free nodes.  The nodes are the roots of $P_n$, the Legendre
+//! polynomial of degree `n`, and the weights are:
 //! $$w_i = \frac{2}{(1 - x_i^2) [\frac{d}{dx} P_n(x_i)]^2}, \quad i = 1, \dots, n.$$
 //! No node coincides with an endpoint. Hard-coded exact values:
 //!
-//! | $n$ | nodes | weights |
+//! | `n` | nodes | weights |
 //! |-----|-------|---------|
-//! | 1 | $0$ | $2$ |
-//! | 2 | $\pm 1/\sqrt{3}$ | $1, 1$ |
-//! | 3 | $0,\ \pm\sqrt{3/5}$ | $8/9,\ 5/9,\ 8/9$ |
+//! | 1 | `0` | `2` |
+//! | 2 | $\pm 1/\sqrt{3}$ | `1, 1` |
+//! | 3 | $0,\ \pm\sqrt{3/5}$ | `8/9, 5/9, 8/9` |
 //!
 //! # Gauss–Lobatto–Legendre (GLL)
 //!
-//! An $n$-point GLL rule ($n \ge 2$) integrates polynomials of degree up to $2n-3$ exactly —
-//! two less than GL for the same $n$, the price of forcing the endpoints $\pm 1$ as nodes.
+//! An `n`-point GLL rule (`n ≥ 2`) integrates polynomials of degree up to `2n - 3` exactly —
+//! two less than GL for the same `n`, the price of forcing the endpoints ±1 as nodes.
 //! The interior nodes are the roots of $\frac{d}{dx} P_{n-1}$, the derivative of the Legendre polynomial
-//! of degree $n-1$, and the weights are:
+//! of degree `n - 1`, and the weights are:
 //! $$w_i = \frac{2}{n(n-1) [P_{n-1}(x_i)]^2}, \quad i = 1, \dots, n,$$
 //! with the endpoint weights simplifying to $w_1 = w_n = 2/[n(n-1)]$ since
 //! $P_{n-1}(\pm 1) = (\pm 1)^{n-1}$.  Hard-coded exact values:
 //!
-//! | $n$ | nodes | weights |
+//! | `n` | nodes | weights |
 //! |-----|-------|---------|
-//! | 2 | $\pm 1$ | $1, 1$ |
-//! | 3 | $-1,\ 0,\ 1$ | $1/3,\ 4/3,\ 1/3$ |
-//! | 4 | $-1,\ \pm\sqrt{1/5},\ 1$ | $1/6,\ 5/6,\ 5/6,\ 1/6$ |
+//! | 2 | ±1 | `1, 1` |
+//! | 3 | `-1, 0, 1` | `1/3, 4/3, 1/3` |
+//! | 4 | $-1,\ \pm\sqrt{1/5},\ 1$ | `1/6, 5/6, 5/6, 1/6` |
 //!
 //! # Comparison
 //!
-//! | Property | GL ($n$ points) | GLL ($n$ points) |
+//! | Property | GL (`n` points) | GLL (`n` points) |
 //! |----------|-----------------|------------------|
-//! | Exactness degree | $2n-1$ | $2n-3$ |
-//! | Endpoints included | No | Yes ($\pm 1$) |
+//! | Exactness degree | `2n - 1` | `2n - 3` |
+//! | Endpoints included | No | Yes (±1) |
 //! | Interior nodes | roots of $P_n$ | roots of $\frac{d}{dx}P_{n-1}$ |
-//! | Minimum $n$ | 1 | 2 |
+//! | Minimum `n` | 1 | 2 |
 //!
 //! # Algorithms
 //!
@@ -54,8 +54,8 @@
 //!
 //! # Example
 //!
-//! Integrate $p(x) = x^8$ over $\[-1, 1\]$ using a 9-point GLL rule.
-//! The rule is exact for polynomials up to degree $2 \times 9 - 3 = 15$,
+//! Integrate $p(x) = x^8$ over `[-1, 1]` using a 9-point GLL rule.
+//! The rule is exact for polynomials up to degree `2*9 - 3 = 15`,
 //! so the result matches the analytical value $\int_{-1}^{1} x^8 ~ dx = \tfrac{2}{9}$ to
 //! machine precision:
 //!

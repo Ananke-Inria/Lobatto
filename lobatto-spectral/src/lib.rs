@@ -3,7 +3,7 @@
 //! High-order screened Poisson solvers on Gauss-Lobatto grids.
 //!
 //! Solves $(\alpha M + \beta K)\, u = f$ on tensor-product domains in arbitrary
-//! dimension $N$, using GLL spectral-element discretisations from the
+//! dimension `N`, using GLL spectral-element discretisations from the
 //! [`lobatto`](https://crates.io/crates/lobatto) crate.
 //!
 //! ## Modules

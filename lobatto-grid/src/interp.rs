@@ -19,12 +19,12 @@ use std::ops::{AddAssign, Mul, MulAssign};
 /// "scalar × f64" or "scalar += scalar" — so the routines are generic over the
 /// DOF scalar. Implemented in particular by `f64` (real problems, half the
 /// memory traffic and flops) and `Complex<f64>`.
-pub trait InterpScalar:
+pub trait Scalar:
     Copy + Default + Send + Sync + AddAssign<Self> + Mul<f64, Output = Self> + MulAssign<f64>
 {
 }
 
-impl<T> InterpScalar for T where
+impl<T> Scalar for T where
     T: Copy + Default + Send + Sync + AddAssign<Self> + Mul<f64, Output = Self> + MulAssign<f64>
 {
 }
@@ -40,7 +40,7 @@ impl Grid1D {
     /// extension at positions outside the domain.
     ///
     /// Batch variant with a caller-provided output buffer: [`eval`](Self::eval).
-    pub fn eval_at<T: InterpScalar>(&self, x: f64, u: &[T]) -> T {
+    pub fn eval_at<T: Scalar>(&self, x: f64, u: &[T]) -> T {
         assert!(
             x >= self.xl && x <= self.xl + self.l,
             "eval: x={x} outside [{}, {}]",
@@ -87,7 +87,7 @@ impl Grid1D {
     ///   evaluate the underlying extension at positions outside the domain.
     /// - `u`: DOF vector in the x-increasing layout matching [`get_x`](Self::get_x).
     /// - `fu`: output buffer of length `m`; `fu[i]` receives the interpolated value at `xs[i]`.
-    pub fn eval<T: InterpScalar>(&self, xs: &[f64], u: &[T], fu: &mut [T]) {
+    pub fn eval<T: Scalar>(&self, xs: &[f64], u: &[T], fu: &mut [T]) {
         debug_assert_eq!(fu.len(), xs.len());
         fu.par_iter_mut()
             .zip(xs.par_iter())
@@ -104,7 +104,7 @@ impl Grid1D {
     ///
     /// Batch variant with a caller-provided output buffer:
     /// [`eval_extended`](Self::eval_extended).
-    pub fn eval_extended_at<T: InterpScalar>(&self, x: f64, u: &[T]) -> T {
+    pub fn eval_extended_at<T: Scalar>(&self, x: f64, u: &[T]) -> T {
         let (y, sign) = self.fold_extended(x);
         self.eval_at(y, u) * sign
     }
@@ -120,7 +120,7 @@ impl Grid1D {
     /// - `xs`: query points (length `m`).
     /// - `u`: DOF vector in the x-increasing layout matching [`get_x`](Self::get_x).
     /// - `fu`: output buffer of length `m`; `fu[i]` receives the value at `xs[i]`.
-    pub fn eval_extended<T: InterpScalar>(&self, xs: &[f64], u: &[T], fu: &mut [T]) {
+    pub fn eval_extended<T: Scalar>(&self, xs: &[f64], u: &[T], fu: &mut [T]) {
         debug_assert_eq!(fu.len(), xs.len());
         fu.par_iter_mut()
             .zip(xs.par_iter())
@@ -134,7 +134,7 @@ impl Grid1D {
     ///
     /// - `u`: DOF vector in the x-increasing layout matching [`get_x`](Self::get_x).
     /// - `out`: output buffer of the same length as `u`; receives the convected values.
-    pub fn convect<T: InterpScalar, F>(&self, lambda: F, u: &[T], out: &mut [T])
+    pub fn convect<T: Scalar, F>(&self, lambda: F, u: &[T], out: &mut [T])
     where
         F: Fn(f64) -> f64 + Sync,
     {
@@ -231,7 +231,7 @@ impl<const N: usize> GridND<N> {
     ///
     /// Each direction contributes `dof_d * stride_d`; if any direction returns
     /// the sentinel (`n_dof` = Dirichlet zero), the value is 0.
-    fn gather_local<T: InterpScalar>(
+    fn gather_local<T: Scalar>(
         &self,
         geo: &EvalGeometry<N>,
         ks: &[usize; N],
@@ -283,7 +283,7 @@ impl<const N: usize> GridND<N> {
 ///
 /// Stages run in place in `v`: stage `d` writes `v[0..len]` (its j=0 chunk)
 /// while reading only `v[j*len + s]` with `j >= 1`, which are untouched.
-fn contract<T: InterpScalar, const N: usize>(
+fn contract<T: Scalar, const N: usize>(
     geo: &EvalGeometry<N>,
     phi: &[f64],
     u_local: &[T],
@@ -342,7 +342,7 @@ impl<const N: usize> GridND<N> {
     /// For repeated evaluation at the same points with varying `u`, build an
     /// [`EvalPlan`] once with [`eval_plan`](Self::eval_plan) and apply it with
     /// [`eval_with_plan`](Self::eval_with_plan).
-    pub fn eval<T: InterpScalar>(&self, xs: &[[f64; N]], u: &[T], fu: &mut [T]) {
+    pub fn eval<T: Scalar>(&self, xs: &[[f64; N]], u: &[T], fu: &mut [T]) {
         debug_assert_eq!(u.len(), self.total);
         debug_assert_eq!(fu.len(), xs.len());
 
@@ -393,13 +393,13 @@ impl<const N: usize> GridND<N> {
     /// periodic wrap (`Periodic`), even reflection (`Even`/Neumann), or odd
     /// reflection with a sign flip (`Odd`/Dirichlet) — so the result is
     /// consistent with the underlying extended representation.
-    pub fn eval_extended<T: InterpScalar>(&self, xs: &[[f64; N]], u: &[T], fu: &mut [T]) {
+    pub fn eval_extended<T: Scalar>(&self, xs: &[[f64; N]], u: &[T], fu: &mut [T]) {
         self.eval_extended_iter(xs.par_iter().copied(), u, fu);
     }
 
     /// Fold a point into the domain direction by direction, returning the folded
     /// point and the sign of the extended interpolant there
-    /// ($-1$ on odd-reflected copies, $+1$ otherwise).
+    /// (`-1` on odd-reflected copies, `+1` otherwise).
     fn fold_point(&self, x: [f64; N]) -> ([f64; N], f64) {
         let mut sign = 1.0_f64;
         let y: [f64; N] = std::array::from_fn(|d| {
@@ -411,7 +411,7 @@ impl<const N: usize> GridND<N> {
     }
 
     /// `true` iff some direction uses the `Odd` extension, i.e. reflection
-    /// signs can differ from $+1$.
+    /// signs can differ from `+1`.
     fn has_odd(&self) -> bool {
         (0..N).any(|d| matches!(self.grids[d].extension, Extension::Odd))
     }
@@ -421,9 +421,9 @@ impl<const N: usize> GridND<N> {
     /// single parallel pass, evaluate, and apply the reflection signs.
     ///
     /// This pass runs before (not inside) `eval`, so its parallelism does not
-    /// nest with eval's. The sign is $-1$ only on odd-reflected copies, so when
+    /// nest with eval's. The sign is `-1` only on odd-reflected copies, so when
     /// no direction is `Odd` the sign vector is not built and no sign pass runs.
-    fn eval_extended_iter<T: InterpScalar, I>(&self, pts: I, u: &[T], fu: &mut [T])
+    fn eval_extended_iter<T: Scalar, I>(&self, pts: I, u: &[T], fu: &mut [T])
     where
         I: IndexedParallelIterator<Item = [f64; N]>,
     {
@@ -450,7 +450,7 @@ impl<const N: usize> GridND<N> {
     /// When the same `lambda` is applied many times with varying `u`, build an
     /// [`EvalPlan`] once with [`convect_plan`](Self::convect_plan) and apply it
     /// with [`eval_with_plan`](Self::eval_with_plan).
-    pub fn convect<T: InterpScalar, F>(&self, lambda: F, u: &[T], out: &mut [T])
+    pub fn convect<T: Scalar, F>(&self, lambda: F, u: &[T], out: &mut [T])
     where
         F: Fn([f64; N]) -> [f64; N] + Sync,
     {
@@ -644,7 +644,7 @@ impl<const N: usize> GridND<N> {
     ///   [`convect_plan`](Self::convect_plan) **on this grid**.
     /// - `u`: DOF vector in the column-major tensor-product layout from [`get_x`](Self::get_x).
     /// - `fu`: output buffer; `fu[i]` receives the value at the plan's `i`-th position.
-    pub fn eval_with_plan<T: InterpScalar>(&self, plan: &EvalPlan<N>, u: &[T], fu: &mut [T]) {
+    pub fn eval_with_plan<T: Scalar>(&self, plan: &EvalPlan<N>, u: &[T], fu: &mut [T]) {
         assert_eq!(
             plan.total, self.total,
             "eval_with_plan: plan was built for a different grid"

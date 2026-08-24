@@ -3,11 +3,11 @@
 //! Multi-element Gauss–Lobatto grids on tensor-product domains: geometry,
 //! boundary extensions, and high-order Lagrange interpolation.
 //!
-//! A [`Grid1D`] describes $n$ Gauss–Lobatto finite elements of polynomial order
-//! $r$ on an **arbitrary interval** $[x_l, x_l + L]$ — any origin and length;
-//! the $[0, 1]$ reference element used for the Gauss–Lobatto nodes and basis
+//! A [`Grid1D`] describes `n` Gauss–Lobatto finite elements of polynomial order
+//! `r` on an **arbitrary interval** `[x_l, x_l + L]` — any origin and length;
+//! the `[0, 1]` reference element used for the Gauss–Lobatto nodes and basis
 //! evaluation is an internal detail only. A [`GridND`] is the tensor product of
-//! $N$ independent 1D grids, one per direction.
+//! `N` independent 1D grids, one per direction.
 //!
 //! Each direction carries an [`Extension`] (`Periodic`, `Odd`, `Even`) that
 //! encodes how the represented field extends beyond the domain — periodic
@@ -24,7 +24,7 @@
 //! | [`Grid1D::convect`], [`GridND::convect`] | Interpolate at the image of every grid node under a flow map. |
 //! | [`GridND::eval_plan`] / [`GridND::convect_plan`] + [`GridND::eval_with_plan`] | Precompute all position-dependent work once, apply many times with varying DOF data. |
 //!
-//! All routines are generic over the DOF scalar via [`InterpScalar`] — in
+//! All routines are generic over the DOF scalar via [`Scalar`] — in
 //! particular `f64` and `Complex<f64>` fields share the same code paths and
 //! plans.
 //!
@@ -59,4 +59,4 @@ pub mod grid;
 pub mod interp;
 
 pub use grid::{Extension, Grid1D, GridND};
-pub use interp::{EvalPlan, InterpScalar};
+pub use interp::{EvalPlan, Scalar};

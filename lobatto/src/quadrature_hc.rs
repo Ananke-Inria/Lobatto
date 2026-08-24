@@ -1,4 +1,4 @@
-//!  Hardcoded GLL nodes and weights on $\[-1,1\]$ for moderate order.
+//!  Hardcoded GLL nodes and weights on `[-1, 1]` for moderate order.
 
 #![allow(clippy::excessive_precision)]
 

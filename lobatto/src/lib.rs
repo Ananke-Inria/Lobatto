@@ -7,7 +7,7 @@
 //!
 //! | Module | Contents |
 //! |--------|----------|
-//! | [`quadrature`] | GL and GLL nodes and weights on $\[-1,1\]$ and $\[0,1\]$. |
+//! | [`quadrature`] | GL and GLL nodes and weights on `[-1, 1]` and `[0, 1]`. |
 //! | [`quadrature_hc`] | Hardcoded GLL nodes and weights for n = 2..14, certified to 1e-15. |
 //! | [`collocation`] | Multi-dimensional collocation basis (tensor-product Gauss/GLL quadrature + Lagrange interpolation). |
 //! | [`collocation_hc`] | Hardcoded SIMD-friendly operations for Q3–Q6 elements in dimension up to 3. |

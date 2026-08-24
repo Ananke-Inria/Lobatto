@@ -1,23 +1,23 @@
-//! Multi-dimensional Lagrangian basis on the unit hypercube $\[0,1\]^d$ on tensor-product Gauss and Gauss–Lobatto grids. Interpolations points are collocated with quadrature points.
+//! Multi-dimensional Lagrangian basis on the unit hypercube `[0, 1]^d` on tensor-product Gauss and Gauss–Lobatto grids. Interpolations points are collocated with quadrature points.
 //!
 //! ## 1D Lagrangian basis
 //!
-//! In each direction $k$, choose $n_k$ distinct nodes
+//! In each direction `k`, choose `n_k` distinct nodes
 //! $\xi_0^{(k)} < \xi_1^{(k)} < \cdots < \xi_{n_k-1}^{(k)}$,
 //! either the **Gauss–Legendre** (GL) or the **Gauss–Lobatto–Legendre** (GLL) points on
-//! $\[0,1\]$ (see [`crate::quadrature`]).
+//! `[0, 1]` (see [`crate::quadrature`]).
 //! The associated **Lagrange basis polynomials** $L_0^{(k)}, \ldots, L_{n_k-1}^{(k)}$
-//! are the unique degree-$(n_k-1)$ polynomials satisfying the interpolation condition
+//! are the unique degree-`n_k - 1` polynomials satisfying the interpolation condition
 //! $$L_i^{(k)}(\xi_j^{(k)}) = \delta_{ij}, \quad i,j = 0, \ldots, n_k-1.$$
 //!
 //! ## ND Lagrangian basis by tensor-product   
 //!
-//! In $d$ dimensions with nodes $\xi_{i_k}^{(k)}$ in direction $k$, the
+//! In `d` dimensions with nodes $\xi_{i_k}^{(k)}$ in direction `k`, the
 //! **tensor-product Lagrange basis** is
 //! $$\Phi_p \big(\xi^{(0)}, \ldots, \xi^{(d-1)} \big)
 //!   = \prod_{k=0}^{d-1} L_{i_k(p)}^{(k)}(\xi^{(k)}),$$
-//! where $p$ is a flat index and $(i_0(p), \ldots, i_{d-1}(p))$ its multi-index.
-//! Any function $f$ represented by the basis reads
+//! where `p` is a flat index and $(i_0(p), \ldots, i_{d-1}(p))$ its multi-index.
+//! Any function `f` represented by the basis reads
 //! $$f(\boldsymbol{\xi}) = \sum_p f_p ~ \Phi_p(\boldsymbol{\xi}),
 //!   \quad f_p = f \big(\xi_{i_0(p)}^{(0)}, \ldots, \xi_{i_{d-1}(p)}^{(d-1)}\big).$$
 //! Note that the flat index is obtained using an ordering where lower direction number varies fastest:
@@ -28,12 +28,12 @@
 //!
 //! ## Differentiation matrix
 //!
-//! For each direction $k$ the entries of the matrix $D^{(k)}$  are
+//! For each direction `k` the entries of the matrix $D^{(k)}$  are
 //! $$
 //! D^{(k)}_{ji} = \big( \frac{d}{d\xi} L_i^{(k)} \big)(\xi_j^{(k)}), \quad i,j = 0, \ldots, n_k - 1.
 //! $$
-//! Differentiating a function $f$ with respect to $\xi^{(k)}$ is achieved by
-//! applying the 1D matrix $D^{(k)}$ on each fiber (i.e. the set of DOFs with the same indices in all directions except $k$). If
+//! Differentiating a function `f` with respect to $\xi^{(k)}$ is achieved by
+//! applying the 1D matrix $D^{(k)}$ on each fiber (i.e. the set of DOFs with the same indices in all directions except `k`). If
 //! $
 //! f(\boldsymbol{\xi}) = \sum_p f_p ~ \Phi_p(\boldsymbol{\xi}) $ then
 //! $$
@@ -42,17 +42,17 @@
 //! where $g_p$ is given by matrix/vector product with the 1D differentiation matrices  $D^{(k)}$.
 //!
 //! [`CollocationBasis::diff`] applies this fibre-by-fibre over the full grid in place;
-//! [`CollocationBasis::diff_matrix`] returns the corresponding $N_\mathrm{dof} \times N_\mathrm{dof}$ matrix.
+//! [`CollocationBasis::diff_matrix`] returns the corresponding `N_dof × N_dof` matrix.
 //!
 //! ## Quadrature weights
 //!
 //! The quadrature weights $w_i^{(k)}$ associated with the nodes $\xi_i^{(k)}$ define a
-//! quadrature on the unit hypercube of dimension $d$ with weight $w_p$ for each flat index $p$ with multi-index $(i_0, \ldots, i_{d-1})$, given by
+//! quadrature on the unit hypercube of dimension `d` with weight $w_p$ for each flat index `p` with multi-index $(i_0, \ldots, i_{d-1})$, given by
 //! $$
 //! w_p = \prod_{k=0}^{d-1} w^{(k)}_ {i_k(p)}.
 //! $$
 //! [`CollocationBasis::weights`] returns the weights as a `Vec<f64>`;
-//! [`CollocationBasis::weights_matrix`] returns the weights as the diagonal of a full dense $N_\mathrm{dof} \times N_\mathrm{dof}$ matrix.
+//! [`CollocationBasis::weights_matrix`] returns the weights as the diagonal of a full dense `N_dof × N_dof` matrix.
 
 use crate::quadrature::*;
 use crate::utilities::{
@@ -72,8 +72,8 @@ pub enum Gauss {
 
 ///  Multi-dimensional GLL/GL operations on tensor-product grids.
 ///
-/// Each direction $k$ is described by a pair `(n_k, node_type)`:
-/// - `n_k`: number of quadrature nodes in direction $k$.
+/// Each direction `k` is described by a pair `(n_k, node_type)`:
+/// - `n_k`: number of quadrature nodes in direction `k`.
 /// - `node_type`: [`Gauss::Lobatto`] for GLL nodes, [`Gauss::Legendre`] for GL nodes.
 ///
 /// # Example
@@ -104,10 +104,10 @@ pub struct CollocationBasis {
     /// Per-direction description: `(n_points, node_type)`.
     basis: Vec<(usize, Gauss)>,
 
-    /// 1D quadrature weights on $\[0,1\]$, one vector per direction.
+    /// 1D quadrature weights on `[0, 1]`, one vector per direction.
     weights_1d: Vec<Vec<f64>>,
 
-    /// 1D quadrature nodes on $\[0,1\]$, one vector per direction.
+    /// 1D quadrature nodes on `[0, 1]`, one vector per direction.
     points_1d: Vec<Vec<f64>>,
 
     /// Tensor-product quadrature weights (one per flat DOF index).
@@ -118,25 +118,25 @@ pub struct CollocationBasis {
 
     /// 1D differentiation matrices, one per direction.
     /// `diff_matrices[k][(j, i)]` $= L_i'(\xi_j)$ where $\xi_j$ are the nodes
-    /// of direction $k$.
+    /// of direction `k`.
     diff_matrices: Vec<DMatrix<f64>>,
 
     /// Transposes of the 1D differentiation matrices, one per direction.
     diff_matrices_t: Vec<DMatrix<f64>>,
 
-    /// Total number of DOFs: $\prod_k n_k$.
+    /// Total number of DOFs: `n_0·n_1·…·n_{d-1}`.
     n_points: usize,
-    /// Prefix products of point counts: `n_points_acc[k]` $= n_0 \cdots n_k$.
+    /// Prefix products of point counts: `n_points_acc[k] = n_0·…·n_k`.
     n_points_acc: Vec<usize>,
 
-    /// Stride step used by [`CollocationBasis::diff`] for direction $k$.
+    /// Stride step used by [`CollocationBasis::diff`] for direction `k`.
     step: Vec<usize>,
-    /// Starting flat indices of fibres in direction $k$ (all $p$ with $i_k(p) = 0$).
+    /// Starting flat indices of fibres in direction `k` (all `p` with `i_k(p) = 0`).
     start: Vec<Vec<usize>>,
 }
 
 impl CollocationBasis {
-    // Convert a flat DOF index to the multi-index $(i_0, \ldots, i_{d-1})$.
+    // Convert a flat DOF index to the multi-index `(i_0, …, i_{d-1})`.
     fn flat_to_multi(n_points_acc: &[usize], index: usize) -> Vec<usize> {
         let n = n_points_acc.len();
         let mut multi_index = vec![0; n];
@@ -149,7 +149,7 @@ impl CollocationBasis {
         multi_index
     }
 
-    /// Convert a flat DOF index to the multi-index $(i_0, \ldots, i_{d-1})$.
+    /// Convert a flat DOF index to the multi-index `(i_0, …, i_{d-1})`.
     pub fn get_multi_index(&self, index: usize) -> Vec<usize> {
         Self::flat_to_multi(&self.n_points_acc, index)
     }
@@ -166,7 +166,7 @@ impl CollocationBasis {
     /// Build a [`CollocationBasis`] from a list of per-direction descriptions `(n, node_type)`.
     ///
     /// `n` is the number of quadrature nodes and `node_type` selects [`Gauss::Lobatto`] (GLL)
-    /// or [`Gauss::Legendre`] (GL) nodes on $\[0,1\]$.
+    /// or [`Gauss::Legendre`] (GL) nodes on `[0, 1]`.
     ///
     /// # Panics
     /// Panics if a GLL direction has fewer than 2 nodes, or a GL direction has 0 nodes.
@@ -259,12 +259,12 @@ impl CollocationBasis {
         }
     }
 
-    /// Return the number of spatial dimensions $d$.
+    /// Return the number of spatial dimensions `d`.
     pub fn ndim(&self) -> usize {
         self.basis.len()
     }
 
-    /// Return the total number of DOFs $N_\mathrm{dof} = \prod_{k=0}^{d-1} n_k$.
+    /// Return the total number of DOFs `N_dof = n_0·n_1·…·n_{d-1}`.
     pub fn n_dof(&self) -> usize {
         self.n_points
     }
@@ -281,24 +281,24 @@ impl CollocationBasis {
 
     /// Return the tensor-product quadrature nodes.
     ///
-    /// Entry $p$ is the ND point $(\xi^{(0)}_{i_0(p)}, \ldots, \xi^{(d-1)}_{i_{d-1}(p)})$.
+    /// Entry `p` is the ND point $(\xi^{(0)}_{i_0(p)}, \ldots, \xi^{(d-1)}_{i_{d-1}(p)})$.
     pub fn points(&self) -> &[Vec<f64>] {
         &self.points
     }
 
-    /// Return the 1D quadrature nodes on $\[0,1\]$ for direction `dim`.
+    /// Return the 1D quadrature nodes on `[0, 1]` for direction `dim`.
     pub fn points_1d(&self, dim: usize) -> &[f64] {
         &self.points_1d[dim]
     }
 
-    /// Return the 1D quadrature weights on $\[0,1\]$ for direction `dim`.
+    /// Return the 1D quadrature weights on `[0, 1]` for direction `dim`.
     pub fn weights_1d(&self, dim: usize) -> &[f64] {
         &self.weights_1d[dim]
     }
 
     /// Return the raw 1D differentiation matrix for direction `dim`.
     ///
-    /// Entry $(j, i)$ equals $L_i'(\xi_j)$.  For the full tensor-product lift
+    /// Entry `(j, i)` equals $L_i'(\xi_j)$.  For the full tensor-product lift
     /// see [`CollocationBasis::diff_matrix`].
     pub fn diff_matrix_1d(&self, dim: usize) -> &DMatrix<f64> {
         &self.diff_matrices[dim]
@@ -307,7 +307,7 @@ impl CollocationBasis {
     /// Apply the differentiation operator along direction `dim` in place.
     /// The matrix $D^{(\mathrm{dim})}$ is applied fibre-by-fibre over the tensor-product grid:
     /// for each combination of indices $(i_0, \ldots, {i_{\mathrm{dim}}}, \ldots, i_{d-1})$,
-    /// the length-$n_{\mathrm{dim}}$ fibre is multiplied by $D^{(\mathrm{dim})}$.
+    /// the length-`n_dim` fibre is multiplied by $D^{(\mathrm{dim})}$.
     ///
     /// # Panics
     /// Panics if `dim ≥ d`, or if `sol`/`sol_diff` have the wrong length.
@@ -376,12 +376,12 @@ impl CollocationBasis {
 
     /// Return the tensor-product quadrature weights.
     ///
-    /// Entry $p$ equals $w_p = \prod_{k=0}^{d-1} w^{(k)}_{i_k(p)}$.
+    /// Entry `p` equals $w_p = \prod_{k=0}^{d-1} w^{(k)}_{i_k(p)}$.
     pub fn weights(&self) -> &[f64] {
         &self.weights
     }
 
-    /// Return the quadrature weights as a dense $N_\mathrm{dof} \times N_\mathrm{dof}$ matrix.
+    /// Return the quadrature weights as a dense `N_dof × N_dof` matrix.
     ///
     /// All off-diagonal entries are zero; diagonal entries are given by [`weights`](Self::weights).
     pub fn weights_matrix(&self) -> DMatrix<f64> {
@@ -394,7 +394,7 @@ impl CollocationBasis {
     }
 
     /// Return the full tensor-product differentiation matrix along direction `dim` as a
-    /// dense $N_\mathrm{dof} \times N_\mathrm{dof}$ matrix assembled via
+    /// dense `N_dof × N_dof` matrix assembled via
     /// the same operation as [`CollocationBasis::diff`].
     pub fn diff_matrix(&self, dim: usize) -> DMatrix<f64> {
         let mut diff_matrix = DMatrix::<f64>::zeros(self.n_points, self.n_points);
@@ -412,7 +412,7 @@ impl CollocationBasis {
         diff_matrix
     }
 
-    /// Evaluate the collocation interpolant of `u` at arbitrary points in $\[0,1\]^d$.
+    /// Evaluate the collocation interpolant of `u` at arbitrary points in `[0, 1]^d`.
     ///
     /// `u` holds the DOF values at the collocation points (flat, direction-0 fastest).
     /// Each query point must have `d` coordinates. Uses sum factorisation:
@@ -420,7 +420,7 @@ impl CollocationBasis {
     ///              \prod_{k=0}^{d-1} L^{(k)}_{j_k}(\xi^{(k)})$$
     ///
     /// # Panics
-    /// Panics if any coordinate lies outside $[0, 1]$.
+    /// Panics if any coordinate lies outside `[0, 1]`.
     ///
     /// # Example
     /// ```rust

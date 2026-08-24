@@ -1,10 +1,10 @@
 //! Grid geometry: [`Extension`], [`Grid1D`] and [`GridND`].
 //!
 //! A grid describes a multi-element Gauss-Lobatto discretisation of an
-//! arbitrary interval $[x_l, x_l + L]$ (1D) or tensor-product domain
+//! arbitrary interval `[x_l, x_l + L]` (1D) or tensor-product domain
 //! $\prod_d [x_{l,d}, x_{l,d} + L_d]$ (ND): number of elements, polynomial
 //! order, domain, and the [`Extension`] that encodes how the discretisation
-//! behaves at the boundary. The $[0, 1]$ reference element used for the
+//! behaves at the boundary. The `[0, 1]` reference element used for the
 //! Gauss-Lobatto nodes and basis evaluation is an internal detail only.
 
 use lobatto::collocation::{CollocationBasis, Gauss};
@@ -15,18 +15,18 @@ use lobatto::utilities::barycentric_weights;
 /// Boundary extension of a [`Grid1D`].
 ///
 /// Encodes how the field represented on the grid extends beyond the physical
-/// domain $[x_l, x_l+L]$, which in turn fixes the DOF layout and count:
+/// domain `[x_l, x_l + L]`, which in turn fixes the DOF layout and count:
 ///
-/// | Variant    | BC          | $N_\mathrm{dof}$ |
+/// | Variant    | BC          | `N_dof` |
 /// |------------|-------------|------------------|
-/// | `Periodic` | Periodic    | $n r$            |
-/// | `Odd`      | Dirichlet   | $n r - 1$        |
-/// | `Even`     | Neumann     | $n r + 1$        |
+/// | `Periodic` | Periodic    | `n·r`            |
+/// | `Odd`      | Dirichlet   | `n·r - 1`        |
+/// | `Even`     | Neumann     | `n·r + 1`        |
 ///
-/// where $n$ is the number of elements and $r$ the polynomial order.
+/// where `n` is the number of elements and `r` the polynomial order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Extension {
-    /// Periodic identification: $u(x_l) = u(x_l + L)$; no reflection needed.
+    /// Periodic identification: `u(x_l) = u(x_l + L)`; no reflection needed.
     Periodic,
     /// Odd (anti-symmetric) reflection — enforces homogeneous Dirichlet values at both endpoints.
     Odd,
@@ -36,42 +36,42 @@ pub enum Extension {
 
 // ── 1D grid ─────────────────────────────────────────────────────────────────
 
-/// 1D multi-element Gauss-Lobatto grid on $[x_l, x_l + L]$.
+/// 1D multi-element Gauss-Lobatto grid on `[x_l, x_l + L]`.
 ///
-/// $n$ elements of polynomial order $r$ ($r+1$ Gauss-Lobatto nodes per
+/// `n` elements of polynomial order `r` (`r + 1` Gauss-Lobatto nodes per
 /// element, endpoints shared between neighbours), with an [`Extension`] that
 /// fixes the boundary behaviour and the DOF layout.
 ///
 /// ## Data layout
 ///
-/// The **physical DOF buffer** (length $N_\mathrm{dof}$) is in $x$-increasing order:
+/// The **physical DOF buffer** (length `N_dof`) is in `x`-increasing order:
 ///
-/// | Extension   | Flat index of node $j$ in element $k$ |
+/// | Extension   | Flat index of node `j` in element `k` |
 /// |-------------|---------------------------------------|
-/// | `Periodic`  | $k r + j$                             |
-/// | `Odd`       | $k r + j - 1$ (left boundary excluded) |
-/// | `Even`      | $k r + j$, plus the right endpoint at $n r$ |
+/// | `Periodic`  | `k·r + j`                             |
+/// | `Odd`       | `k·r + j - 1` (left boundary excluded) |
+/// | `Even`      | `k·r + j`, plus the right endpoint at `n·r` |
 pub struct Grid1D {
-    /// Number of elements $n$.
+    /// Number of elements `n`.
     pub(crate) n: usize,
-    /// Polynomial order $r$ (nodes per element, excluding the shared endpoint).
+    /// Polynomial order `r` (nodes per element, excluding the shared endpoint).
     pub(crate) r: usize,
-    /// Domain length $L$.
+    /// Domain length `L`.
     pub(crate) l: f64,
-    /// Left boundary position $x_l$.
+    /// Left boundary position `x_l`.
     pub(crate) xl: f64,
-    /// Number of physical DOFs $N_\mathrm{dof}$.
+    /// Number of physical DOFs `N_dof`.
     pub(crate) n_dof: usize,
     /// Boundary extension.
     pub(crate) extension: Extension,
-    /// Gauss-Lobatto nodes on the $[0,1]$ reference element (length $r+1$).
+    /// Gauss-Lobatto nodes on the `[0, 1]` reference element (length `r + 1`).
     pub(crate) gauss_lobatto_points: Vec<f64>,
-    /// Barycentric weights for the $r+1$ Gauss-Lobatto nodes.
+    /// Barycentric weights for the `r + 1` Gauss-Lobatto nodes.
     pub(crate) bary_weights: Vec<f64>,
 }
 
 impl Grid1D {
-    /// Create a grid of $n$ elements of order $r$ on $[x_l, x_l+L]$.
+    /// Create a grid of `n` elements of order `r` on `[x_l, x_l + L]`.
     pub fn new(n: usize, r: usize, l: f64, xl: f64, extension: Extension) -> Self {
         let n_dof = match extension {
             Extension::Periodic => r * n,
@@ -94,32 +94,32 @@ impl Grid1D {
         }
     }
 
-    /// Number of elements $n$.
+    /// Number of elements `n`.
     pub fn n(&self) -> usize {
         self.n
     }
 
-    /// Polynomial order $r$.
+    /// Polynomial order `r`.
     pub fn r(&self) -> usize {
         self.r
     }
 
-    /// Domain length $L$.
+    /// Domain length `L`.
     pub fn l(&self) -> f64 {
         self.l
     }
 
-    /// Left boundary position $x_l$.
+    /// Left boundary position `x_l`.
     pub fn xl(&self) -> f64 {
         self.xl
     }
 
-    /// Element width $h = L / n$.
+    /// Element width `h = L/n`.
     pub fn h(&self) -> f64 {
         self.l / (self.n as f64)
     }
 
-    /// Number of physical DOFs $N_\mathrm{dof}$.
+    /// Number of physical DOFs `N_dof`.
     pub fn n_dof(&self) -> usize {
         self.n_dof
     }
@@ -129,16 +129,16 @@ impl Grid1D {
         self.extension
     }
 
-    /// Gauss-Lobatto nodes on the $[0, 1]$ reference element (length $r+1$).
+    /// Gauss-Lobatto nodes on the `[0, 1]` reference element (length `r + 1`).
     pub fn ref_points(&self) -> &[f64] {
         &self.gauss_lobatto_points
     }
 
-    /// Gauss-Lobatto nodes in $x$-increasing order on $[x_l, x_l+L]$.
+    /// Gauss-Lobatto nodes in `x`-increasing order on `[x_l, x_l + L]`.
     ///
-    /// - `Periodic`: $n r$ nodes — left endpoint included, right excluded.
-    /// - `Odd`:      $n r - 1$ nodes — both boundary endpoints excluded.
-    /// - `Even`:     $n r + 1$ nodes — both boundary endpoints included.
+    /// - `Periodic`: `n·r` nodes — left endpoint included, right excluded.
+    /// - `Odd`:      `n·r - 1` nodes — both boundary endpoints excluded.
+    /// - `Even`:     `n·r + 1` nodes — both boundary endpoints included.
     pub fn get_x(&self) -> Vec<f64> {
         let h = self.h();
         let mut x = Vec::with_capacity(self.n_dof);
@@ -179,9 +179,9 @@ impl Grid1D {
         }
     }
 
-    /// Fold `x` into $[x_l, x_l+L]$ according to the extension, returning the
+    /// Fold `x` into `[x_l, x_l + L]` according to the extension, returning the
     /// folded coordinate and the sign of the extended interpolant there
-    /// ($-1$ on odd-reflected copies, $+1$ otherwise).
+    /// (`-1` on odd-reflected copies, `+1` otherwise).
     pub fn fold_extended(&self, x: f64) -> (f64, f64) {
         match self.extension {
             Extension::Periodic => ((x - self.xl).rem_euclid(self.l) + self.xl, 1.0),
@@ -230,7 +230,7 @@ impl Grid1D {
 
 // ── ND grid ─────────────────────────────────────────────────────────────────
 
-/// $N$-dimensional tensor-product Gauss-Lobatto grid.
+/// `N`-dimensional tensor-product Gauss-Lobatto grid.
 ///
 /// One [`Grid1D`] per spatial direction, each with an independent
 /// [`Extension`]. The DOF tensor is stored flat in column-major order

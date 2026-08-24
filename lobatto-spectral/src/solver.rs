@@ -2,19 +2,19 @@
 //!
 //! Solves the screened Poisson equation
 //! $$(\alpha I - \Delta K)~u = f$$
-//! on the box $[x_{l}, x_{l}+L]^N$ using a **single** high-order spectral element
-//! of polynomial order $r$ per direction.  Supports periodic, Dirichlet, and Neumann
+//! on the box `[x_l, x_l + L]^N` using a **single** high-order spectral element
+//! of polynomial order `r` per direction.  Supports periodic, Dirichlet, and Neumann
 //! boundary conditions via the [`BoundaryCondition`] enum.
 //!
 //! ## Boundary conditions and DOF layout
 //!
 //! The set of active nodes depends on the boundary condition:
 //!
-//! | BC          | Active nodes            | $N_\mathrm{dof}$ | Enforced condition              |
+//! | BC          | Active nodes            | `N_dof` | Enforced condition              |
 //! |-------------|-------------------------|------------------|---------------------------------|
-//! | `Periodic`  | $0, \ldots, r-1$        | $r$              | $u(x_l) = u(x_l+L)$            |
-//! | `Dirichlet` | $1, \ldots, r-1$        | $r-1$            | $u(x_l) = u(x_l+L) = 0$        |
-//! | `Neumann`   | $0, \ldots, r$          | $r+1$            | $u'(x_l) = u'(x_l+L) = 0$      |
+//! | `Periodic`  | `0..r`        | `r`              | $u(x_l) = u(x_l+L)$            |
+//! | `Dirichlet` | `1..r`        | `r - 1`            | $u(x_l) = u(x_l+L) = 0$        |
+//! | `Neumann`   | `0..=r`          | `r + 1`            | $u'(x_l) = u'(x_l+L) = 0$      |
 //!
 //! ## Algorithm
 //!
@@ -24,14 +24,14 @@
 //! $$M^{-1/2} A M^{-1/2} = W \Lambda W^T, \quad V = M^{-1/2} W,$$
 //! yielding $M$-orthonormal columns $V^T M V = I$.
 //!
-//! Given the right-hand side $f$, the solve then executes four steps:
+//! Given the right-hand side `f`, the solve then executes four steps:
 //! 1. **Mass scaling**: $g \leftarrow M f$.
 //! 2. **Forward transform**: $\hat{g} \leftarrow V^T g$.
 //! 3. **Spectral division**: $\hat{u}_j \leftarrow \hat{g}_j / \lambda_j$
 //!    (near-zero eigenvalues are set to zero — pseudo-inverse).
 //! 4. **Inverse transform**: $u \leftarrow V \hat{u}$.
 //!
-//! The $N$-dimensional solver [`PoissonND`] exploits the tensor-product structure.
+//! The `N`-dimensional solver [`PoissonND`] exploits the tensor-product structure.
 //! The eigenvectors and eigenvalues factorise as
 //! $$V_\mathrm{ND} = V^{(0)} \otimes \cdots \otimes V^{(N-1)},
 //!   \quad \lambda_{j_0,\ldots,j_{N-1}} = \alpha + \beta \sum_{d=0}^{N-1} \lambda^{(d)}_{j_d},$$
@@ -47,23 +47,23 @@ use rayon::prelude::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BoundaryCondition {
     /// Periodic: right endpoint identified with left endpoint.
-    /// $N_\mathrm{dof} = r$.
+    /// `N_dof = r`.
     Periodic,
-    /// Homogeneous Dirichlet: $u = 0$ at both endpoints; boundary nodes excluded.
-    /// $N_\mathrm{dof} = r - 1$.
+    /// Homogeneous Dirichlet: `u = 0` at both endpoints; boundary nodes excluded.
+    /// `N_dof = r - 1`.
     Dirichlet,
-    /// Homogeneous Neumann (natural BC): $\partial_n u = 0$ at both endpoints;
+    /// Homogeneous Neumann (natural BC): `u' = 0` at both endpoints;
     /// all nodes including the endpoints are active.
-    /// $N_\mathrm{dof} = r + 1$.
+    /// `N_dof = r + 1`.
     Neumann,
 }
 
 // ── 1D ──────────────────────────────────────────────────────────────────────
 
-/// 1D HoT screened Poisson solver on a single element of polynomial order $r$.
+/// 1D HoT screened Poisson solver on a single element of polynomial order `r`.
 ///
-/// Solves $(\alpha M + \beta K)\, u = f$ on $[x_l, x_l + L]$ using a single
-/// GLL spectral element of order $r$.  The active DOFs depend on the boundary
+/// Solves $(\alpha M + \beta K)\, u = f$ on `[x_l, x_l + L]` using a single
+/// GLL spectral element of order `r`.  The active DOFs depend on the boundary
 /// condition (see the module-level table).
 ///
 /// ## Construction
@@ -73,17 +73,17 @@ pub enum BoundaryCondition {
 /// is computed and the pseudo-inverse $A^+ = V \Lambda^+ V^T M$ is stored.
 /// The solve is then a single matrix-vector product: $u = A^+ f$.
 pub struct Poisson {
-    /// Domain length $L$.
+    /// Domain length `L`.
     l: f64,
-    /// Position of the left boundary $x_l$.
+    /// Position of the left boundary `x_l`.
     xl: f64,
-    /// Polynomial order $r$ (the GLL basis has $r+1$ nodes).
+    /// Polynomial order `r` (the GLL basis has `r + 1` nodes).
     r: usize,
-    /// Number of active DOFs $N_\mathrm{dof}$ (depends on BC; see module-level table).
+    /// Number of active DOFs `N_dof` (depends on BC; see module-level table).
     pub ndof: usize,
     /// Boundary condition type.
     bc: BoundaryCondition,
-    /// GLL basis with $r+1$ nodes on $\[0,1\]$.
+    /// GLL basis with `r + 1` nodes on `[0, 1]`.
     lobatto_basis: CollocationBasis,
     /// Pre-computed pseudo-inverse $A^+ = V \Lambda^+ V^T M$ of the local symbol.
     symbol_pseudo_inv: DMatrix<f64>,
@@ -94,9 +94,9 @@ pub struct Poisson {
     /// diagonalises $M^{-1/2}(\alpha M + \beta K)M^{-1/2}$.
     /// Satisfy $V^T M V = I$.
     pub eigenvectors: DMatrix<f64>,
-    /// Diagonal of the active mass matrix $M$, length $N_\mathrm{dof}$.
+    /// Diagonal of the active mass matrix $M$, length `N_dof`.
     pub mass_diag: DVector<f64>,
-    /// Barycentric weights for the $r+1$ GLL nodes on $\[0,1\]$ (used in [`eval`](Self::eval)).
+    /// Barycentric weights for the `r + 1` GLL nodes on `[0, 1]` (used in [`eval`](Self::eval)).
     bary_weights: Vec<f64>,
 }
 
@@ -107,9 +107,9 @@ impl Poisson {
     /// condition, then computes and stores its generalised eigendecomposition.
     ///
     /// # Arguments
-    /// - `l`: domain length $L$.
-    /// - `xl`: position of the left boundary $x_l$.
-    /// - `r`: polynomial order ($r+1$ GLL nodes on $[x_l, x_l+L]$).
+    /// - `l`: domain length `L`.
+    /// - `xl`: position of the left boundary `x_l`.
+    /// - `r`: polynomial order (`r + 1` GLL nodes on `[x_l, x_l + L]`).
     /// - `alpha`, `beta`: operator coefficients.
     /// - `bc`: boundary condition type.
     pub fn new(l: f64, xl: f64, r: usize, alpha: f64, beta: f64, bc: BoundaryCondition) -> Self {
@@ -189,9 +189,12 @@ impl Poisson {
         let eigenvalues = eig.eigenvalues.clone();
         let eigenvectors = &mass_sqrt_inv * eig.eigenvectors;
 
-        // Pseudo-inverse: V diag(1/λ) V^T  (zero out near-zero eigenvalues)
-        const PINV_TOL: f64 = 1e-12;
-        let lambda_pinv = eigenvalues.map(|v| if v.abs() > PINV_TOL { 1.0 / v } else { 0.0 });
+        // Pseudo-inverse: V diag(1/λ) V^T  (zero out near-zero eigenvalues).
+        // The cutoff is relative to the spectral radius: an analytically zero
+        // eigenvalue (e.g. the constant mode when α = 0) is computed as
+        // roundoff ~ε·λ_max, which outgrows any absolute threshold with r.
+        let pinv_tol = 1e-12 * eigenvalues.amax();
+        let lambda_pinv = eigenvalues.map(|v| if v.abs() > pinv_tol { 1.0 / v } else { 0.0 });
         let symbol_pseudo_inv =
             &eigenvectors * DMatrix::from_diagonal(&lambda_pinv) * eigenvectors.transpose();
 
@@ -212,13 +215,13 @@ impl Poisson {
         }
     }
 
-    /// Return the active GLL nodes on $[x_l, x_l+L]$, length $N_\mathrm{dof}$.
+    /// Return the active GLL nodes on `[x_l, x_l + L]`, length `N_dof`.
     ///
-    /// - `Periodic`:  nodes $0, \ldots, r-1$ (right endpoint excluded — it is
+    /// - `Periodic`:  nodes `0..r` (right endpoint excluded — it is
     ///   identified with the left endpoint by periodicity).
-    /// - `Dirichlet`: interior nodes $1, \ldots, r-1$ (both boundary nodes
+    /// - `Dirichlet`: interior nodes `1..r` (both boundary nodes
     ///   are enforced to zero and are not returned).
-    /// - `Neumann`:   all nodes $0, \ldots, r$ (including both endpoints).
+    /// - `Neumann`:   all nodes `0..=r` (including both endpoints).
     pub fn get_x(&self) -> Vec<f64> {
         let pts = self.lobatto_basis.points_1d(0);
         match self.bc {
@@ -230,14 +233,14 @@ impl Poisson {
         }
     }
 
-    /// Solve $(\alpha M + \beta K)\, u = f$ in place.
+    /// Solve `(α M + β K) u = f` in place.
     ///
     /// On input, `f` contains the strong-form right-hand side evaluated at
     /// the active GLL nodes returned by [`get_x`](Self::get_x).
-    /// On output, `f` contains the FEM solution $u$ at those same nodes.
+    /// On output, `f` contains the FEM solution `u` at those same nodes.
     ///
     /// The solve is $u = A^+ (M f)$, a single matrix-vector product with the
-    /// pre-computed pseudo-inverse.  Cost: $O(N_\mathrm{dof}^2)$.
+    /// pre-computed pseudo-inverse.  Cost: `O(N_dof^2)`.
     pub fn solve_in_place(&self, f: &mut [f64]) {
         let g = DVector::from_fn(self.ndof, |i, _| self.mass_diag[i] * f[i]);
         let x = &self.symbol_pseudo_inv * &g;
@@ -250,10 +253,10 @@ impl Poisson {
     ///
     /// Uses the barycentric Lagrange formula to evaluate
     /// $u_h(x) = \sum_i u_i L_i(\xi(x))$
-    /// where $\xi(x) = (x - x_l)/L \in [0,1]$.
+    /// where $\xi(x) = (x - x_l)/L \in \[0,1\]$.
     ///
-    /// - `Periodic`: `x` is folded into $[x_l, x_l+L)$ by periodicity.
-    /// - `Dirichlet`/`Neumann`: `x` is clamped to $[x_l, x_l+L]$.
+    /// - `Periodic`: `x` is folded into `[x_l, x_l + L)` by periodicity.
+    /// - `Dirichlet`/`Neumann`: `x` is clamped to `[x_l, x_l + L]`.
     pub fn eval(&self, x: f64, u: &[f64]) -> f64 {
         let pts = self.lobatto_basis.points_1d(0);
         match self.bc {
@@ -284,11 +287,11 @@ impl Poisson {
 
 // ── ND ──────────────────────────────────────────────────────────────────────
 
-/// $N$-dimensional HoT screened Poisson solver.
+/// `N`-dimensional HoT screened Poisson solver.
 ///
-/// Extends [`Poisson`] to $N$ spatial dimensions using a **tensor-product
-/// eigendecomposition**.  Each direction $d$ may have an independent polynomial
-/// order $r_d$ and [`BoundaryCondition`].
+/// Extends [`Poisson`] to `N` spatial dimensions using a **tensor-product
+/// eigendecomposition**.  Each direction `d` may have an independent polynomial
+/// order `r_d` and [`BoundaryCondition`].
 ///
 /// ## Algorithm
 ///
@@ -301,31 +304,31 @@ impl Poisson {
 ///
 /// The solve proceeds as:
 /// 1. $f \leftarrow M_\mathrm{ND}\, f$ — pointwise multiplication by the diagonal ND mass matrix.
-/// 2. For each $d$: apply $V^{(d)\,T}$ along fibres in direction $d$.
+/// 2. For each `d`: apply $V^{(d)\,T}$ along fibres in direction `d`.
 /// 3. $f_{j_0,\ldots,j_{N-1}} \leftarrow f_{j_0,\ldots,j_{N-1}} / \lambda_{j_0,\ldots,j_{N-1}}$
 ///    (pseudo-inverse: zero out near-zero eigenvalues).
-/// 4. For each $d$: apply $V^{(d)}$ along fibres in direction $d$.
+/// 4. For each `d`: apply $V^{(d)}$ along fibres in direction `d`.
 ///
 /// Steps 1 and 3 are embarrassingly parallel; steps 2 and 4 are parallelised
 /// over independent fibres with Rayon.
 pub struct PoissonND<const N: usize> {
     /// One 1D solver per spatial direction.
     pub solvers: [Poisson; N],
-    /// Coefficient $\alpha$ of the mass term.
+    /// Coefficient `α` of the mass term.
     pub alpha: f64,
-    /// Coefficient $\beta$ of the stiffness term.
+    /// Coefficient `β` of the stiffness term.
     pub beta: f64,
-    /// Polynomial order $r_d$ per direction.
+    /// Polynomial order `r_d` per direction.
     pub rs: [usize; N],
-    /// DOF counts per direction: $N_\mathrm{dof}^{(d)}$ of the $d$-th 1D solver.
+    /// DOF counts per direction: `N_dof^(d)` of the `d`-th 1D solver.
     pub ndofs: [usize; N],
     /// Boundary condition per direction.
     pub bcs: [BoundaryCondition; N],
-    /// Domain length $L_d$ per direction.
+    /// Domain length `L_d` per direction.
     pub ls: [f64; N],
-    /// Left boundary position $x_{l,d}$ per direction.
+    /// Left boundary position `x_l` per direction.
     pub xls: [f64; N],
-    /// Total number of DOFs: $\prod_d N_\mathrm{dof}^{(d)}$.
+    /// Total number of DOFs: the product of the per-direction `N_dof`.
     pub r_total: usize,
     /// Column-major strides for the DOF tensor (direction 0 varies fastest).
     pub local_strides: [usize; N],
@@ -339,10 +342,10 @@ impl<const N: usize> PoissonND<N> {
     /// coefficients $\alpha$ and $\beta$ are applied at the ND level during the solve.
     ///
     /// # Arguments
-    /// - `ls[d]`: domain length $L_d$ in direction $d$.
-    /// - `xls[d]`: left boundary position $x_{l,d}$ in direction $d$.
-    /// - `rs[d]`: polynomial order $r_d$ in direction $d$.
-    /// - `bcs[d]`: boundary condition for direction $d$.
+    /// - `ls[d]`: domain length `L_d` in direction `d`.
+    /// - `xls[d]`: left boundary position $x_{l,d}$ in direction `d`.
+    /// - `rs[d]`: polynomial order `r_d` in direction `d`.
+    /// - `bcs[d]`: boundary condition for direction `d`.
     /// - `alpha`, `beta`: operator coefficients.
     pub fn new(
         ls: [f64; N],
@@ -375,7 +378,7 @@ impl<const N: usize> PoissonND<N> {
     /// Return the tensor-product GLL grid as a `Vec<[f64; N]>` of length
     /// $\prod_d N_\mathrm{dof}^{(d)}$.
     ///
-    /// Entry `p` holds the coordinates $(x_0, \ldots, x_{N-1})$ of the $p$-th
+    /// Entry `p` holds the coordinates $(x_0, \ldots, x_{N-1})$ of the `p`-th
     /// DOF.  Direction 0 varies fastest (column-major ordering).
     pub fn get_x(&self) -> Vec<[f64; N]> {
         let x1d: [Vec<f64>; N] = std::array::from_fn(|d| self.solvers[d].get_x());
@@ -384,11 +387,11 @@ impl<const N: usize> PoissonND<N> {
             .collect()
     }
 
-    /// Solve $(\alpha M + \beta K)\, u = f$ in place using the ND HoT algorithm.
+    /// Solve `(α M + β K) u = f` in place using the ND HoT algorithm.
     ///
     /// On input, `f` contains the strong-form right-hand side at the
     /// tensor-product grid returned by [`get_x`](Self::get_x).
-    /// On output, `f` contains the FEM solution $u$ at the same grid.
+    /// On output, `f` contains the FEM solution `u` at the same grid.
     ///
     /// # Parallelism
     /// Mass scaling (step 1) and spectral division (step 3) are element-wise
@@ -425,7 +428,14 @@ impl<const N: usize> PoissonND<N> {
         }
 
         // Step b: divide by ND eigenvalue (pseudo-inverse: skip near-zero modes).
-        const PINV_TOL: f64 = 1e-12;
+        // Relative cutoff (see the 1D constructor): scale with an upper bound
+        // |α| + |β|·Σ_d max |λ^(d)| on the combined eigenvalue magnitude.
+        let pinv_tol = 1e-12
+            * (self.alpha.abs()
+                + self.beta.abs()
+                    * (0..N)
+                        .map(|d| self.solvers[d].eigenvalues.amax())
+                        .sum::<f64>());
         f.as_mut_slice()
             .par_iter_mut()
             .enumerate()
@@ -437,7 +447,7 @@ impl<const N: usize> PoissonND<N> {
                             self.beta * self.solvers[d].eigenvalues[j_d]
                         })
                         .sum::<f64>();
-                if lambda.abs() > PINV_TOL {
+                if lambda.abs() > pinv_tol {
                     *fj /= lambda;
                 } else {
                     *fj = 0.0;
@@ -465,7 +475,7 @@ impl<const N: usize> PoissonND<N> {
 
     /// Evaluate the GLL interpolant of `u` at a batch of arbitrary positions.
     ///
-    /// For each query point $x$, computes
+    /// For each query point `x`, computes
     /// $$u_h(x) = \sum_{j_0, \ldots, j_{N-1}} u_{j_0,\ldots,j_{N-1}}
     ///            \prod_d L^{(d)}_{j_d}(\xi_d(x_d))$$
     /// using sum factorisation over directions, with cost

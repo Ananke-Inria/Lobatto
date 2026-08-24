@@ -7,38 +7,38 @@
 //! Both solvers are set up once and reused for many right-hand sides.
 //! Construction precomputes the FFT plans and the eigendecomposition of
 //! all independent local symbols; each call to `solve_in_place` runs in
-//! $\mathcal{O}(N_\mathrm{dof} \log N_\mathrm{dof})$ arithmetic operations.
+//! `O(N_dof·log N_dof)` arithmetic operations.
 //!
 //! | Type | Description |
 //! |------|-------------|
 //! | [`BoundaryCondition`] | Selects `Periodic`, `Dirichlet`, or `Neumann` for each direction. |
 //! | [`Poisson`] | 1D solver; single-threaded symbol solve. |
-//! | [`PoissonND`] | $N$-dimensional solver; Rayon-parallel symbol solve. |
+//! | [`PoissonND`] | `N`-dimensional solver; Rayon-parallel symbol solve. |
 //!
 //! ## Boundary conditions and extension
 //!
-//! Non-periodic BCs are handled by extending the $n$-element physical domain to a
-//! $2n$-element periodic domain with odd (Dirichlet) or even (Neumann) symmetry,
-//! applying a standard FFT of length $2n$, then retaining only the
-//! $N_\mathrm{dof}$ independent Fourier coefficients; see [`crate::hofft::Extension`]
+//! Non-periodic BCs are handled by extending the `n`-element physical domain to a
+//! `2n`-element periodic domain with odd (Dirichlet) or even (Neumann) symmetry,
+//! applying a standard FFT of length `2n`, then retaining only the
+//! `N_dof` independent Fourier coefficients; see [`crate::hofft::Extension`]
 //! and Caforio & Imperiale (2019), SIAM JSC 41(5):
 //!
-//! | BC          | Extension | $n_\mathrm{fft}$ | $N_\mathrm{dof}$ |
+//! | BC          | Extension | `n_fft` | `N_dof` |
 //! |-------------|-----------|------------------|------------------|
-//! | `Periodic`  | none      | $n$              | $n r$            |
-//! | `Dirichlet` | Odd       | $2n$             | $n r - 1$        |
-//! | `Neumann`   | Even      | $2n$             | $n r + 1$        |
+//! | `Periodic`  | none      | `n`              | `n·r`            |
+//! | `Dirichlet` | Odd       | `2n`             | `n·r - 1`        |
+//! | `Neumann`   | Even      | `2n`             | `n·r + 1`        |
 //!
 //!
 //! ## Data layout
 //!
-//! The **physical DOF buffer** (length $N_\mathrm{dof}$) is in $x$-increasing order:
+//! The **physical DOF buffer** (length `N_dof`) is in `x`-increasing order:
 //!
-//! | BC          | Flat index of node $j$ in element $k$ |
+//! | BC          | Flat index of node `j` in element `k` |
 //! |-------------|---------------------------------------|
-//! | `Periodic`  | $k r + j$                             |
-//! | `Dirichlet` | $k r + j - 1$ (left boundary excluded) |
-//! | `Neumann`   | $k r + j$, plus the right endpoint at $n r$ |
+//! | `Periodic`  | `k·r + j`                             |
+//! | `Dirichlet` | `k·r + j - 1` (left boundary excluded) |
+//! | `Neumann`   | `k·r + j`, plus the right endpoint at `n·r` |
 
 use crate::hofft::{nd_col_major_strides, nd_fiber_base, Engine, EngineND, Extension};
 use lobatto::collocation::{CollocationBasis, Gauss};
@@ -49,27 +49,27 @@ use std::f64::consts::PI;
 
 /// Boundary condition for one spatial direction of the screened Poisson problem.
 ///
-/// Controls how the physical domain $[x_l, x_l+L]$ is extended before the FFT
-/// and determines the number of physical DOFs $N_\mathrm{dof}$
+/// Controls how the physical domain `[x_l, x_l + L]` is extended before the FFT
+/// and determines the number of physical DOFs `N_dof`
 /// (see [`crate::hofft::Extension`]).
 /// Each direction may carry an independent BC, enabling mixed configurations in ND.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BoundaryCondition {
-    /// Periodic identification: $u(x_l) = u(x_l + L)$.
+    /// Periodic identification: `u(x_l) = u(x_l + L)`.
     ///
-    /// Uses a plain FFT of length $n$, giving $N_\mathrm{dof} = n r$ DOFs.
+    /// Uses a plain FFT of length `n`, giving `N_dof = n·r` DOFs.
     Periodic,
-    /// Homogeneous Dirichlet: $u(x_l) = u(x_l + L) = 0$.
+    /// Homogeneous Dirichlet: `u(x_l) = u(x_l + L) = 0`.
     ///
-    /// Uses an odd (anti-symmetric) extension to length $2n$.
+    /// Uses an odd (anti-symmetric) extension to length `2n`.
     /// The two boundary nodes are Dirichlet zeros and not stored,
-    /// giving $N_\mathrm{dof} = n r - 1$ DOFs.
+    /// giving `N_dof = n·r - 1` DOFs.
     Dirichlet,
-    /// Homogeneous Neumann: $\partial_x u(x_l) = \partial_x u(x_l + L) = 0$.
+    /// Homogeneous Neumann: `u'(x_l) = u'(x_l + L) = 0`.
     ///
-    /// Uses an even (symmetric) extension to length $2n$.
+    /// Uses an even (symmetric) extension to length `2n`.
     /// Both boundary nodes are included in the DOF vector,
-    /// giving $N_\mathrm{dof} = n r + 1$ DOFs.
+    /// giving `N_dof = n·r + 1` DOFs.
     Neumann,
 }
 
@@ -88,46 +88,50 @@ impl BoundaryCondition {
 
 /// 1D HoFFT screened Poisson solver.
 ///
-/// Solves $(\alpha M + \beta K)\, u = f$ on $[x_l, x_l+L]$ using a Gauss-Lobatto
-/// spectral-element discretisation with $n$ elements of polynomial order $r$.
+/// Solves $(\alpha M + \beta K)\, u = f$ on `[x_l, x_l + L]` using a Gauss-Lobatto
+/// spectral-element discretisation with `n` elements of polynomial order `r`.
 ///
 /// ## Algorithm
 ///
 /// The inter-element coupling matrix has a block-circulant structure (periodic)
 /// or a near-circulant structure (Dirichlet/Neumann via odd/even extension).
-/// A single FFT of length $n_\mathrm{fft}$ decouples the $n_\mathrm{fft}$ Fourier
-/// modes, reducing the global $nr \times nr$ system to $n_\mathrm{fft}/2 + 1$
-/// independent **local symbols** $S(k)$ of size $r \times r$.
+/// A single FFT of length `n_fft` decouples the `n_fft` Fourier
+/// modes, reducing the global `n·r × n·r` system to `n_fft/2 + 1`
+/// independent **local symbols** $S(k)$ of size `r × r`.
 ///
 /// Each $S(k)$ is a Hermitian matrix assembled from the periodic element matrices
 /// modulated by the inter-element phase $e^{-2\pi i k / n}$:
 /// $$S(k)_{ij} = \alpha h M_{ij} + \frac{\beta}{h}\bigl(K_{ij} + K_{ri}\,e^{-2\pi ik/n}\bigr), \quad i,j = 1,\ldots,r-1,$$
-/// with appropriate modifications for the $(0,0)$ entry that couples the two sides
+/// with appropriate modifications for the `(0, 0)` entry that couples the two sides
 /// of an element interface.
 ///
 /// The generalised eigendecomposition $S(k) V_k = M V_k \Lambda_k$,
 /// precomputed at build time, yields the per-mode solve
 /// $$\hat{u}_k = V_k \Lambda_k^{-1} V_k^\dagger \hat{f}_k.$$
 ///
-/// Physical DOF layout: $x$-increasing, flat index $k r + j$ for local node $j$
-/// of element $k$ (with offset adjustments for Dirichlet; see [`Engine`]).
+/// Physical DOF layout: `x`-increasing, flat index `k·r + j` for local node `j`
+/// of element `k` (with offset adjustments for Dirichlet; see [`Engine`]).
 pub struct Poisson {
-    /// Polynomial order $r$ per element.
+    /// Polynomial order `r` per element.
     r: usize,
 
     /// HoFFT engine: handles extension, packing, forward/inverse FFT, and interpolation.
     pub planner: Engine,
 
-    /// Real eigenvalues of the mass-normalised symbol for each independent Fourier mode $k$:
-    /// $\lambda_j(k)$ of $M^{-1/2} S(k) M^{-1/2}$, length $r$.
+    /// Real eigenvalues of the mass-normalised symbol for each independent Fourier mode `k`:
+    /// $\lambda_j(k)$ of $M^{-1/2} S(k) M^{-1/2}$, length `r`.
     eigenvalues: Vec<DVector<f64>>,
     /// $M$-orthonormal eigenvectors $V_k$ satisfying $S(k) V_k = M V_k \Lambda_k$;
-    /// `eigenvectors[k]` is the $r \times r$ complex matrix.
+    /// `eigenvectors[k]` is the `r × r` complex matrix.
     eigenvectors: Vec<DMatrix<Complex<f64>>>,
-    /// Diagonal of the **periodic** local mass matrix (length $r$):
+    /// Diagonal of the **periodic** local mass matrix (length `r`):
     /// $\tilde{M}_{jj} = h w_j$, with DOF 0 accumulating contributions from both sides
     /// of the element interface: $\tilde{M}_{00} = 2h w_0$.
     periodic_mass_matrix: DVector<f64>,
+    /// Pseudo-inverse cutoff for the per-mode solve: `1e-12` × the spectral
+    /// radius over all symbols, so that analytically zero eigenvalues computed
+    /// as roundoff (`~ε·λ_max`) are filtered regardless of problem size.
+    pinv_tol: f64,
     /// Boundary condition type.
     bc: BoundaryCondition,
 }
@@ -139,10 +143,10 @@ impl Poisson {
     /// modes and precomputes their generalised eigendecompositions.
     ///
     /// # Arguments
-    /// - `l`: domain length $L$.
-    /// - `xl`: left boundary position $x_l$.
+    /// - `l`: domain length `L`.
+    /// - `xl`: left boundary position `x_l`.
     /// - `n`: number of elements.
-    /// - `r`: polynomial order ($r+1$ Gauss-Lobatto nodes per element).
+    /// - `r`: polynomial order (`r + 1` Gauss-Lobatto nodes per element).
     /// - `alpha`, `beta`: operator coefficients.
     /// - `bc`: boundary condition type.
     pub fn new(
@@ -233,21 +237,32 @@ impl Poisson {
             .map(|e| &mass_sqrt_inv_c * e.eigenvectors.clone())
             .collect();
 
+        // Relative pseudo-inverse cutoff: an analytically zero eigenvalue (the
+        // constant mode of the k = 0 symbol when α = 0) is computed as roundoff
+        // ~ε·λ_max, which outgrows any absolute threshold as the spectral
+        // radius grows with n and r.
+        let pinv_tol = 1e-12
+            * eigenvalues
+                .iter()
+                .flat_map(|l| l.iter())
+                .fold(0.0f64, |m, &l| m.max(l.abs()));
+
         Self {
             r,
             planner,
             eigenvalues,
             eigenvectors,
             periodic_mass_matrix,
+            pinv_tol,
             bc,
         }
     }
 
-    /// Return the Gauss-Lobatto nodes in $x$-increasing order on $[x_l, x_l+L]$.
+    /// Return the Gauss-Lobatto nodes in `x`-increasing order on `[x_l, x_l + L]`.
     ///
-    /// - [`BoundaryCondition::Periodic`]:  $n r$ nodes — left endpoint included, right excluded.
-    /// - [`BoundaryCondition::Dirichlet`]: $n r - 1$ nodes — both boundary endpoints excluded.
-    /// - [`BoundaryCondition::Neumann`]:   $n r + 1$ nodes — both boundary endpoints included.
+    /// - [`BoundaryCondition::Periodic`]:  `n·r` nodes — left endpoint included, right excluded.
+    /// - [`BoundaryCondition::Dirichlet`]: `n·r - 1` nodes — both boundary endpoints excluded.
+    /// - [`BoundaryCondition::Neumann`]:   `n·r + 1` nodes — both boundary endpoints included.
     pub fn get_x(&self) -> Vec<f64> {
         self.planner.get_x()
     }
@@ -260,11 +275,11 @@ impl Poisson {
         self.planner.grid()
     }
 
-    /// Solve $(\alpha M + \beta K)\, u = f$ in place.
+    /// Solve `(α M + β K) u = f` in place.
     ///
     /// On input, `f` holds the strong-form right-hand side at the Gauss-Lobatto nodes
     /// returned by [`get_x`](Self::get_x).
-    /// On output, `f` contains the FEM solution $u$ at the same nodes.
+    /// On output, `f` contains the FEM solution `u` at the same nodes.
     ///
     /// Executes the three-step HoFFT solve:
     /// 1. Mass scaling + forward FFT.
@@ -289,7 +304,6 @@ impl Poisson {
         // For each mode k: v = Q†·g_k, pointwise divide by λ, result = Q·v.
         let n_freq = self.eigenvalues.len();
         let mut col = DVector::<Complex<f64>>::zeros(self.r);
-        const PINV_TOL: f64 = 1e-12;
         for k in 0..n_freq {
             self.planner.get_values(k, f, col.as_mut_slice());
             // Q† · col
@@ -297,7 +311,7 @@ impl Poisson {
             // Pointwise pseudo-inverse
             for j in 0..self.r {
                 let lam = self.eigenvalues[k][j];
-                if lam.abs() > PINV_TOL {
+                if lam.abs() > self.pinv_tol {
                     v[j] /= lam;
                 } else {
                     v[j] = Complex::new(0.0, 0.0);
@@ -335,9 +349,9 @@ impl Poisson {
 
 // ── ND solver ────────────────────────────────────────────────────────────────
 
-/// $N$-dimensional HoFFT screened Poisson solver.
+/// `N`-dimensional HoFFT screened Poisson solver.
 ///
-/// Extends [`Poisson`] to $N$ spatial dimensions using **sum factorisation**:
+/// Extends [`Poisson`] to `N` spatial dimensions using **sum factorisation**:
 /// the forward and inverse FFTs are applied direction by direction, and the
 /// per-mode symbol solve is applied independently to each mode tuple
 /// $(k_0, \ldots, k_{N-1})$ via a tensor-product eigendecomposition.
@@ -347,7 +361,7 @@ impl Poisson {
 ///
 /// ## ND algorithm
 ///
-/// 1. **Mass scaling**: $f_p \leftarrow \tilde{M}_p f_p$ for each DOF $p$,
+/// 1. **Mass scaling**: $f_p \leftarrow \tilde{M}_p f_p$ for each DOF `p`,
 ///    where $\tilde{M}_p = \prod_d \tilde{M}^{(d)}_{j_d(p)}$.
 /// 2. **Forward ND FFT**: apply [`EngineND::forward`] direction by direction.
 /// 3. **ND symbol solve**: for each mode tuple $(k_0,\ldots,k_{N-1})$, apply the
@@ -358,41 +372,44 @@ impl Poisson {
 ///
 /// Step 3 is parallelised over independent mode tuples with Rayon.
 pub struct PoissonND<const N: usize> {
-    /// One 1D solver per spatial direction (built with $\alpha=0$, $\beta=1$ to obtain
-    /// the per-direction eigenvectors; actual $\alpha$, $\beta$ applied at the ND level).
+    /// One 1D solver per spatial direction (built with `α = 0`, `β = 1` to obtain
+    /// the per-direction eigenvectors; actual `α`, `β` applied at the ND level).
     solvers: [Poisson; N],
     /// ND HoFFT engine for the forward/inverse transforms, interpolation, and advection.
     pub fft: EngineND<N>,
     /// Diagonal of the Kronecker-product periodic mass matrix
     /// $\tilde{M}^{(0)} \otimes \cdots \otimes \tilde{M}^{(N-1)}$,
-    /// length $\prod_d r_d$, direction 0 ($x$) varies fastest.
+    /// length $\prod_d r_d$, direction 0 (`x`) varies fastest.
     periodic_mass_matrix: DVector<f64>,
-    /// Coefficient $\alpha$ of the mass term.
+    /// Coefficient `α` of the mass term.
     alpha: f64,
-    /// Coefficient $\beta$ of the stiffness term.
+    /// Coefficient `β` of the stiffness term.
     beta: f64,
     /// Number of independent Fourier modes per direction:
-    /// $n_d$ for `Periodic`, $n_d + 1$ for `Odd`/`Even`.
+    /// `n_d` for `Periodic`, `n_d + 1` for `Odd`/`Even`.
     n_freqs: [usize; N],
-    /// Total number of independent mode tuples: $\prod_d n_\mathrm{freqs}[d]$.
+    /// Total number of independent mode tuples: the product of `n_freqs`.
     n_freq_total: usize,
     /// Column-major strides for the mode-tuple tensor.
     n_freq_strides: [usize; N],
     /// Per-direction DOF index offset for mass scaling: 1 for Dirichlet (first DOF
-    /// is local node $j=1$), 0 otherwise.
+    /// is local node `j = 1`), 0 otherwise.
     j_offsets: [usize; N],
+    /// Pseudo-inverse cutoff for the ND symbol solve: `1e-12` × an upper bound
+    /// on the combined eigenvalue magnitude (see [`PoissonND::new`]).
+    pinv_tol: f64,
 }
 
 impl<const N: usize> PoissonND<N> {
     /// Construct the ND HoFFT solver.
     ///
     /// # Arguments
-    /// - `ls[d]`: domain length $L_d$ in direction $d$.
-    /// - `xls[d]`: left boundary position $x_{l,d}$ in direction $d$.
-    /// - `ns[d]`: number of elements in direction $d$.
-    /// - `rs[d]`: polynomial order $r_d$ in direction $d$.
+    /// - `ls[d]`: domain length `L_d` in direction `d`.
+    /// - `xls[d]`: left boundary position $x_{l,d}$ in direction `d`.
+    /// - `ns[d]`: number of elements in direction `d`.
+    /// - `rs[d]`: polynomial order `r_d` in direction `d`.
     /// - `alpha`, `beta`: operator coefficients.
-    /// - `bc[d]`: boundary condition for direction $d$.
+    /// - `bc[d]`: boundary condition for direction `d`.
     pub fn new(
         ls: [f64; N],
         xls: [f64; N],
@@ -435,6 +452,22 @@ impl<const N: usize> PoissonND<N> {
             }
         });
 
+        // Relative pseudo-inverse cutoff (see [`Poisson::new`]): scale with an
+        // upper bound `|α| + |β|·Σ_d max |λ^(d)|` on the combined eigenvalue
+        // magnitude `α + β·Σ_d λ^(d)`.
+        let pinv_tol = 1e-12
+            * (alpha.abs()
+                + beta.abs()
+                    * solvers
+                        .iter()
+                        .map(|s| {
+                            s.eigenvalues
+                                .iter()
+                                .flat_map(|l| l.iter())
+                                .fold(0.0f64, |m, &l| m.max(l.abs()))
+                        })
+                        .sum::<f64>());
+
         Self {
             solvers,
             fft,
@@ -445,14 +478,15 @@ impl<const N: usize> PoissonND<N> {
             n_freq_total,
             n_freq_strides,
             j_offsets,
+            pinv_tol,
         }
     }
 
     /// Return the tensor-product Gauss-Lobatto grid as a `Vec<[f64; N]>` of length
     /// $N_\mathrm{dof} = \prod_d N_\mathrm{dof}^{(d)}$.
     ///
-    /// Entry `p` holds coordinates $(x_0, \ldots, x_{N-1})$ for DOF $p$.
-    /// Direction 0 ($x$) varies fastest.
+    /// Entry `p` holds coordinates $(x_0, \ldots, x_{N-1})$ for DOF `p`.
+    /// Direction 0 (`x`) varies fastest.
     pub fn get_x(&self) -> Vec<[f64; N]> {
         self.fft.get_x()
     }
@@ -466,11 +500,11 @@ impl<const N: usize> PoissonND<N> {
         self.fft.grid()
     }
 
-    /// Solve $(\alpha M + \beta K)\, u = f$ in place using the ND HoFFT algorithm.
+    /// Solve `(α M + β K) u = f` in place using the ND HoFFT algorithm.
     ///
     /// On input, `f` holds the strong-form right-hand side at the tensor-product
     /// Gauss-Lobatto grid returned by [`get_x`](Self::get_x).
-    /// On output, `f` contains the FEM solution $u$ at the same grid.
+    /// On output, `f` contains the FEM solution `u` at the same grid.
     ///
     /// See the struct-level documentation for the four-step ND algorithm.
     /// Step 3 (symbol solve) is parallelised over independent mode tuples with Rayon.
@@ -520,7 +554,6 @@ impl<const N: usize> PoissonND<N> {
             }
 
             // Pointwise divide by ND eigenvalue λ = α + Σ_d β λ^{(d)}_{k_d, j_d}.
-            const PINV_TOL: f64 = 1e-12;
             for j_flat in 0..r_total {
                 let lambda = self.alpha
                     + (0..N)
@@ -529,7 +562,7 @@ impl<const N: usize> PoissonND<N> {
                             self.beta * self.solvers[d].eigenvalues[ks[d]][j_d]
                         })
                         .sum::<f64>();
-                if lambda.abs() > PINV_TOL {
+                if lambda.abs() > self.pinv_tol {
                     v[j_flat] /= lambda;
                 } else {
                     v[j_flat] = Complex::new(0.0, 0.0);
@@ -634,6 +667,73 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Regression: the pseudo-inverse must annihilate the operator kernel.
+    ///
+    /// With `α = 0` and periodic BCs the `k = 0` symbol has an analytically zero
+    /// constant-mode eigenvalue, computed by the eigensolver as roundoff on the
+    /// order of `ε·λ_max`. At `(n, r) = (16, 4)` that roundoff exceeds `1e-12`,
+    /// so an *absolute* pseudo-inverse cutoff fails to filter it and the
+    /// constant mode of the RHS is amplified by `~1/λ ≈ 1e12`. The observable
+    /// spec: the solution is invariant under a constant shift of the RHS.
+    #[test]
+    fn test_pinv_filters_constant_mode_1d() {
+        let (n, r) = (16, 4);
+        let solver = Poisson::new(1.0, 0.0, n, r, 0.0, 1.0, BoundaryCondition::Periodic);
+        let x = solver.get_x();
+
+        let f = |x: f64| (2.0 * PI * x).sin() + 0.3 * (4.0 * PI * x).cos();
+        let mut u1: Vec<Complex<f64>> = x.iter().map(|&xi| Complex::new(f(xi), 0.0)).collect();
+        let mut u2: Vec<Complex<f64>> =
+            x.iter().map(|&xi| Complex::new(f(xi) + 1.0, 0.0)).collect();
+        solver.solve_in_place(&mut u1);
+        solver.solve_in_place(&mut u2);
+
+        let max_diff = u1
+            .iter()
+            .zip(&u2)
+            .map(|(a, b)| (a - b).norm())
+            .fold(0.0f64, f64::max);
+        let scale = u1.iter().map(|v| v.norm()).fold(0.0f64, f64::max);
+        assert!(
+            max_diff <= 1e-12 * scale.max(1.0),
+            "constant RHS shift leaked into the solution (max diff = {max_diff:.2e})"
+        );
+    }
+
+    /// ND version of [`test_pinv_filters_constant_mode_1d`]: the roundoff of the
+    /// zero ND eigenvalue `λ^(0)_0 + λ^(1)_0` is the sum of two per-direction
+    /// roundoffs, so it crosses an absolute `1e-12` cutoff even sooner.
+    #[test]
+    fn test_pinv_filters_constant_mode_2d() {
+        let solver = PoissonND::<2>::new(
+            [1.0; 2],
+            [0.0; 2],
+            [16; 2],
+            [4; 2],
+            0.0,
+            1.0,
+            [BoundaryCondition::Periodic; 2],
+        );
+        let x = solver.get_x();
+
+        let f = |p: &[f64; 2]| (2.0 * PI * p[0]).sin() * (2.0 * PI * p[1]).cos();
+        let mut u1: Vec<Complex<f64>> = x.iter().map(|p| Complex::new(f(p), 0.0)).collect();
+        let mut u2: Vec<Complex<f64>> = x.iter().map(|p| Complex::new(f(p) + 1.0, 0.0)).collect();
+        solver.solve_in_place(&mut u1);
+        solver.solve_in_place(&mut u2);
+
+        let max_diff = u1
+            .iter()
+            .zip(&u2)
+            .map(|(a, b)| (a - b).norm())
+            .fold(0.0f64, f64::max);
+        let scale = u1.iter().map(|v| v.norm()).fold(0.0f64, f64::max);
+        assert!(
+            max_diff <= 1e-12 * scale.max(1.0),
+            "constant RHS shift leaked into the solution (max diff = {max_diff:.2e})"
+        );
     }
 
     /// Check that with beta=0 the tensorial structure recovers the inverse of the local mass matrix.

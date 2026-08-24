@@ -1,20 +1,20 @@
 //! Lagrange interpolation in barycentric form.
 //!
-//! Given $n$ distinct nodes $x_0 < x_1 < \cdots < x_{n-1}$, the $i$-th Lagrange
+//! Given `n` distinct nodes $x_0 < x_1 < \cdots < x_{n-1}$, the `i`-th Lagrange
 //! basis polynomial is
 //! $$L_i(p) = \prod_{k \ne i} \frac{p - x_k}{x_i - x_k}.$$
 //!
 //! The **barycentric form** rewrites this as
 //! $$L_i(p) = w_i \prod_{k=0}^{n-1}(p - x_k) \Big/ (p - x_i),
 //! \quad w_i = \frac{1}{\displaystyle\prod_{k \ne i}(x_i - x_k)},$$
-//! allowing all $n$ values $L_0(p), \ldots, L_{n-1}(p)$ to be evaluated in
-//! $O(n)$ time once the weights $w_i$ have been precomputed in $O(n^2)$.
+//! allowing all `n` values $L_0(p), \ldots, L_{n-1}(p)$ to be evaluated in
+//! `O(n)` time once the weights $w_i$ have been precomputed in `O(n^2)`.
 //!
 //! [`barycentric_weights`] computes the weights; [`lagrangian_interpolation`]
 //! evaluates all basis functions simultaneously using a numerically stable
 //! product that avoids dividing by the smallest difference term.
 
-/// Evaluate the derivative $L_i'(p)$ of the $i$-th Lagrange basis function at `p`.
+/// Evaluate the derivative `L_i'(p)` of the `i`-th Lagrange basis function at `p`.
 ///
 /// Uses the formula
 /// $$L_i'(p) = \frac{1}{\displaystyle\prod_{k \ne i}(x_i - x_k)}
@@ -47,13 +47,13 @@ pub fn lagrangian_derivative_interpolation(pos: &[f64], p: f64, i: usize) -> f64
     s / w
 }
 
-/// Precompute barycentric weights $w_i = 1 / \prod_{k \ne i}(x_i - x_k)$ for nodes `x`.
+/// Precompute the barycentric weights `w_i` for nodes `x`.
 ///
 /// These weights are independent of the evaluation point and need only be computed
 /// once per node set.  Pass them to [`lagrangian_interpolation`] to evaluate
-/// all $n$ basis functions at any point in $O(n)$.
+/// all `n` basis functions at any point in `O(n)`.
 ///
-/// Cost: $O(n^2)$.
+/// Cost: `O(n^2)`.
 pub fn barycentric_weights(x: &[f64]) -> Vec<f64> {
     let n = x.len();
     let mut w = vec![1.0_f64; n];
@@ -71,7 +71,7 @@ pub fn barycentric_weights(x: &[f64]) -> Vec<f64> {
     w
 }
 
-/// Evaluate all $n$ Lagrange basis functions at `p` using the barycentric form.
+/// Evaluate all `n` Lagrange basis functions at `p` using the barycentric form.
 ///
 /// Returns the vector $(L_0(p), \ldots, L_{n-1}(p))$ where
 /// $$L_i(p) = w_i \prod_{k=0}^{n-1}(p - x_k) \Big/ (p - x_i).$$
@@ -79,10 +79,10 @@ pub fn barycentric_weights(x: &[f64]) -> Vec<f64> {
 /// `pos` are the nodes, `w` the precomputed weights from [`barycentric_weights`].
 ///
 /// **Numerical stability**: the common product $\prod_k(p - x_k)$ is computed
-/// with the term nearest to $p$ excluded, avoiding division by the smallest
+/// with the term nearest to `p` excluded, avoiding division by the smallest
 /// (and most cancellation-prone) factor.
 ///
-/// Cost: $O(n)$ after the $O(n^2)$ weight precomputation.
+/// Cost: `O(n)` after the `O(n^2)` weight precomputation.
 pub fn lagrangian_interpolation(pos: &[f64], w: &[f64], p: f64) -> Vec<f64> {
     let mut res = vec![0.0_f64; pos.len()];
     lagrangian_interpolation_into(pos, w, p, &mut res);

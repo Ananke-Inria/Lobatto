@@ -3,14 +3,14 @@
 //! Implements the forward and inverse **High-order FFT (HoFFT)** transforms of
 //! Caforio & Imperiale (2019) \[1\] for multi-element Gauss-Lobatto grids.
 //!
-//! For $n$ Gauss-Lobatto finite-elements of polynomial order $r$ on an interval, the global DOF
-//! vector has length $N_\mathrm{dof}$ (see table below) and can be decomposed as
-//! $r$ "rows" of $n$ nodes (local node index $j$ × element index $k$).  The key
+//! For `n` Gauss-Lobatto finite-elements of polynomial order `r` on an interval, the global DOF
+//! vector has length `N_dof` (see table below) and can be decomposed as
+//! `r` "rows" of `n` nodes (local node index `j` × element index `k`).  The key
 //! observation is that, for the screened Poisson operator, the inter-element
 //! coupling along each row has a (near-)circulant structure, so a single FFT of
-//! length $n_\mathrm{fft}$ simultaneously decouples all $n_\mathrm{fft}$ Fourier
-//! modes.  After the transform each mode $k$ is independent and corresponds to
-//! an $r \times r$ linear system — the **local symbol** $S(k)$.  The full ND
+//! length `n_fft` simultaneously decouples all `n_fft` Fourier
+//! modes.  After the transform each mode `k` is independent and corresponds to
+//! an `r × r` linear system — the **local symbol** $S(k)$.  The full ND
 //! solve applies this direction by direction via sum factorisation; see
 //! [`crate::solver`].
 //!
@@ -35,30 +35,30 @@
 //!
 //! ## Extension strategy
 //!
-//! Non-periodic BCs are handled by extending the $n$-element physical domain to a
-//! $2n$-element periodic domain with odd or even symmetry, applying a single FFT of
-//! length $2n$, then retaining only the $N_\mathrm{dof}$ independent Fourier
+//! Non-periodic BCs are handled by extending the `n`-element physical domain to a
+//! `2n`-element periodic domain with odd or even symmetry, applying a single FFT of
+//! length `2n`, then retaining only the `N_dof` independent Fourier
 //! coefficients (Lemma 3.2 of \[1\]):
 //!
-//! | Variant    | $n_\mathrm{fft}$ | $N_\mathrm{dof}$ |
+//! | Variant    | `n_fft` | `N_dof` |
 //! |------------|------------------|------------------|
-//! | `Periodic` | $n$              | $n r$            |
-//! | `Odd`      | $2n$             | $n r - 1$        |
-//! | `Even`     | $2n$             | $n r + 1$        |
+//! | `Periodic` | `n`              | `n·r`            |
+//! | `Odd`      | `2n`             | `n·r - 1`        |
+//! | `Even`     | `2n`             | `n·r + 1`        |
 //!
 //! ## Data layout
 //!
-//! The **physical DOF buffer** (length $N_\mathrm{dof}$) is in $x$-increasing order:
+//! The **physical DOF buffer** (length `N_dof`) is in `x`-increasing order:
 //!
-//! | Extension   | Flat index of node $j$ in element $k$ |
+//! | Extension   | Flat index of node `j` in element `k` |
 //! |-------------|---------------------------------------|
-//! | `Periodic`  | $k r + j$                             |
-//! | `Odd`       | $k r + j - 1$ (left boundary excluded) |
-//! | `Even`      | $k r + j$, plus the right endpoint at $n r$ |
+//! | `Periodic`  | `k·r + j`                             |
+//! | `Odd`       | `k·r + j - 1` (left boundary excluded) |
+//! | `Even`      | `k·r + j`, plus the right endpoint at `n·r` |
 //!
-//! The **internal transform buffer** stores $r$ rows of $n_\mathrm{fft}$ complex
-//! values: entry $g[j \cdot n_\mathrm{fft} + k]$ is local node $j$, Fourier mode
-//! $k$.  After [`Engine::forward`] this is compacted to $N_\mathrm{dof}$
+//! The **internal transform buffer** stores `r` rows of `n_fft` complex
+//! values: entry `g[j*n_fft + k]` is local node `j`, Fourier mode
+//! `k`.  After [`Engine::forward`] this is compacted to `N_dof`
 //! independent coefficients by discarding modes determined by the spectral symmetry.
 
 use lobatto::collocation::{CollocationBasis, Gauss};
@@ -71,48 +71,48 @@ use std::sync::Arc;
 /// Boundary extension (re-exported from [`lobatto_grid`]).
 ///
 /// Selects the FFT extension strategy of an [`Engine`]: non-periodic boundary
-/// conditions are handled by extending the $n$-element physical domain to a
-/// $2n$-element periodic domain with the appropriate symmetry, then applying a
-/// single FFT of length $n_\mathrm{fft}$ and discarding the redundant Fourier
+/// conditions are handled by extending the `n`-element physical domain to a
+/// `2n`-element periodic domain with the appropriate symmetry, then applying a
+/// single FFT of length `n_fft` and discarding the redundant Fourier
 /// coefficients.
 ///
-/// | Variant    | BC          | $n_\mathrm{fft}$ | $N_\mathrm{dof}$ |
+/// | Variant    | BC          | `n_fft` | `N_dof` |
 /// |------------|-------------|------------------|------------------|
-/// | `Periodic` | Periodic    | $n$              | $n r$            |
-/// | `Odd`      | Dirichlet   | $2n$             | $n r - 1$        |
-/// | `Even`     | Neumann     | $2n$             | $n r + 1$        |
+/// | `Periodic` | Periodic    | `n`              | `n·r`            |
+/// | `Odd`      | Dirichlet   | `2n`             | `n·r - 1`        |
+/// | `Even`     | Neumann     | `2n`             | `n·r + 1`        |
 pub use lobatto_grid::Extension;
 
 // ── 1D ──────────────────────────────────────────────────────────────────────
 
 /// Low-level 1D HoFFT engine (periodic, no extension).
 ///
-/// Applies $r$ independent forward/inverse FFTs of length $n$ to the buffer
+/// Applies `r` independent forward/inverse FFTs of length `n` to the buffer
 /// layout $[r \text{ rows} \times n \text{ columns}]$, where entry `g[j * n + k]`
-/// corresponds to local node $j$ of element $k$.
+/// corresponds to local node `j` of element `k`.
 ///
 /// This is used internally by [`crate::solver::Poisson`] for the periodic case and
 /// can be reused for advection or other operations that require direct access to
 /// the per-mode data without the extension/packing overhead of [`Engine`].
 pub struct RawEngine {
-    /// Number of elements $n$ (= FFT length).
+    /// Number of elements `n` (= FFT length).
     n: usize,
-    /// Polynomial order $r$ (nodes per element, excluding shared endpoint).
+    /// Polynomial order `r` (nodes per element, excluding shared endpoint).
     r: usize,
-    /// Domain length $L$.
+    /// Domain length `L`.
     l: f64,
-    /// Left boundary position $x_l$.
+    /// Left boundary position `x_l`.
     xl: f64,
-    /// Gauss-Lobatto nodes on $[0,1]$ for a single element (length $r+1$).
+    /// Gauss-Lobatto nodes on `[0, 1]` for a single element (length `r + 1`).
     gauss_lobatto_points: Vec<f64>,
-    /// Forward FFT engine of length $n$.
+    /// Forward FFT engine of length `n`.
     fw_fft: Arc<dyn Fft<f64>>,
-    /// Inverse FFT engine of length $n$.
+    /// Inverse FFT engine of length `n`.
     i_fft: Arc<dyn Fft<f64>>,
 }
 
 impl RawEngine {
-    /// Create a periodic 1D HoFFT engine for $r$ independent FFTs of length $n$ on $[x_l, x_l+L]$.
+    /// Create a periodic 1D HoFFT engine for `r` independent FFTs of length `n` on `[x_l, x_l + L]`.
     pub fn new(n: usize, r: usize, l: f64, xl: f64) -> Self {
         let mut planner = FftPlanner::<f64>::new();
         let fw_fft = planner.plan_fft_forward(n);
@@ -131,8 +131,8 @@ impl RawEngine {
         }
     }
 
-    /// Return the Gauss-Lobatto nodes on $[x_l, x_l+L]$, length $n r$, ordered by local
-    /// node then element: `x[j * n + k]` is the position of local node $j$ in element $k$.
+    /// Return the Gauss-Lobatto nodes on `[x_l, x_l + L]`, length `n·r`, ordered by local
+    /// node then element: `x[j * n + k]` is the position of local node `j` in element `k`.
     pub fn get_x(&self) -> Vec<f64> {
         let h = self.l / (self.n as f64);
         let mut x = vec![0.0_f64; self.n * self.r];
@@ -144,19 +144,19 @@ impl RawEngine {
         x
     }
 
-    /// Apply $r$ forward FFTs of length $n$ to `g` in place.
+    /// Apply `r` forward FFTs of length `n` to `g` in place.
     ///
-    /// `g` must have length $r n$.  The buffer is treated as $r$ consecutive
-    /// rows of $n$ elements; each row is transformed independently.
+    /// `g` must have length `r·n`.  The buffer is treated as `r` consecutive
+    /// rows of `n` elements; each row is transformed independently.
     /// No normalisation is applied ($\hat{g}_k = \sum_j g_j e^{-2\pi i jk/n}$).
     pub fn forward(&self, g: &mut [Complex<f64>]) {
         debug_assert_eq!(g.len(), self.r * self.n);
         self.fw_fft.process(g);
     }
 
-    /// Apply $r$ inverse FFTs of length $n$ to `g` in place, then normalise by $1/n$.
+    /// Apply `r` inverse FFTs of length `n` to `g` in place, then normalise by `1/n`.
     ///
-    /// `g` must have length $r n$.  The buffer is treated as $r$ consecutive
+    /// `g` must have length `r·n`.  The buffer is treated as `r` consecutive
     /// rows; each row is transformed independently
     /// ($g_j = \frac{1}{n}\sum_k \hat{g}_k e^{2\pi i jk/n}$).
     pub fn inverse(&self, g: &mut [Complex<f64>]) {
@@ -172,59 +172,59 @@ impl RawEngine {
 /// 1D HoFFT engine with odd/even extension support.
 ///
 /// Handles extension, forward/inverse FFT, and the packing/unpacking of the
-/// compact DOF buffer.  All physical DOFs are stored in **$x$-increasing order**:
+/// compact DOF buffer.  All physical DOFs are stored in **`x`-increasing order**:
 ///
-/// | Extension | $N_\mathrm{dof}$ | Layout |
+/// | Extension | `N_dof` | Layout |
 /// |-----------|-----------------|--------|
-/// | `Periodic` | $n r$ | flat index $k r + j$: local node $j$ of element $k$ |
-/// | `Odd` (Dirichlet) | $n r - 1$ | same, but left boundary node excluded; flat index $k r + j - 1$ |
-/// | `Even` (Neumann)  | $n r + 1$ | same as Periodic plus the right boundary node |
+/// | `Periodic` | `n·r` | flat index `k·r + j`: local node `j` of element `k` |
+/// | `Odd` (Dirichlet) | `n·r - 1` | same, but left boundary node excluded; flat index `k·r + j - 1` |
+/// | `Even` (Neumann)  | `n·r + 1` | same as Periodic plus the right boundary node |
 ///
 /// ## Packing and unpacking
 ///
-/// After the forward FFT on the extended buffer of length $r \cdot n_\mathrm{fft}$,
-/// the spectral symmetry (Lemma 3.2 of \[1\]) means only $N_\mathrm{dof}$ independent
+/// After the forward FFT on the extended buffer of length `r·n_fft`,
+/// the spectral symmetry (Lemma 3.2 of \[1\]) means only `N_dof` independent
 /// Fourier coefficients need to be stored.  Two precomputed tables encode the bijection
 /// between the compact and full representations:
 ///
 /// - **Packing table**: maps compact index $i \in [0, N_\mathrm{dof})$ → full-buffer index.
 ///   Used by [`forward`](Self::forward) to extract independent coefficients.
-/// - **Unpacking table**: maps full-buffer index $i$ → `(compact_index, phase_coefficient)`.
+/// - **Unpacking table**: maps full-buffer index `i` → `(compact_index, phase_coefficient)`.
 ///   Used by [`inverse`](Self::inverse) to reconstruct the full buffer from the compact one.
 pub struct Engine {
     /// Grid geometry: elements, order, domain, extension, DOF layout.
     grid: Grid1D,
-    /// Number of physical elements $n$.
+    /// Number of physical elements `n`.
     n: usize,
-    /// FFT length: $n$ for `Periodic`, $2n$ for `Odd`/`Even`.
+    /// FFT length: `n` for `Periodic`, `2n` for `Odd`/`Even`.
     n_fft: usize,
-    /// Number of physical DOFs $N_\mathrm{dof}$.
+    /// Number of physical DOFs `N_dof`.
     n_dof: usize,
-    /// Polynomial order $r$.
+    /// Polynomial order `r`.
     r: usize,
     /// Extension type.
     extension: Extension,
-    /// Forward FFT engine of length $n_\mathrm{fft}$.
+    /// Forward FFT engine of length `n_fft`.
     fw_fft: Arc<dyn Fft<f64>>,
-    /// Inverse FFT engine of length $n_\mathrm{fft}$.
+    /// Inverse FFT engine of length `n_fft`.
     i_fft: Arc<dyn Fft<f64>>,
     /// Unpacking table: `unpack_table[j * n_fft + k] = (packed_idx, coeff)` such that
     /// `full_buf[j * n_fft + k] = coeff * compact_buf[packed_idx]`.
     /// Encodes the symmetry relations from Lemma 3.2 of \[1\].
     unpack_table: Vec<(usize, Complex<f64>)>,
-    /// Canonicality table: `canonical_table[j * n_fft + k] = true` iff entry $(j, k)$
+    /// Canonicality table: `canonical_table[j * n_fft + k] = true` iff entry `(j, k)`
     /// is an independently stored coefficient (not derived by symmetry or forced zero).
     canonical_table: Vec<bool>,
-    /// Packing table: `packing_table[i] = full_buffer_index` for compact index $i$.
+    /// Packing table: `packing_table[i] = full_buffer_index` for compact index `i`.
     /// Used by `forward` to copy independent coefficients into the compact buffer.
     /// Empty for `Periodic` (trivial mapping).
     packing_table: Vec<usize>,
 }
 
 impl Engine {
-    /// Create a 1D HoFFT engine for $n$ elements of order $r$ on $[x_l, x_l+L]$.
+    /// Create a 1D HoFFT engine for `n` elements of order `r` on `[x_l, x_l + L]`.
     ///
-    /// Precomputes the forward/inverse FFT plans of length $n_\mathrm{fft}$
+    /// Precomputes the forward/inverse FFT plans of length `n_fft`
     /// and the packing/unpacking tables for the given [`Extension`] type.
     pub fn new(n: usize, r: usize, l: f64, xl: f64, extension: Extension) -> Self {
         let n_fft = match extension {
@@ -270,10 +270,10 @@ impl Engine {
         s
     }
 
-    /// Extract the $r$ values for Fourier mode $k$ from the packed buffer `g` into `g_k`.
+    /// Extract the `r` values for Fourier mode `k` from the packed buffer `g` into `g_k`.
     ///
-    /// `k` may be any mode in $\{0, \ldots, n_\mathrm{fft}-1\}$; modes in the
-    /// symmetric half ($k > n$) are recovered via Lemma 3.2 of \[1\] and the
+    /// `k` may be any mode in `0..n_fft`; modes in the
+    /// symmetric half (`k > n`) are recovered via Lemma 3.2 of \[1\] and the
     /// cross-row symmetries of the packed representation.
     pub fn get_values(&self, k: usize, g: &[Complex<f64>], g_k: &mut [Complex<f64>]) {
         debug_assert_eq!(g.len(), self.n_dof);
@@ -284,11 +284,11 @@ impl Engine {
         }
     }
 
-    /// Write the $r$ values for Fourier mode $k$ from `g_k` into the packed buffer `g`.
+    /// Write the `r` values for Fourier mode `k` from `g_k` into the packed buffer `g`.
     ///
     /// Only independently stored entries are written; the symmetric mirror modes
-    /// ($k > n$) are derived and must not be set directly.
-    /// `k` must be in $\{0, \ldots, n\}$.
+    /// (`k > n`) are derived and must not be set directly.
+    /// `k` must be in `0..=n`.
     pub fn set_values(&self, k: usize, g: &mut [Complex<f64>], g_k: &[Complex<f64>]) {
         assert!(k <= self.n);
         debug_assert_eq!(g.len(), self.n_dof);
@@ -528,12 +528,12 @@ impl Engine {
 
     /// Forward HoFFT: extend, reorder, FFT, and compact in place.
     ///
-    /// On input, `f` holds the physical DOFs in $x$-increasing order, length $N_\mathrm{dof}$.
+    /// On input, `f` holds the physical DOFs in `x`-increasing order, length `N_dof`.
     /// The function:
-    /// 1. Builds the extended buffer of length $r \cdot n_\mathrm{fft}$ (odd or even
+    /// 1. Builds the extended buffer of length `r·n_fft` (odd or even
     ///    extension, or identity for Periodic).
-    /// 2. Applies the forward FFT of length $n_\mathrm{fft}$ along each of the $r$ rows.
-    /// 3. Compacts the result to the $N_\mathrm{dof}$ independent Fourier coefficients
+    /// 2. Applies the forward FFT of length `n_fft` along each of the `r` rows.
+    /// 3. Compacts the result to the `N_dof` independent Fourier coefficients
     ///    using the packing table.
     ///
     /// On output, `f` contains the packed frequency-domain representation.
@@ -608,14 +608,14 @@ impl Engine {
     /// Inverse HoFFT: unpack, inverse FFT, reorder in place.
     ///
     /// On input, `g` holds the packed frequency-domain representation of length
-    /// $N_\mathrm{dof}$ (as produced by [`forward`](Self::forward)).
+    /// `N_dof` (as produced by [`forward`](Self::forward)).
     /// The function:
-    /// 1. Expands to the full $r \cdot n_\mathrm{fft}$ buffer using the unpacking table
+    /// 1. Expands to the full `r·n_fft` buffer using the unpacking table
     ///    (applies symmetry coefficients from Lemma 3.2 of \[1\]).
-    /// 2. Applies the inverse FFT of length $n_\mathrm{fft}$ and normalises by $1/n_\mathrm{fft}$.
-    /// 3. Reorders to the $x$-increasing physical DOF layout.
+    /// 2. Applies the inverse FFT of length `n_fft` and normalises by `1/n_fft`.
+    /// 3. Reorders to the `x`-increasing physical DOF layout.
     ///
-    /// On output, `g` contains the physical DOFs in $x$-increasing order.
+    /// On output, `g` contains the physical DOFs in `x`-increasing order.
     pub fn inverse(&self, g: &mut [Complex<f64>]) {
         debug_assert_eq!(g.len(), self.n_dof);
 
@@ -669,7 +669,7 @@ impl Engine {
 
 // ── ND ──────────────────────────────────────────────────────────────────────
 
-/// $N$-dimensional HoFFT transform engine.
+/// `N`-dimensional HoFFT transform engine.
 ///
 /// Applies forward/inverse FFTs direction by direction (sum factorisation),
 /// corresponding to the transform steps of the ND HoFFT algorithm.  Each direction

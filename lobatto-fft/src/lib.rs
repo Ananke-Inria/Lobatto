@@ -4,15 +4,15 @@
 //!
 //! The solver solves $(\alpha I - \beta \Delta)~u = f$ for complex-valued right-hand side on a tensor-product domain
 //! $\prod_{d=0}^{N-1} [x_{l,d}, ~ x_{l,d} + L_d]$
-//! using a grid based on Gauss–Lobatto points with $n_d$ elements of polynomial
-//! order $r_d$ per direction $d$.
+//! using a grid based on Gauss–Lobatto points with `n_d` elements of polynomial
+//! order `r_d` per direction `d`.
 //!
 //! The method is based on the **High-order FFT (HoFFT)** of Caforio & Imperiale (2019):
-//! A single FFT of length $n_d$
-//! (or $2n_d$ for non-periodic BCs) per direction decouples the Fourier modes.
+//! A single FFT of length `n_d`
+//! (or `2·n_d` for non-periodic BCs) per direction decouples the Fourier modes.
 //! Each decoupled mode tuple $(k_0, \ldots, k_{N-1})$ then requires inverting an
-//! independent $r \times r$ Hermitian system whose eigendecomposition is precomputed
-//! at setup time, giving an $\mathcal{O}(N_\mathrm{dof} \log N_\mathrm{dof})$
+//! independent `r × r` Hermitian system whose eigendecomposition is precomputed
+//! at setup time, giving an `O(N_dof·log N_dof)`
 //! solver with small constants.
 //!
 //! ## Modules

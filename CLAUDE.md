@@ -5,7 +5,7 @@ Rust workspace for Gauss–Lobatto spectral-element numerics.
 | Crate | Role |
 |---|---|
 | `lobatto` | Gauss–Lobatto points, quadrature, barycentric/Lagrange basis utilities |
-| `lobatto-grid` | Grid geometry (`Grid1D`/`GridND<N>` on arbitrary domains, `Extension` folding, DOF indexing) and interpolation (`eval`/`eval_extended`/`convect`, `EvalPlan`, `InterpScalar`) |
+| `lobatto-grid` | Grid geometry (`Grid1D`/`GridND<N>` on arbitrary domains, `Extension` folding, DOF indexing) and interpolation (`eval`/`eval_extended`/`convect`, `EvalPlan`, `Scalar`) |
 | `lobatto-fft` | HoFFT transforms (`hofft::Engine`/`EngineND`), screened Poisson solvers (`solver::Poisson`/`PoissonND`); engines/solvers expose their grid via `grid()` |
 | `lobatto-spectral` | High-order screened Poisson solvers on Gauss–Lobatto grids |
 
@@ -13,6 +13,13 @@ Conventions:
 - Crates are published to crates.io individually with **version-only dependencies** between them (no path deps): publish the upstream crate first, then bump the requirement downstream.
 - Zero clippy warnings (`cargo clippy --benches --tests`); tests in release mode (`cargo test --release`).
 - Benches: `cargo bench --bench interp` in lobatto-grid (interpolation/convection), `cargo bench --bench solver` in lobatto-fft (solves). Criterion group names are stable identifiers — renaming them discards baseline history.
+
+Doc-comment math (KaTeX renders on docs.rs via each crate's `katex.html`; hover/GitHub show raw source):
+- LaTeX (`$…$`/`$$…$$`) only for real formulas (eigendecompositions, quadrature weights, operators). Trivia — intervals, identifiers, index arithmetic, `O(…)` — goes in code spans: `` `[0, 1]` ``, `` `n·r` ``, `` `N_dof` ``, `` `0..=r` ``.
+- First doc line (the summary) stays LaTeX-free; heavy `$$` blocks go below it.
+- Inside `$$` blocks, never start a continuation line with `+`, `-`, `*`, or `1.` (markdown parses it as a list → `clippy::doc_lazy_continuation`).
+- Preview locally with `RUSTDOCFLAGS="--html-in-header $(pwd)/katex.html" cargo doc --no-deps` from the workspace root (plain `cargo doc` shows raw LaTeX — the docs.rs header flag is not applied locally).
+- The `katex.html` copies (workspace root, `doc/`, one per crate for packaging) must stay identical — a KaTeX version bump touches all of them.
 
 ## TODO
 
