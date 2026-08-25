@@ -31,7 +31,7 @@ fn bench_solve_in_place(c: &mut Criterion) {
             let ndof = n * r;
             group.throughput(Throughput::Elements(ndof as u64));
 
-            let solver = Poisson::new(l, 0.0, n, r, alpha, beta, BoundaryCondition::Periodic);
+            let solver = Poisson::new(l, 0.0, n, r, BoundaryCondition::Periodic);
             let x = solver.get_x();
 
             let f_init: Vec<Complex<f64>> =
@@ -43,7 +43,7 @@ fn bench_solve_in_place(c: &mut Criterion) {
                 |b, (solver, f_init)| {
                     b.iter(|| {
                         let mut f = black_box(f_init.clone());
-                        solver.solve_in_place(&mut f);
+                        solver.solve_in_place(&mut f, alpha, beta);
                         f
                     })
                 },
@@ -75,8 +75,6 @@ fn bench_solve_in_place_2d(c: &mut Criterion) {
                 [0.0; 2],
                 [n; 2],
                 [r; 2],
-                alpha,
-                beta,
                 [BoundaryCondition::Periodic; 2],
             );
             let x = solver.get_x();
@@ -106,7 +104,7 @@ fn bench_solve_in_place_2d(c: &mut Criterion) {
                     |b| {
                         b.iter(|| {
                             let mut f = black_box(f_init.clone());
-                            pool.install(|| solver.solve_in_place(&mut f));
+                            pool.install(|| solver.solve_in_place(&mut f, alpha, beta));
                             f
                         })
                     },
@@ -139,8 +137,6 @@ fn bench_solve_in_place_3d(c: &mut Criterion) {
                 [0.0; 3],
                 [n; 3],
                 [r; 3],
-                alpha,
-                beta,
                 [BoundaryCondition::Periodic; 3],
             );
             let x = solver.get_x();
@@ -177,7 +173,7 @@ fn bench_solve_in_place_3d(c: &mut Criterion) {
                     |b| {
                         b.iter(|| {
                             let mut f = black_box(f_init.clone());
-                            pool.install(|| solver.solve_in_place(&mut f));
+                            pool.install(|| solver.solve_in_place(&mut f, alpha, beta));
                             f
                         })
                     },
@@ -206,8 +202,6 @@ fn bench_solve_in_place_5d(c: &mut Criterion) {
         [0.0; 5],
         [n; 5],
         [r; 5],
-        alpha,
-        beta,
         [BoundaryCondition::Periodic; 5],
     );
     let total = (n * r).pow(5);
@@ -228,13 +222,24 @@ fn bench_solve_in_place_5d(c: &mut Criterion) {
     {
         let mut f: Vec<Complex<f64>> = (0..total).map(|_| Complex::new(next(), 0.0)).collect();
         group.bench_function(BenchmarkId::from_parameter("complex"), |b| {
-            b.iter(|| solver.solve_in_place(black_box(&mut f)))
+            b.iter(|| solver.solve_in_place(black_box(&mut f), alpha, beta))
         });
     }
     {
         let mut f: Vec<f64> = (0..total).map(|_| next()).collect();
         group.bench_function(BenchmarkId::from_parameter("real"), |b| {
-            b.iter(|| solver.solve_in_place_real(black_box(&mut f)))
+            b.iter(|| solver.solve_in_place_real(black_box(&mut f), alpha, beta))
+        });
+    }
+    // Operator functions: same transforms, different per-mode scalar.
+    {
+        let mut f: Vec<Complex<f64>> = (0..total).map(|_| Complex::new(next(), 0.0)).collect();
+        let dt = 1e-3;
+        group.bench_function(BenchmarkId::from_parameter("euler_split"), |b| {
+            b.iter(|| solver.euler_split_step_in_place(black_box(&mut f), alpha, beta, dt))
+        });
+        group.bench_function(BenchmarkId::from_parameter("exp"), |b| {
+            b.iter(|| solver.exp_in_place(black_box(&mut f), alpha, beta, dt))
         });
     }
 

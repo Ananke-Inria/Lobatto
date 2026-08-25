@@ -4,10 +4,12 @@
 //! $(\alpha M + \beta K)\, u = f$ on tensor-product Gauss-Lobatto grids using
 //! the HoFFT transform machinery from [`crate::hofft`].
 //!
-//! The coefficients $\alpha$ and $\beta$ may be real or complex (e.g.
-//! $\alpha = -\omega^2 + i\omega c$ for damped time-harmonic problems); the
-//! constructors accept anything convertible into `Complex<f64>`, so plain
-//! `f64` arguments keep working.
+//! The coefficients $\alpha$ and $\beta$ are **per-call parameters** of the
+//! solves, not of the solver: nothing precomputed depends on them, so one
+//! solver serves every operator on its grid (varying time steps, frequency
+//! sweeps). They may be real or complex (e.g. $\alpha = -\omega^2 + i\omega c$
+//! for damped time-harmonic problems); the solve methods accept anything
+//! convertible into `Complex<f64>`, so plain `f64` arguments work.
 //!
 //! Both solvers are set up once and reused for many right-hand sides.
 //! Construction precomputes the FFT plans and the eigendecomposition of
@@ -137,22 +139,28 @@ pub struct Poisson {
     /// $\tilde{K}(k) V_k = \tilde{M} V_k \mathrm{diag}(\mu_k)$;
     /// `eigenvectors[k]` is the `r × r` complex matrix.
     eigenvectors: Vec<DMatrix<Complex<f64>>>,
-    /// Coefficient `α` of the mass term.
-    alpha: Complex<f64>,
-    /// Coefficient `β` of the stiffness term.
-    beta: Complex<f64>,
     /// Diagonal of the **periodic** local mass matrix (length `r`):
     /// $\tilde{M}_{jj} = h w_j$, with DOF 0 accumulating contributions from both sides
     /// of the element interface: $\tilde{M}_{00} = 2h w_0$.
     periodic_mass_matrix: DVector<f64>,
-    /// Pseudo-inverse cutoff for the per-mode solve: `1e-12` × an upper bound
-    /// `|α| + |β|·max |μ|` on the combined eigenvalue magnitude, so that
-    /// analytically zero eigenvalues computed as roundoff (`~ε·λ_max`) are
-    /// filtered regardless of problem size.
-    pinv_tol: f64,
+    /// Relative pseudo-inverse cutoff (default [`DEFAULT_PINV_REL_TOL`]); the
+    /// absolute cutoff used by the solves is [`pinv_tol`](Self::pinv_tol).
+    pinv_rel_tol: f64,
+    /// Spectral radius `max |μ|` of the stiffness symbols, precomputed for the
+    /// cutoff bound.
+    mu_max: f64,
     /// Boundary condition type.
     bc: BoundaryCondition,
 }
+
+/// Default relative pseudo-inverse cutoff of the solvers (`1e-12`).
+///
+/// Per-mode eigenvalues with `|λ| ≤ pinv_rel_tol · (|α| + |β|·max |μ|)`
+/// are treated as zero: analytically zero eigenvalues
+/// — the constant mode when `α = 0` with periodic or Neumann conditions — are
+/// computed by the eigensolver as roundoff `~ε·λ_max`, and the relative bound
+/// filters them regardless of problem size.
+pub const DEFAULT_PINV_REL_TOL: f64 = 1e-12;
 
 /// Spectral radius `max |μ|` over a set of per-mode real eigenvalue vectors.
 fn max_abs_eigenvalue(eigenvalues: &[DVector<f64>]) -> f64 {
@@ -160,6 +168,18 @@ fn max_abs_eigenvalue(eigenvalues: &[DVector<f64>]) -> f64 {
         .iter()
         .flat_map(|l| l.iter())
         .fold(0.0f64, |m, &l| m.max(l.abs()))
+}
+
+/// Pseudo-inverse of the eigenvalue `lam`: `conj(λ)/|λ|²` (one real division,
+/// no square root), or `0` when `|λ|² ≤ tol_sqr`.
+#[inline(always)]
+fn pinv(lam: Complex<f64>, tol_sqr: f64) -> Complex<f64> {
+    let norm_sqr = lam.norm_sqr();
+    if norm_sqr > tol_sqr {
+        lam.conj() / norm_sqr
+    } else {
+        Complex::new(0.0, 0.0)
+    }
 }
 
 impl Poisson {
@@ -173,20 +193,10 @@ impl Poisson {
     /// - `xl`: left boundary position `x_l`.
     /// - `n`: number of elements.
     /// - `r`: polynomial order (`r + 1` Gauss-Lobatto nodes per element).
-    /// - `alpha`, `beta`: operator coefficients, real (`f64`) or complex
-    ///   (`Complex<f64>`).
     /// - `bc`: boundary condition type.
-    pub fn new(
-        l: f64,
-        xl: f64,
-        n: usize,
-        r: usize,
-        alpha: impl Into<Complex<f64>>,
-        beta: impl Into<Complex<f64>>,
-        bc: BoundaryCondition,
-    ) -> Self {
-        let alpha = alpha.into();
-        let beta = beta.into();
+    ///
+    /// The operator coefficients `α`, `β` are passed to the solve methods.
+    pub fn new(l: f64, xl: f64, n: usize, r: usize, bc: BoundaryCondition) -> Self {
         let lobatto_basis = CollocationBasis::new(vec![(r + 1, Gauss::Lobatto)]);
 
         let h = l / (n as f64);
@@ -264,40 +274,59 @@ impl Poisson {
             .map(|e| &mass_sqrt_inv_c * e.eigenvectors.clone())
             .collect();
 
-        // Relative pseudo-inverse cutoff: an analytically zero eigenvalue (the
-        // constant mode of the k = 0 symbol when α = 0) is computed as roundoff
-        // ~ε·λ_max, which outgrows any absolute threshold as the spectral
-        // radius grows with n and r. Scale with an upper bound
-        // |α| + |β|·max |μ| on the combined eigenvalue magnitude |α + β·μ|.
-        let pinv_tol = 1e-12 * (alpha.norm() + beta.norm() * max_abs_eigenvalue(&eigenvalues));
+        // Spectral radius for the relative pseudo-inverse cutoff: an
+        // analytically zero eigenvalue (the constant mode of the k = 0 symbol
+        // when α = 0) is computed as roundoff ~ε·λ_max, which outgrows any
+        // absolute threshold as the spectral radius grows with n and r. The
+        // cutoff is scaled with the bound |α| + |β|·max |μ| on |α + β·μ|.
+        let mu_max = max_abs_eigenvalue(&eigenvalues);
 
         Self {
             r,
             planner,
             eigenvalues,
             eigenvectors,
-            alpha,
-            beta,
             periodic_mass_matrix,
-            pinv_tol,
+            pinv_rel_tol: DEFAULT_PINV_REL_TOL,
+            mu_max,
             bc,
         }
     }
 
-    /// Coefficient `α` of the mass term.
-    pub fn alpha(&self) -> Complex<f64> {
-        self.alpha
+    /// Builder-style setter for the relative pseudo-inverse cutoff
+    /// (see [`DEFAULT_PINV_REL_TOL`]).
+    ///
+    /// # Panics
+    /// If `rel_tol` is negative or NaN.
+    pub fn with_pinv_rel_tol(mut self, rel_tol: f64) -> Self {
+        self.set_pinv_rel_tol(rel_tol);
+        self
     }
 
-    /// Coefficient `β` of the stiffness term.
-    pub fn beta(&self) -> Complex<f64> {
-        self.beta
+    /// Set the relative pseudo-inverse cutoff (see [`DEFAULT_PINV_REL_TOL`]).
+    ///
+    /// # Panics
+    /// If `rel_tol` is negative or NaN.
+    pub fn set_pinv_rel_tol(&mut self, rel_tol: f64) {
+        assert!(rel_tol >= 0.0, "pinv_rel_tol must be non-negative (got {rel_tol})");
+        self.pinv_rel_tol = rel_tol;
     }
 
-    /// Whether both coefficients are real, i.e. the operator maps real
-    /// right-hand sides to real solutions.
-    pub fn is_real(&self) -> bool {
-        self.alpha.im == 0.0 && self.beta.im == 0.0
+    /// Relative pseudo-inverse cutoff (default [`DEFAULT_PINV_REL_TOL`]).
+    pub fn pinv_rel_tol(&self) -> f64 {
+        self.pinv_rel_tol
+    }
+
+    /// Absolute pseudo-inverse cutoff used by
+    /// [`solve_in_place`](Self::solve_in_place) for the coefficients `α`, `β`:
+    /// `pinv_rel_tol · (|α| + |β|·max |μ|)`.
+    pub fn pinv_tol(&self, alpha: impl Into<Complex<f64>>, beta: impl Into<Complex<f64>>) -> f64 {
+        self.pinv_rel_tol * (alpha.into().norm() + beta.into().norm() * self.mu_max)
+    }
+
+    /// Spectral radius `max |μ|` of the stiffness operator `M⁻¹K` on this grid.
+    pub fn mu_max(&self) -> f64 {
+        self.mu_max
     }
 
     /// Return the Gauss-Lobatto nodes in `x`-increasing order on `[x_l, x_l + L]`.
@@ -322,12 +351,61 @@ impl Poisson {
     /// On input, `f` holds the strong-form right-hand side at the Gauss-Lobatto nodes
     /// returned by [`get_x`](Self::get_x).
     /// On output, `f` contains the FEM solution `u` at the same nodes.
+    /// `alpha`, `beta` are real (`f64`) or complex (`Complex<f64>`); the
+    /// precomputed eigendecomposition does not depend on them, so any pair —
+    /// e.g. a complex-shifted resolvent `α + s` — costs one ordinary solve.
     ///
     /// Executes the three-step HoFFT solve:
     /// 1. Mass scaling + forward FFT.
     /// 2. Per-mode symbol solve: $\hat{u}_k = V_k \Lambda_k^{-1} V_k^\dagger \hat{f}_k$.
     /// 3. Inverse FFT.
-    pub fn solve_in_place(&self, f: &mut [Complex<f64>]) {
+    ///
+    /// Eigenvalues below the pseudo-inverse cutoff [`pinv_tol`](Self::pinv_tol)
+    /// are annihilated (the kernel of a pure Neumann/periodic Laplacian is
+    /// projected out).
+    pub fn solve_in_place(
+        &self,
+        f: &mut [Complex<f64>],
+        alpha: impl Into<Complex<f64>>,
+        beta: impl Into<Complex<f64>>,
+    ) {
+        let (alpha, beta) = (alpha.into(), beta.into());
+        let tol = self.pinv_tol(alpha, beta);
+        let tol_sqr = tol * tol;
+        self.apply_in_place(f, alpha, beta, |lam| pinv(lam, tol_sqr));
+    }
+
+    /// Apply the operator function `g(L)` with `L = α I + β M⁻¹K` to the
+    /// **nodal vector** `f` in place: `u = g(L) f`.
+    ///
+    /// `g` is evaluated at every per-mode eigenvalue $\lambda_{k,j} = \alpha + \beta\,\mu_{k,j}$
+    /// (complex when `α`, `β` are), so any function of the operator costs
+    /// exactly one solve: `solve_in_place` is `g(λ) = 1/λ`, an implicit Euler
+    /// step of length `dt` is `g(λ) = 1/(1 + dt·λ)`, its `m`-fold sub-step
+    /// product is `g(λ) = (1 + dt·λ/m)^{-m}`, the exact semigroup is
+    /// `g(λ) = exp(-t·λ)`.
+    ///
+    /// **Input convention.** Unlike the `solve_*` methods, whose input is the
+    /// strong-form right-hand side (so that `solve` returns `(αM + βK)⁻¹ f`),
+    /// the `apply_*` methods take the nodal values of `f` itself:
+    /// `apply` with `g(λ) = 1/λ` returns `(αI + βM⁻¹K)⁻¹ f = (αM + βK)⁻¹ M f`.
+    /// No pseudo-inverse cutoff is applied — `g` is responsible for the
+    /// behaviour at `λ = 0`.
+    pub fn apply_in_place<G: Fn(Complex<f64>) -> Complex<f64>>(
+        &self,
+        f: &mut [Complex<f64>],
+        alpha: impl Into<Complex<f64>>,
+        beta: impl Into<Complex<f64>>,
+        g: G,
+    ) {
+        let (a, b) = (alpha.into(), beta.into());
+        self.apply_mu_in_place(f, |mu| g(a + b * mu));
+    }
+
+    /// Like [`apply_in_place`](Self::apply_in_place), but `g` receives the raw
+    /// real eigenvalue `μ` of the stiffness operator `M⁻¹K` (neither `α` nor
+    /// `β` applied): `u = g(M⁻¹K) f`.
+    pub fn apply_mu_in_place<G: Fn(f64) -> Complex<f64>>(&self, f: &mut [Complex<f64>], g: G) {
         // Step 1: mass-scale f in place, then forward FFT.
         // Local node index j determines the mass weight:
         //   Periodic / Neumann:  j = idx % r
@@ -342,25 +420,16 @@ impl Poisson {
         }
         self.planner.forward(f);
 
-        // Step 2: symbol solve via eigendecomposition.
-        // For each mode k: v = Q†·g_k, pointwise divide by λ = α + β·μ, result = Q·v.
+        // Step 2: symbol application via eigendecomposition.
+        // For each mode k: v = Q†·g_k, pointwise multiply by g(μ), result = Q·v.
         let n_freq = self.eigenvalues.len();
-        let pinv_tol_sqr = self.pinv_tol * self.pinv_tol;
         let mut col = DVector::<Complex<f64>>::zeros(self.r);
         for k in 0..n_freq {
             self.planner.get_values(k, f, col.as_mut_slice());
             // Q† · col
             let mut v = self.eigenvectors[k].ad_mul(&col);
-            // Pointwise pseudo-inverse: multiply by λ⁻¹ = conj(λ)/|λ|², one real
-            // division per entry and no square root.
             for j in 0..self.r {
-                let lam = self.alpha + self.beta * self.eigenvalues[k][j];
-                let norm_sqr = lam.norm_sqr();
-                if norm_sqr > pinv_tol_sqr {
-                    v[j] *= lam.conj() / norm_sqr;
-                } else {
-                    v[j] = Complex::new(0.0, 0.0);
-                }
+                v[j] *= g(self.eigenvalues[k][j]);
             }
             // Q · v
             col.gemv(
@@ -383,23 +452,56 @@ impl Poisson {
     /// into an internal complex buffer, solved, and the real parts are written
     /// back. Costs the same as the complex solve plus the two conversion passes
     /// and one temporary complex buffer of `f.len()` entries.
-    ///
-    /// # Panics
-    /// If either coefficient has a nonzero imaginary part (see
-    /// [`is_real`](Self::is_real)): the solution is then genuinely complex and
-    /// must be obtained with [`solve_in_place`](Self::solve_in_place).
-    pub fn solve_in_place_real(&self, f: &mut [f64]) {
-        assert!(
-            self.is_real(),
-            "solve_in_place_real requires real α and β (got α = {}, β = {})",
-            self.alpha,
-            self.beta
-        );
+    pub fn solve_in_place_real(&self, f: &mut [f64], alpha: f64, beta: f64) {
         let mut buf: Vec<Complex<f64>> = f.iter().map(|&v| Complex::new(v, 0.0)).collect();
-        self.solve_in_place(&mut buf);
+        self.solve_in_place(&mut buf, alpha, beta);
         for (o, b) in f.iter_mut().zip(&buf) {
             *o = b.re;
         }
+    }
+
+    /// Real-input variant of [`apply_in_place`](Self::apply_in_place) for real
+    /// `α`, `β`: `f` is copied into a complex buffer, `g(L)` is applied, and
+    /// the **real part** is written back.
+    ///
+    /// `g` may still return complex values (e.g. one factor of a conjugate pole
+    /// pair); only the real part of the result is kept.
+    pub fn apply_in_place_real<G: Fn(Complex<f64>) -> Complex<f64>>(
+        &self,
+        f: &mut [f64],
+        alpha: f64,
+        beta: f64,
+        g: G,
+    ) {
+        let mut buf: Vec<Complex<f64>> = f.iter().map(|&v| Complex::new(v, 0.0)).collect();
+        self.apply_in_place(&mut buf, alpha, beta, g);
+        for (o, b) in f.iter_mut().zip(&buf) {
+            *o = b.re;
+        }
+    }
+
+    /// Implicit Euler step `u = (I + dt·L)⁻¹ f` with `L = α I + β M⁻¹K`, on the
+    /// nodal vector `f` (see [`apply_in_place`](Self::apply_in_place)).
+    pub fn euler_step_in_place(
+        &self,
+        f: &mut [Complex<f64>],
+        alpha: impl Into<Complex<f64>>,
+        beta: impl Into<Complex<f64>>,
+        dt: f64,
+    ) {
+        self.apply_in_place(f, alpha, beta, |lam| 1.0 / (1.0 + dt * lam));
+    }
+
+    /// Exact semigroup `u = exp(-t·L) f` with `L = α I + β M⁻¹K`, on the nodal
+    /// vector `f` (see [`apply_in_place`](Self::apply_in_place)).
+    pub fn exp_in_place(
+        &self,
+        f: &mut [Complex<f64>],
+        alpha: impl Into<Complex<f64>>,
+        beta: impl Into<Complex<f64>>,
+        t: f64,
+    ) {
+        self.apply_in_place(f, alpha, beta, |lam| (-t * lam).exp());
     }
 }
 
@@ -422,14 +524,25 @@ impl Poisson {
 /// 2. **Forward ND FFT**: apply [`EngineND::forward`] direction by direction.
 /// 3. **ND symbol solve**: for each mode tuple $(k_0,\ldots,k_{N-1})$, apply the
 ///    tensor-product pseudo-inverse
-///    $$\hat{u}_{k,j} \leftarrow \hat{f}_{k,j} \Big/ \Bigl(\alpha + \beta \sum_d \lambda^{(d)}_{k_d, j_d}\Bigr)$$
+///    $$\hat{u}_{k,j} \leftarrow \hat{f}_{k,j} \Big/ \Bigl(\alpha + \beta \sum_d \mu^{(d)}_{k_d, j_d}\Bigr)$$
 ///    after projecting onto and back from the per-direction eigenbases $V_{k_d}^{(d)}$.
 /// 4. **Inverse ND FFT**: apply [`EngineND::inverse`] direction by direction.
 ///
 /// Step 3 is parallelised over independent mode tuples with Rayon.
+///
+/// ## Operator functions
+///
+/// The divide in step 3 is one instance of a functional calculus: every mode
+/// carries the vector of per-direction eigenvalues
+/// $(\mu^{(0)}, \ldots, \mu^{(N-1)})$, so
+/// [`apply_in_place`](Self::apply_in_place) evaluates any `g(λ)` at
+/// $\lambda = \alpha + \beta \sum_d \mu^{(d)}$ and
+/// [`apply_in_place_dirs`](Self::apply_in_place_dirs) any tensor product
+/// $\bigotimes_d g_d(L_d)$ — including the directionally split implicit Euler
+/// step — at the cost of one solve.
 pub struct PoissonND<const N: usize> {
-    /// One 1D solver per spatial direction (built with `α = 0`, `β = 1` to obtain
-    /// the per-direction eigenvectors; actual `α`, `β` applied at the ND level).
+    /// One 1D solver per spatial direction, providing the per-direction
+    /// eigendecompositions.
     solvers: [Poisson; N],
     /// ND HoFFT engine for the forward/inverse transforms, interpolation, and advection.
     pub fft: EngineND<N>,
@@ -437,10 +550,6 @@ pub struct PoissonND<const N: usize> {
     /// $\tilde{M}^{(0)} \otimes \cdots \otimes \tilde{M}^{(N-1)}$,
     /// length $\prod_d r_d$, direction 0 (`x`) varies fastest.
     periodic_mass_matrix: DVector<f64>,
-    /// Coefficient `α` of the mass term.
-    alpha: Complex<f64>,
-    /// Coefficient `β` of the stiffness term.
-    beta: Complex<f64>,
     /// Number of independent Fourier modes per direction:
     /// `n_d` for `Periodic`, `n_d + 1` for `Odd`/`Even`.
     n_freqs: [usize; N],
@@ -451,9 +560,11 @@ pub struct PoissonND<const N: usize> {
     /// Per-direction DOF index offset for mass scaling: 1 for Dirichlet (first DOF
     /// is local node `j = 1`), 0 otherwise.
     j_offsets: [usize; N],
-    /// Pseudo-inverse cutoff for the ND symbol solve: `1e-12` × an upper bound
-    /// on the combined eigenvalue magnitude (see [`PoissonND::new`]).
-    pinv_tol: f64,
+    /// Relative pseudo-inverse cutoff (default [`DEFAULT_PINV_REL_TOL`]); the
+    /// absolute cutoff used by the solves is [`pinv_tol`](Self::pinv_tol).
+    pinv_rel_tol: f64,
+    /// Bound `Σ_d max |μ^(d)|` on the tensor stiffness eigenvalue magnitude.
+    mu_max: f64,
 }
 
 impl<const N: usize> PoissonND<N> {
@@ -464,22 +575,17 @@ impl<const N: usize> PoissonND<N> {
     /// - `xls[d]`: left boundary position $x_{l,d}$ in direction `d`.
     /// - `ns[d]`: number of elements in direction `d`.
     /// - `rs[d]`: polynomial order `r_d` in direction `d`.
-    /// - `alpha`, `beta`: operator coefficients, real (`f64`) or complex
-    ///   (`Complex<f64>`).
     /// - `bc[d]`: boundary condition for direction `d`.
+    ///
+    /// The operator coefficients `α`, `β` are passed to the solve methods.
     pub fn new(
         ls: [f64; N],
         xls: [f64; N],
         ns: [usize; N],
         rs: [usize; N],
-        alpha: impl Into<Complex<f64>>,
-        beta: impl Into<Complex<f64>>,
         bc: [BoundaryCondition; N],
     ) -> Self {
-        let alpha = alpha.into();
-        let beta = beta.into();
-        let solvers =
-            std::array::from_fn(|d| Poisson::new(ls[d], xls[d], ns[d], rs[d], 0.0, 1.0, bc[d]));
+        let solvers = std::array::from_fn(|d| Poisson::new(ls[d], xls[d], ns[d], rs[d], bc[d]));
 
         // Build the diagonal of M^{(0)} ⊗ … ⊗ M^{(N-1)} iteratively.
         // Each 1D mass matrix is diagonal (Gauss-Lobatto quadrature), so the Kronecker product
@@ -511,29 +617,59 @@ impl<const N: usize> PoissonND<N> {
             }
         });
 
-        // Relative pseudo-inverse cutoff (see [`Poisson::new`]): scale with an
-        // upper bound `|α| + |β|·Σ_d max |μ^(d)|` on the combined eigenvalue
-        // magnitude `|α + β·Σ_d μ^(d)|`.
-        let pinv_tol = 1e-12
-            * (alpha.norm()
-                + beta.norm()
-                    * solvers
-                        .iter()
-                        .map(|s| max_abs_eigenvalue(&s.eigenvalues))
-                        .sum::<f64>());
+        // Bound for the relative pseudo-inverse cutoff (see [`Poisson::new`]):
+        // `|α| + |β|·Σ_d max |μ^(d)|` bounds the combined eigenvalue magnitude
+        // `|α + β·Σ_d μ^(d)|`.
+        let mu_max = solvers.iter().map(|s| s.mu_max).sum::<f64>();
 
         Self {
             solvers,
             fft,
             periodic_mass_matrix,
-            alpha,
-            beta,
             n_freqs,
             n_freq_total,
             n_freq_strides,
             j_offsets,
-            pinv_tol,
+            pinv_rel_tol: DEFAULT_PINV_REL_TOL,
+            mu_max,
         }
+    }
+
+    /// Builder-style setter for the relative pseudo-inverse cutoff
+    /// (see [`DEFAULT_PINV_REL_TOL`]).
+    ///
+    /// # Panics
+    /// If `rel_tol` is negative or NaN.
+    pub fn with_pinv_rel_tol(mut self, rel_tol: f64) -> Self {
+        self.set_pinv_rel_tol(rel_tol);
+        self
+    }
+
+    /// Set the relative pseudo-inverse cutoff (see [`DEFAULT_PINV_REL_TOL`]).
+    ///
+    /// # Panics
+    /// If `rel_tol` is negative or NaN.
+    pub fn set_pinv_rel_tol(&mut self, rel_tol: f64) {
+        assert!(rel_tol >= 0.0, "pinv_rel_tol must be non-negative (got {rel_tol})");
+        self.pinv_rel_tol = rel_tol;
+    }
+
+    /// Relative pseudo-inverse cutoff (default [`DEFAULT_PINV_REL_TOL`]).
+    pub fn pinv_rel_tol(&self) -> f64 {
+        self.pinv_rel_tol
+    }
+
+    /// Absolute pseudo-inverse cutoff used by
+    /// [`solve_in_place`](Self::solve_in_place) for the coefficients `α`, `β`:
+    /// `pinv_rel_tol · (|α| + |β|·Σ_d max |μ^(d)|)`.
+    pub fn pinv_tol(&self, alpha: impl Into<Complex<f64>>, beta: impl Into<Complex<f64>>) -> f64 {
+        self.pinv_rel_tol * (alpha.into().norm() + beta.into().norm() * self.mu_max)
+    }
+
+    /// Bound `Σ_d max |μ^(d)|` on the spectral radius of the tensor stiffness
+    /// operator `M⁻¹K`.
+    pub fn mu_max(&self) -> f64 {
+        self.mu_max
     }
 
     /// Return the tensor-product Gauss-Lobatto grid as a `Vec<[f64; N]>` of length
@@ -554,37 +690,94 @@ impl<const N: usize> PoissonND<N> {
         self.fft.grid()
     }
 
-    /// Coefficient `α` of the mass term.
-    pub fn alpha(&self) -> Complex<f64> {
-        self.alpha
-    }
-
-    /// Coefficient `β` of the stiffness term.
-    pub fn beta(&self) -> Complex<f64> {
-        self.beta
-    }
-
-    /// Whether both coefficients are real, i.e. the operator maps real
-    /// right-hand sides to real solutions.
-    pub fn is_real(&self) -> bool {
-        self.alpha.im == 0.0 && self.beta.im == 0.0
-    }
-
     /// Solve `(α M + β K) u = f` in place using the ND HoFFT algorithm.
     ///
     /// On input, `f` holds the strong-form right-hand side at the tensor-product
     /// Gauss-Lobatto grid returned by [`get_x`](Self::get_x).
     /// On output, `f` contains the FEM solution `u` at the same grid.
+    /// `alpha`, `beta` are real (`f64`) or complex (`Complex<f64>`) and may
+    /// change from call to call at no cost (see [`Poisson::solve_in_place`]).
     ///
     /// See the struct-level documentation for the four-step ND algorithm.
     /// Step 3 (symbol solve) is parallelised over independent mode tuples with Rayon.
-    pub fn solve_in_place(&self, f: &mut [Complex<f64>]) {
+    /// Eigenvalues below the cutoff [`pinv_tol`](Self::pinv_tol) are annihilated.
+    pub fn solve_in_place(
+        &self,
+        f: &mut [Complex<f64>],
+        alpha: impl Into<Complex<f64>>,
+        beta: impl Into<Complex<f64>>,
+    ) {
+        let (alpha, beta) = (alpha.into(), beta.into());
+        let tol = self.pinv_tol(alpha, beta);
+        let tol_sqr = tol * tol;
+        self.apply_in_place(f, alpha, beta, |lam| pinv(lam, tol_sqr));
+    }
+
+    /// Apply the operator function `g(L)` with `L = α I + β M⁻¹K` to the
+    /// **nodal vector** `f` in place: `u = g(L) f`, `g` evaluated at the tensor
+    /// eigenvalue $\lambda = \alpha + \beta \sum_d \mu^{(d)}_{k_d, j_d}$ of every mode.
+    ///
+    /// One solve's cost for any `g`; see [`Poisson::apply_in_place`] for the
+    /// functional calculus and the **nodal-vector input convention** (the
+    /// `solve_*` methods take the strong-form right-hand side instead).
+    /// `g` must be `Sync`: it is called from the Rayon mode loop.
+    ///
+    /// ```
+    /// # use lobatto_fft::solver::*;
+    /// # use rustfft::num_complex::Complex;
+    /// let solver = PoissonND::<2>::new([1.0; 2], [0.0; 2], [4; 2], [3; 2],
+    ///     [BoundaryCondition::Periodic; 2]);
+    /// let mut u = vec![Complex::new(1.0, 0.0); solver.get_x().len()];
+    /// let dt = 0.01;
+    /// // implicit Euler step (I + dt L)^{-1} u with L = M⁻¹K (α = 0, β = 1);
+    /// // the closure captures `dt` by copy
+    /// solver.apply_in_place(&mut u, 0.0, 1.0, move |lam| 1.0 / (1.0 + dt * lam));
+    /// ```
+    pub fn apply_in_place<G: Fn(Complex<f64>) -> Complex<f64> + Sync>(
+        &self,
+        f: &mut [Complex<f64>],
+        alpha: impl Into<Complex<f64>>,
+        beta: impl Into<Complex<f64>>,
+        g: G,
+    ) {
+        let (a, b) = (alpha.into(), beta.into());
+        self.apply_in_place_dirs(f, |mu| g(a + b * mu.iter().sum::<f64>()));
+    }
+
+    /// Like [`apply_in_place`](Self::apply_in_place), but `g` receives the raw
+    /// per-direction stiffness eigenvalues `(μ⁽⁰⁾, …, μ⁽ᴺ⁻¹⁾)` of the mode
+    /// (neither `α` nor `β` applied) instead of their combination.
+    ///
+    /// Because the 1D operators `L_d = M_d⁻¹K_d` act on different tensor
+    /// factors, this gives any tensor-product operator function
+    /// $\bigotimes_d g_d(L_d)$ — in particular the directionally split
+    /// implicit Euler step $\prod_d (I + dt\,L_d)^{-1}$ — at the cost of one
+    /// application. How `α` is distributed over the directions is up to `g`
+    /// ([`euler_split_step_in_place`](Self::euler_split_step_in_place) uses
+    /// the even split `α/N`).
+    ///
+    /// ```
+    /// # use lobatto_fft::solver::*;
+    /// # use rustfft::num_complex::Complex;
+    /// let solver = PoissonND::<2>::new([1.0; 2], [0.0; 2], [4; 2], [3; 2],
+    ///     [BoundaryCondition::Periodic; 2]);
+    /// let mut u = vec![Complex::new(1.0, 0.0); solver.get_x().len()];
+    /// let (dt, beta) = (0.01, 2.0);
+    /// // split implicit Euler: Π_d (I + dt β M_d⁻¹K_d)^{-1} u
+    /// solver.apply_in_place_dirs(&mut u, move |mu| {
+    ///     Complex::from(mu.iter().map(|&m| 1.0 / (1.0 + dt * beta * m)).product::<f64>())
+    /// });
+    /// ```
+    pub fn apply_in_place_dirs<G: Fn([f64; N]) -> Complex<f64> + Sync>(
+        &self,
+        f: &mut [Complex<f64>],
+        g: G,
+    ) {
         // Step 1: mass-scale in place, then forward FFT.
         // Mass weight for DOF p in direction d: j_d = (dof_d + j_offset_d) % r_d.
         let rs = &self.fft.rs;
         let r_strides = &self.fft.r_strides;
         let r_total = self.fft.r_total;
-        let pinv_tol_sqr = self.pinv_tol * self.pinv_tol;
 
         f.par_iter_mut().enumerate().for_each(|(p, fp)| {
             let lj = (0..N).fold(0, |acc, d| {
@@ -624,21 +817,15 @@ impl<const N: usize> PoissonND<N> {
                 }
             }
 
-            // Pointwise divide by ND eigenvalue λ = α + β Σ_d μ^{(d)}_{k_d, j_d}.
+            // Pointwise application of g to the per-direction eigenvalues
+            // μ^{(d)}_{k_d, j_d} of the mode.
             for j_flat in 0..r_total {
-                let mu = (0..N)
-                    .map(|d| {
-                        let j_d = (j_flat / r_strides[d]) % rs[d];
-                        self.solvers[d].eigenvalues[ks[d]][j_d]
-                    })
-                    .sum::<f64>();
-                let lambda = self.alpha + self.beta * mu;
-                let norm_sqr = lambda.norm_sqr();
-                if norm_sqr > pinv_tol_sqr {
-                    v[j_flat] *= lambda.conj() / norm_sqr;
-                } else {
-                    v[j_flat] = Complex::new(0.0, 0.0);
+                let mut mus = [0.0f64; N];
+                for d in 0..N {
+                    let j_d = (j_flat / r_strides[d]) % rs[d];
+                    mus[d] = self.solvers[d].eigenvalues[ks[d]][j_d];
                 }
+                v[j_flat] *= g(mus);
             }
 
             // Apply Q_d for each direction.
@@ -671,23 +858,79 @@ impl<const N: usize> PoissonND<N> {
     /// into an internal complex buffer, solved, and the real parts are written
     /// back. Costs the same as the complex solve plus the two (parallel)
     /// conversion passes and one temporary complex buffer of `f.len()` entries.
-    ///
-    /// # Panics
-    /// If either coefficient has a nonzero imaginary part (see
-    /// [`is_real`](Self::is_real)): the solution is then genuinely complex and
-    /// must be obtained with [`solve_in_place`](Self::solve_in_place).
-    pub fn solve_in_place_real(&self, f: &mut [f64]) {
-        assert!(
-            self.is_real(),
-            "solve_in_place_real requires real α and β (got α = {}, β = {})",
-            self.alpha,
-            self.beta
-        );
+    pub fn solve_in_place_real(&self, f: &mut [f64], alpha: f64, beta: f64) {
         let mut buf: Vec<Complex<f64>> = f.par_iter().map(|&v| Complex::new(v, 0.0)).collect();
-        self.solve_in_place(&mut buf);
+        self.solve_in_place(&mut buf, alpha, beta);
         f.par_iter_mut()
             .zip(buf.par_iter())
             .for_each(|(o, b)| *o = b.re);
+    }
+
+    /// Real-input variant of [`apply_in_place`](Self::apply_in_place) for real
+    /// `α`, `β`: `f` is copied into a complex buffer, `g(L)` is applied, and
+    /// the **real part** is written back (`g` may return complex values; only
+    /// the real part of the result is kept).
+    pub fn apply_in_place_real<G: Fn(Complex<f64>) -> Complex<f64> + Sync>(
+        &self,
+        f: &mut [f64],
+        alpha: f64,
+        beta: f64,
+        g: G,
+    ) {
+        let mut buf: Vec<Complex<f64>> = f.par_iter().map(|&v| Complex::new(v, 0.0)).collect();
+        self.apply_in_place(&mut buf, alpha, beta, g);
+        f.par_iter_mut()
+            .zip(buf.par_iter())
+            .for_each(|(o, b)| *o = b.re);
+    }
+
+    /// Unsplit implicit Euler step `u = (I + dt·L)⁻¹ f` with `L = α I + β M⁻¹K`,
+    /// on the nodal vector `f` (see [`apply_in_place`](Self::apply_in_place)).
+    pub fn euler_step_in_place(
+        &self,
+        f: &mut [Complex<f64>],
+        alpha: impl Into<Complex<f64>>,
+        beta: impl Into<Complex<f64>>,
+        dt: f64,
+    ) {
+        self.apply_in_place(f, alpha, beta, |lam| 1.0 / (1.0 + dt * lam));
+    }
+
+    /// Directionally split implicit Euler step on the nodal vector `f`:
+    /// $$u = \prod_d \bigl(I + dt\,(\tfrac{\alpha}{N} I + \beta\, M_d^{-1} K_d)\bigr)^{-1} f,$$
+    /// the mass term being split evenly over the `N` directions. The factors
+    /// commute, so the product is the exact tensor product of the 1D steps and
+    /// costs one application (see [`apply_in_place_dirs`](Self::apply_in_place_dirs)).
+    /// Each 1D factor satisfies the one-dimensional discrete maximum principle
+    /// (for `dt` large enough relative to `h²`), which the unsplit step does not.
+    pub fn euler_split_step_in_place(
+        &self,
+        f: &mut [Complex<f64>],
+        alpha: impl Into<Complex<f64>>,
+        beta: impl Into<Complex<f64>>,
+        dt: f64,
+    ) {
+        let a_n = alpha.into() / N as f64;
+        let b = beta.into();
+        self.apply_in_place_dirs(f, |mu| {
+            mu.iter()
+                .map(|&m| 1.0 / (1.0 + dt * (a_n + b * m)))
+                .product()
+        });
+    }
+
+    /// Exact semigroup `u = exp(-t·L) f` with `L = α I + β M⁻¹K`, on the nodal
+    /// vector `f` (see [`apply_in_place`](Self::apply_in_place)). Exact in ND:
+    /// the exponential of the Kronecker sum is the Kronecker product of the
+    /// 1D exponentials.
+    pub fn exp_in_place(
+        &self,
+        f: &mut [Complex<f64>],
+        alpha: impl Into<Complex<f64>>,
+        beta: impl Into<Complex<f64>>,
+        t: f64,
+    ) {
+        self.apply_in_place(f, alpha, beta, |lam| (-t * lam).exp());
     }
 }
 
@@ -703,7 +946,8 @@ mod tests {
 
         for &r in &[1, 2, 3, 4, 5, 6] {
             for &n in &[4, 16, 32, 64, 128] {
-                let solver = Poisson::new(1.0, 0.0, n, r, 1.0, 1.0, BoundaryCondition::Periodic);
+                let (alpha, beta) = (Complex::new(1.0, 0.0), Complex::new(1.0, 0.0));
+                let solver = Poisson::new(1.0, 0.0, n, r, BoundaryCondition::Periodic);
                 let id = DMatrix::<Complex<f64>>::identity(r, r);
 
                 let m_c = DMatrix::from_diagonal(&DVector::from_fn(r, |i, _| {
@@ -734,11 +978,11 @@ mod tests {
 
                     // 3. Round-trip with the operator eigenvalues λ = α + β·μ and the
                     //    solver's own pseudo-inverse cutoff: Q diag(1/λ) Q† M V Λ = V
-                    let lambda = |i: usize| solver.alpha + solver.beta * solver.eigenvalues[k][i];
+                    let lambda = |i: usize| alpha + beta * solver.eigenvalues[k][i];
                     let lambda_diag = DMatrix::from_diagonal(&DVector::from_fn(r, |i, _| lambda(i)));
                     let lambda_inv = DMatrix::from_diagonal(&DVector::from_fn(r, |i, _| {
                         let lam = lambda(i);
-                        if lam.norm() > solver.pinv_tol {
+                        if lam.norm() > solver.pinv_tol(alpha, beta) {
                             1.0 / lam
                         } else {
                             Complex::new(0.0, 0.0)
@@ -766,15 +1010,15 @@ mod tests {
     #[test]
     fn test_pinv_filters_constant_mode_1d() {
         let (n, r) = (16, 4);
-        let solver = Poisson::new(1.0, 0.0, n, r, 0.0, 1.0, BoundaryCondition::Periodic);
+        let solver = Poisson::new(1.0, 0.0, n, r, BoundaryCondition::Periodic);
         let x = solver.get_x();
 
         let f = |x: f64| (2.0 * PI * x).sin() + 0.3 * (4.0 * PI * x).cos();
         let mut u1: Vec<Complex<f64>> = x.iter().map(|&xi| Complex::new(f(xi), 0.0)).collect();
         let mut u2: Vec<Complex<f64>> =
             x.iter().map(|&xi| Complex::new(f(xi) + 1.0, 0.0)).collect();
-        solver.solve_in_place(&mut u1);
-        solver.solve_in_place(&mut u2);
+        solver.solve_in_place(&mut u1, 0.0, 1.0);
+        solver.solve_in_place(&mut u2, 0.0, 1.0);
 
         let max_diff = u1
             .iter()
@@ -798,8 +1042,6 @@ mod tests {
             [0.0; 2],
             [16; 2],
             [4; 2],
-            0.0,
-            1.0,
             [BoundaryCondition::Periodic; 2],
         );
         let x = solver.get_x();
@@ -807,8 +1049,8 @@ mod tests {
         let f = |p: &[f64; 2]| (2.0 * PI * p[0]).sin() * (2.0 * PI * p[1]).cos();
         let mut u1: Vec<Complex<f64>> = x.iter().map(|p| Complex::new(f(p), 0.0)).collect();
         let mut u2: Vec<Complex<f64>> = x.iter().map(|p| Complex::new(f(p) + 1.0, 0.0)).collect();
-        solver.solve_in_place(&mut u1);
-        solver.solve_in_place(&mut u2);
+        solver.solve_in_place(&mut u1, 0.0, 1.0);
+        solver.solve_in_place(&mut u2, 0.0, 1.0);
 
         let max_diff = u1
             .iter()
@@ -822,7 +1064,7 @@ mod tests {
         );
     }
 
-    /// Check that with beta=0 the tensorial structure recovers the inverse of the local mass matrix.
+    /// Check that the tensorial structure recovers the inverse of the local mass matrix.
     ///
     /// V_ND = V_0^{(0)} ⊗ ... ⊗ V_{N-1}^{(0)} (eigenvectors at k=0 for each direction)
     /// satisfies V_ND * V_ND† = tilde_M_ND^{-1} = diag(1 / periodic_mass_matrix).
@@ -845,8 +1087,6 @@ mod tests {
                 [0.0],
                 [4],
                 [3],
-                1.0,
-                0.0,
                 [BoundaryCondition::Periodic; 1],
             );
             let v = &solver.solvers[0].eigenvectors[0];
@@ -871,8 +1111,6 @@ mod tests {
                 [0.0; 2],
                 [4; 2],
                 [2; 2],
-                1.0,
-                0.0,
                 [BoundaryCondition::Periodic; 2],
             );
             let v_nd = kron(
@@ -900,8 +1138,6 @@ mod tests {
                 [0.0; 3],
                 [4; 3],
                 [2; 3],
-                1.0,
-                0.0,
                 [BoundaryCondition::Periodic; 3],
             );
             let v_nd = kron(

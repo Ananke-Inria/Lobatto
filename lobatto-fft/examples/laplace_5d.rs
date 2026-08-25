@@ -89,8 +89,6 @@ fn main() {
         [0.0; 5],
         [n; 5],
         [r; 5],
-        alpha,
-        beta,
         [BoundaryCondition::Periodic; 5],
     );
     let hofft_setup_ms = t.elapsed().as_secs_f64() * 1e3;
@@ -119,7 +117,7 @@ fn main() {
     println!("  RHS build  : {hofft_rhs_ms:.1} ms");
 
     let t = Instant::now();
-    solver_hofft.solve_in_place(&mut f_hofft);
+    solver_hofft.solve_in_place(&mut f_hofft, alpha, beta);
     let hofft_solve_ms = t.elapsed().as_secs_f64() * 1e3;
     println!("  Solve time : {hofft_solve_ms:.1} ms");
 
@@ -162,8 +160,6 @@ fn main() {
         [0.0; 5],
         [1; 5],
         [r_hot; 5],
-        alpha,
-        beta,
         [BoundaryCondition::Periodic; 5],
     );
     let hofft1_setup_ms = t.elapsed().as_secs_f64() * 1e3;
@@ -192,7 +188,7 @@ fn main() {
     println!("  RHS build  : {hofft1_rhs_ms:.1} ms");
 
     let t = Instant::now();
-    solver_hofft1.solve_in_place(&mut f_hofft1);
+    solver_hofft1.solve_in_place(&mut f_hofft1, alpha, beta);
     let hofft1_solve_ms = t.elapsed().as_secs_f64() * 1e3;
     println!("  Solve time : {hofft1_solve_ms:.1} ms");
 

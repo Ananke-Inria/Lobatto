@@ -17,13 +17,13 @@ fn compute_error(
     rhs_f: &dyn Fn(f64) -> f64,
     bc: BoundaryCondition,
 ) -> f64 {
-    let solver = Poisson::new(l, 0.0, n, r, alpha, beta, bc);
+    let solver = Poisson::new(l, 0.0, n, r, bc);
     let x = solver.get_x();
     let ndof = x.len();
 
     let mut f: Vec<Complex<f64>> = x.iter().map(|&xi| Complex::new(rhs_f(xi), 0.0)).collect();
 
-    solver.solve_in_place(&mut f);
+    solver.solve_in_place(&mut f, alpha, beta);
 
     let mut max_error = 0.0_f64;
     for i in 0..ndof {
@@ -466,8 +466,6 @@ fn convergence_2d() {
                 [0.0; 2],
                 [n; 2],
                 [r; 2],
-                alpha,
-                beta,
                 [BoundaryCondition::Periodic; 2],
             );
             let x = solver.get_x();
@@ -476,7 +474,7 @@ fn convergence_2d() {
             let mut f: Vec<Complex<f64>> = (0..total)
                 .map(|i| Complex::new(rhs_f(x[i][0], x[i][1]), 0.0))
                 .collect();
-            solver.solve_in_place(&mut f);
+            solver.solve_in_place(&mut f, alpha, beta);
 
             let max_err = (0..total)
                 .map(|i| (f[i].re - exact_u(x[i][0], x[i][1])).abs())
@@ -540,8 +538,6 @@ fn convergence_2d_dirichlet() {
                 [0.0; 2],
                 [n; 2],
                 [r; 2],
-                alpha,
-                beta,
                 [BoundaryCondition::Dirichlet; 2],
             );
             let x = solver.get_x();
@@ -550,7 +546,7 @@ fn convergence_2d_dirichlet() {
             let mut f: Vec<Complex<f64>> = (0..total)
                 .map(|i| Complex::new(rhs_f(x[i][0], x[i][1]), 0.0))
                 .collect();
-            solver.solve_in_place(&mut f);
+            solver.solve_in_place(&mut f, alpha, beta);
 
             let max_err = (0..total)
                 .map(|i| (f[i].re - exact_u(x[i][0], x[i][1])).abs())
@@ -614,8 +610,6 @@ fn convergence_2d_neumann() {
                 [0.0; 2],
                 [n; 2],
                 [r; 2],
-                alpha,
-                beta,
                 [BoundaryCondition::Neumann; 2],
             );
             let x = solver.get_x();
@@ -624,7 +618,7 @@ fn convergence_2d_neumann() {
             let mut f: Vec<Complex<f64>> = (0..total)
                 .map(|i| Complex::new(rhs_f(x[i][0], x[i][1]), 0.0))
                 .collect();
-            solver.solve_in_place(&mut f);
+            solver.solve_in_place(&mut f, alpha, beta);
 
             let max_err = (0..total)
                 .map(|i| (f[i].re - exact_u(x[i][0], x[i][1])).abs())
@@ -689,8 +683,6 @@ fn convergence_2d_dirichlet_neumann() {
                 [0.0; 2],
                 [n; 2],
                 [r; 2],
-                alpha,
-                beta,
                 [BoundaryCondition::Dirichlet, BoundaryCondition::Neumann],
             );
             let x = solver.get_x();
@@ -699,7 +691,7 @@ fn convergence_2d_dirichlet_neumann() {
             let mut f: Vec<Complex<f64>> = (0..total)
                 .map(|i| Complex::new(rhs_f(x[i][0], x[i][1]), 0.0))
                 .collect();
-            solver.solve_in_place(&mut f);
+            solver.solve_in_place(&mut f, alpha, beta);
 
             let max_err = (0..total)
                 .map(|i| (f[i].re - exact_u(x[i][0], x[i][1])).abs())
@@ -743,8 +735,6 @@ fn convergence_2d_anisotropic() {
             [0.0; 2],
             ns,
             rs,
-            alpha,
-            beta,
             [BoundaryCondition::Periodic; 2],
         );
         let x = solver.get_x();
@@ -752,7 +742,7 @@ fn convergence_2d_anisotropic() {
         let mut f: Vec<Complex<f64>> = (0..total)
             .map(|i| Complex::new(rhs_f(x[i][0], x[i][1]), 0.0))
             .collect();
-        solver.solve_in_place(&mut f);
+        solver.solve_in_place(&mut f, alpha, beta);
         (0..total)
             .map(|i| (f[i].re - exact_u(x[i][0], x[i][1])).abs())
             .fold(0.0_f64, f64::max)
@@ -919,8 +909,6 @@ fn convergence_3d() {
                     xls,
                     [n; 3],
                     [r; 3],
-                    alpha,
-                    beta,
                     [BoundaryCondition::Periodic; 3],
                 );
                 let x = solver.get_x();
@@ -942,7 +930,7 @@ fn convergence_3d() {
                         )
                     })
                     .collect();
-                solver.solve_in_place(&mut f);
+                solver.solve_in_place(&mut f, alpha, beta);
 
                 let max_err = (0..total)
                     .map(|i| {
@@ -1029,15 +1017,13 @@ fn convergence_3d_dirichlet() {
                 xls,
                 [n; 3],
                 [r; 3],
-                alpha,
-                beta,
                 [BoundaryCondition::Dirichlet; 3],
             );
             let x = solver.get_x();
             let total = x.len();
             let mut f: Vec<Complex<f64>> =
                 (0..total).map(|i| Complex::new(rhs_f(x[i]), 0.0)).collect();
-            solver.solve_in_place(&mut f);
+            solver.solve_in_place(&mut f, alpha, beta);
             let max_err = (0..total)
                 .map(|i| (f[i].re - exact_u(x[i])).abs())
                 .fold(0.0_f64, f64::max);
@@ -1115,15 +1101,13 @@ fn convergence_3d_neumann() {
                 xls,
                 [n; 3],
                 [r; 3],
-                alpha,
-                beta,
                 [BoundaryCondition::Neumann; 3],
             );
             let x = solver.get_x();
             let total = x.len();
             let mut f: Vec<Complex<f64>> =
                 (0..total).map(|i| Complex::new(rhs_f(x[i]), 0.0)).collect();
-            solver.solve_in_place(&mut f);
+            solver.solve_in_place(&mut f, alpha, beta);
             let max_err = (0..total)
                 .map(|i| (f[i].re - exact_u(x[i])).abs())
                 .fold(0.0_f64, f64::max);
@@ -1205,11 +1189,11 @@ fn convergence_3d_mixed_bc() {
     ];
 
     let compute_err = |ns: [usize; 3], rs: [usize; 3]| -> f64 {
-        let solver = PoissonND::<3>::new(ls, xls, ns, rs, alpha, beta, bc);
+        let solver = PoissonND::<3>::new(ls, xls, ns, rs, bc);
         let x = solver.get_x();
         let total = x.len();
         let mut f: Vec<Complex<f64>> = (0..total).map(|i| Complex::new(rhs_f(x[i]), 0.0)).collect();
-        solver.solve_in_place(&mut f);
+        solver.solve_in_place(&mut f, alpha, beta);
         (0..total)
             .map(|i| (f[i].re - exact_u(x[i])).abs())
             .fold(0.0_f64, f64::max)
@@ -1362,8 +1346,6 @@ fn convergence_periodic_2d() {
                 [0.0; 2],
                 [n; 2],
                 [r; 2],
-                alpha,
-                beta,
                 [BoundaryCondition::Periodic; 2],
             );
             let x = solver.get_x();
@@ -1372,7 +1354,7 @@ fn convergence_periodic_2d() {
             let mut f: Vec<Complex<f64>> = (0..total)
                 .map(|i| Complex::new(rhs_f(x[i][0], x[i][1]), 0.0))
                 .collect();
-            solver.solve_in_place(&mut f);
+            solver.solve_in_place(&mut f, alpha, beta);
 
             let max_err = (0..total)
                 .map(|i| (f[i].re - exact_u(x[i][0], x[i][1])).abs())
@@ -1408,13 +1390,13 @@ fn convergence_periodic_2d() {
 #[test]
 fn solve_in_place_real_matches_complex() {
     // 1D, Dirichlet.
-    let solver = Poisson::new(1.0, 0.0, 8, 3, 1.0, 1.0, BoundaryCondition::Dirichlet);
+    let solver = Poisson::new(1.0, 0.0, 8, 3, BoundaryCondition::Dirichlet);
     let x = solver.get_x();
     let f_re: Vec<f64> = x.iter().map(|&xi| (2.7 * xi + 0.3).sin()).collect();
     let mut f_cx: Vec<Complex<f64>> = f_re.iter().map(|&v| Complex::new(v, 0.0)).collect();
     let mut f_real = f_re.clone();
-    solver.solve_in_place(&mut f_cx);
-    solver.solve_in_place_real(&mut f_real);
+    solver.solve_in_place(&mut f_cx, 1.0, 1.0);
+    solver.solve_in_place_real(&mut f_real, 1.0, 1.0);
     for (a, b) in f_real.iter().zip(f_cx.iter()) {
         assert_eq!(*a, b.re);
     }
@@ -1425,8 +1407,6 @@ fn solve_in_place_real_matches_complex() {
         [0.0; 2],
         [6; 2],
         [3; 2],
-        1.0,
-        1.0,
         [BoundaryCondition::Periodic, BoundaryCondition::Neumann],
     );
     let x = solver.get_x();
@@ -1436,8 +1416,8 @@ fn solve_in_place_real_matches_complex() {
         .collect();
     let mut f_cx: Vec<Complex<f64>> = f_re.iter().map(|&v| Complex::new(v, 0.0)).collect();
     let mut f_real = f_re.clone();
-    solver.solve_in_place(&mut f_cx);
-    solver.solve_in_place_real(&mut f_real);
+    solver.solve_in_place(&mut f_cx, 1.0, 1.0);
+    solver.solve_in_place_real(&mut f_real, 1.0, 1.0);
     for (a, b) in f_real.iter().zip(f_cx.iter()) {
         assert_eq!(*a, b.re);
     }
@@ -1462,18 +1442,16 @@ fn complex_coefficient_scaling_is_exact() {
         BoundaryCondition::Neumann,
     ] {
         let (n, r) = (12, 4);
-        let base = Poisson::new(2.3, -0.4, n, r, 1.5, 0.8, bc);
-        let scaled = Poisson::new(2.3, -0.4, n, r, c * 1.5, c * 0.8, bc);
-        assert!(base.is_real() && !scaled.is_real());
-        let x = base.get_x();
+        let solver = Poisson::new(2.3, -0.4, n, r, bc);
+        let x = solver.get_x();
         let f: Vec<Complex<f64>> = x
             .iter()
             .map(|&xi| Complex::new((2.7 * xi + 0.3).sin(), (1.1 * xi).cos()))
             .collect();
         let mut u0 = f.clone();
         let mut u1 = f.clone();
-        base.solve_in_place(&mut u0);
-        scaled.solve_in_place(&mut u1);
+        solver.solve_in_place(&mut u0, 1.5, 0.8);
+        solver.solve_in_place(&mut u1, c * 1.5, c * 0.8);
         let scale = u0.iter().map(|v| v.norm()).fold(0.0f64, f64::max);
         for (a, b) in u0.iter().zip(&u1) {
             assert!(
@@ -1486,17 +1464,16 @@ fn complex_coefficient_scaling_is_exact() {
 
     // 2D, mixed BCs.
     let bcs = [BoundaryCondition::Periodic, BoundaryCondition::Neumann];
-    let base = PoissonND::<2>::new([1.0, 1.7], [0.0, 0.2], [6, 5], [3, 4], 1.5, 0.8, bcs);
-    let scaled = PoissonND::<2>::new([1.0, 1.7], [0.0, 0.2], [6, 5], [3, 4], c * 1.5, c * 0.8, bcs);
-    let x = base.get_x();
+    let solver = PoissonND::<2>::new([1.0, 1.7], [0.0, 0.2], [6, 5], [3, 4], bcs);
+    let x = solver.get_x();
     let f: Vec<Complex<f64>> = x
         .iter()
         .map(|&[a, b]| Complex::new((2.1 * a).sin() * (1.3 * b + 0.2).cos(), (a * b).sin()))
         .collect();
     let mut u0 = f.clone();
     let mut u1 = f;
-    base.solve_in_place(&mut u0);
-    scaled.solve_in_place(&mut u1);
+    solver.solve_in_place(&mut u0, 1.5, 0.8);
+    solver.solve_in_place(&mut u1, c * 1.5, c * 0.8);
     let scale = u0.iter().map(|v| v.norm()).fold(0.0f64, f64::max);
     for (a, b) in u0.iter().zip(&u1) {
         assert!(
@@ -1532,10 +1509,10 @@ fn convergence_complex_alpha() {
         let mut prev: Option<f64> = None;
         for n in [4, 8, 16, 32] {
             let r = 4;
-            let solver = Poisson::new(1.0, 0.0, n, r, alpha, beta, bc);
+            let solver = Poisson::new(1.0, 0.0, n, r, bc);
             let x = solver.get_x();
             let mut f: Vec<Complex<f64>> = x.iter().map(|&xi| cw * u1d(xi)).collect();
-            solver.solve_in_place(&mut f);
+            solver.solve_in_place(&mut f, alpha, beta);
             let err = x
                 .iter()
                 .zip(&f)
@@ -1566,10 +1543,10 @@ fn convergence_complex_alpha() {
     let mut prev: Option<f64> = None;
     for n in [4, 8, 16] {
         let r = 4;
-        let solver = PoissonND::<3>::new([1.0; 3], [0.0; 3], [n; 3], [r; 3], alpha, beta, bcs);
+        let solver = PoissonND::<3>::new([1.0; 3], [0.0; 3], [n; 3], [r; 3], bcs);
         let x = solver.get_x();
         let mut f: Vec<Complex<f64>> = x.iter().map(|&p| c3 * exact(p)).collect();
-        solver.solve_in_place(&mut f);
+        solver.solve_in_place(&mut f, alpha, beta);
         let err = x
             .iter()
             .zip(&f)
@@ -1588,50 +1565,332 @@ fn convergence_complex_alpha() {
     }
 }
 
-/// Real coefficients passed as `f64` and as `Complex<f64>` build identical solvers.
+/// Real coefficients passed as `f64` and as `Complex<f64>` give identical solves.
 #[test]
 fn f64_and_complex_real_coefficients_agree() {
-    let a = Poisson::new(1.0, 0.0, 8, 3, 2.0, 0.5, BoundaryCondition::Dirichlet);
-    let b = Poisson::new(
-        1.0,
-        0.0,
-        8,
-        3,
-        Complex::new(2.0, 0.0),
-        Complex::new(0.5, 0.0),
-        BoundaryCondition::Dirichlet,
-    );
-    assert_eq!(a.alpha(), b.alpha());
-    assert_eq!(a.beta(), b.beta());
-    assert!(a.is_real() && b.is_real());
-    let x = a.get_x();
+    let solver = Poisson::new(1.0, 0.0, 8, 3, BoundaryCondition::Dirichlet);
+    let x = solver.get_x();
     let f: Vec<Complex<f64>> = x.iter().map(|&xi| Complex::new((3.0 * xi).sin(), 0.0)).collect();
     let (mut ua, mut ub) = (f.clone(), f);
-    a.solve_in_place(&mut ua);
-    b.solve_in_place(&mut ub);
+    solver.solve_in_place(&mut ua, 2.0, 0.5);
+    solver.solve_in_place(&mut ub, Complex::new(2.0, 0.0), Complex::new(0.5, 0.0));
     assert_eq!(ua, ub);
 }
 
-#[test]
-#[should_panic(expected = "requires real α and β")]
-fn solve_in_place_real_rejects_complex_coefficients_1d() {
-    let solver = Poisson::new(1.0, 0.0, 8, 3, Complex::new(1.0, 0.5), 1.0, BoundaryCondition::Periodic);
-    let mut f = vec![0.0; solver.get_x().len()];
-    solver.solve_in_place_real(&mut f);
+// ── Operator functions ───────────────────────────────────────────────────────
+
+const ALL_BC: [BoundaryCondition; 3] = [
+    BoundaryCondition::Periodic,
+    BoundaryCondition::Dirichlet,
+    BoundaryCondition::Neumann,
+];
+
+fn max_norm(v: &[Complex<f64>]) -> f64 {
+    v.iter().map(|z| z.norm()).fold(0.0, f64::max)
 }
 
+fn max_diff(a: &[Complex<f64>], b: &[Complex<f64>]) -> f64 {
+    assert_eq!(a.len(), b.len());
+    a.iter().zip(b).map(|(x, y)| (x - y).norm()).fold(0.0, f64::max)
+}
+
+/// Deterministic pseudo-random complex vector.
+fn pseudo_random(len: usize, seed: u64) -> Vec<Complex<f64>> {
+    let mut state = seed | 1;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 11) as f64 / (1u64 << 53) as f64 - 0.5
+    };
+    (0..len).map(|_| Complex::new(next(), next())).collect()
+}
+
+/// Diagonal of the assembled mass matrix, recovered from a `β = 0` solve:
+/// `(1·M)⁻¹ 1 = (1/M_ii)_i`.
+fn mass_diagonal_1d(n: usize, r: usize, bc: BoundaryCondition) -> Vec<f64> {
+    let s = Poisson::new(1.0, 0.0, n, r, bc);
+    let mut ones = vec![Complex::new(1.0, 0.0); s.get_x().len()];
+    s.solve_in_place(&mut ones, 1.0, 0.0);
+    ones.iter().map(|z| 1.0 / z.re).collect()
+}
+
+fn mass_diagonal_2d(ns: [usize; 2], rs: [usize; 2], bc: [BoundaryCondition; 2]) -> Vec<f64> {
+    let s = PoissonND::<2>::new([1.0; 2], [0.0; 2], ns, rs, bc);
+    let mut ones = vec![Complex::new(1.0, 0.0); s.get_x().len()];
+    s.solve_in_place(&mut ones, 1.0, 0.0);
+    ones.iter().map(|z| 1.0 / z.re).collect()
+}
+
+/// `apply_in_place(u, 1/λ)` = `(αM + βK)⁻¹ M u` = `solve_in_place(M u)`, 1D and
+/// 2D, all BCs, complex `α`.
 #[test]
-#[should_panic(expected = "requires real α and β")]
-fn solve_in_place_real_rejects_complex_coefficients_nd() {
-    let solver = PoissonND::<2>::new(
+fn apply_reproduces_solve() {
+    const TOL: f64 = 1e-12;
+    let alpha = Complex::new(0.8, -1.3);
+    let beta = Complex::new(1.0, 0.4);
+    let inv = |l: Complex<f64>| 1.0 / l;
+
+    for bc in ALL_BC {
+        let (n, r) = (10, 4);
+        let solver = Poisson::new(1.0, 0.0, n, r, bc);
+        let m = mass_diagonal_1d(n, r, bc);
+        let u = pseudo_random(m.len(), 11);
+        let mut via_apply = u.clone();
+        solver.apply_in_place(&mut via_apply, alpha, beta, inv);
+        let mut via_solve: Vec<Complex<f64>> = u.iter().zip(&m).map(|(z, &w)| z * w).collect();
+        solver.solve_in_place(&mut via_solve, alpha, beta);
+        let err = max_diff(&via_apply, &via_solve) / max_norm(&via_solve);
+        assert!(err < TOL, "1D {bc:?}: apply vs solve rel err {err:.2e}");
+
+        // Real wrapper (real coefficients): real part of the complex apply.
+        let mut f_re: Vec<f64> = u.iter().map(|z| z.re).collect();
+        let mut f_cx: Vec<Complex<f64>> = f_re.iter().map(|&v| Complex::new(v, 0.0)).collect();
+        solver.apply_in_place_real(&mut f_re, 0.8, 1.0, inv);
+        solver.apply_in_place(&mut f_cx, 0.8, 1.0, inv);
+        for (a, b) in f_re.iter().zip(&f_cx) {
+            assert_eq!(*a, b.re);
+        }
+    }
+
+    for bc in [
+        [BoundaryCondition::Periodic; 2],
+        [BoundaryCondition::Dirichlet, BoundaryCondition::Neumann],
+        [BoundaryCondition::Neumann, BoundaryCondition::Periodic],
+    ] {
+        let (ns, rs) = ([5, 6], [3, 4]);
+        let solver = PoissonND::<2>::new([1.0; 2], [0.0; 2], ns, rs, bc);
+        let m = mass_diagonal_2d(ns, rs, bc);
+        let u = pseudo_random(m.len(), 13);
+        let mut via_apply = u.clone();
+        solver.apply_in_place(&mut via_apply, alpha, beta, inv);
+        let mut via_solve: Vec<Complex<f64>> = u.iter().zip(&m).map(|(z, &w)| z * w).collect();
+        solver.solve_in_place(&mut via_solve, alpha, beta);
+        let err = max_diff(&via_apply, &via_solve) / max_norm(&via_solve);
+        assert!(err < TOL, "2D {bc:?}: apply vs solve rel err {err:.2e}");
+
+        let mut f_re: Vec<f64> = u.iter().map(|z| z.re).collect();
+        let mut f_cx: Vec<Complex<f64>> = f_re.iter().map(|&v| Complex::new(v, 0.0)).collect();
+        solver.apply_in_place_real(&mut f_re, 0.8, 1.0, inv);
+        solver.apply_in_place(&mut f_cx, 0.8, 1.0, inv);
+        for (a, b) in f_re.iter().zip(&f_cx) {
+            assert_eq!(*a, b.re);
+        }
+    }
+}
+
+/// The constant-mode filter of `test_pinv_filters_constant_mode_*` depends on
+/// the relative tolerance: the default filters, `0.0` lets the roundoff
+/// constant mode through. `pinv_tol(α, β)` scales exactly with the setter.
+#[test]
+fn pinv_rel_tol_setter() {
+    let (n, r) = (16, 4);
+    let x = Poisson::new(1.0, 0.0, n, r, BoundaryCondition::Periodic).get_x();
+    let f = |x: f64| (2.0 * PI * x).sin() + 0.3 * (4.0 * PI * x).cos();
+    let leak = |solver: &Poisson| {
+        let mut u1: Vec<Complex<f64>> = x.iter().map(|&xi| Complex::new(f(xi), 0.0)).collect();
+        let mut u2: Vec<Complex<f64>> =
+            x.iter().map(|&xi| Complex::new(f(xi) + 1.0, 0.0)).collect();
+        solver.solve_in_place(&mut u1, 0.0, 1.0);
+        solver.solve_in_place(&mut u2, 0.0, 1.0);
+        max_diff(&u1, &u2) / max_norm(&u1).max(1.0)
+    };
+
+    let solver = Poisson::new(1.0, 0.0, n, r, BoundaryCondition::Periodic);
+    assert_eq!(solver.pinv_rel_tol(), DEFAULT_PINV_REL_TOL);
+    assert!(leak(&solver) <= 1e-12);
+
+    let unfiltered = solver.with_pinv_rel_tol(0.0);
+    assert_eq!(unfiltered.pinv_tol(0.0, 1.0), 0.0);
+    assert!(
+        leak(&unfiltered) > 1e-6,
+        "rel_tol = 0 must let the roundoff constant mode through"
+    );
+
+    // Exact scaling of the absolute cutoff; with β = 0 the bound is |α|.
+    let mut solver = Poisson::new(1.0, 0.0, n, r, BoundaryCondition::Periodic);
+    assert_eq!(solver.pinv_tol(2.0, 0.0), 2.0 * DEFAULT_PINV_REL_TOL);
+    solver.set_pinv_rel_tol(1e-10);
+    assert_eq!(solver.pinv_tol(2.0, 0.0), 2.0 * 1e-10);
+
+    let mut nd = PoissonND::<2>::new(
         [1.0; 2],
         [0.0; 2],
         [4; 2],
-        [3; 2],
-        1.0,
-        Complex::new(1.0, -0.2),
-        [BoundaryCondition::Neumann; 2],
+        [2; 2],
+        [BoundaryCondition::Dirichlet; 2],
     );
-    let mut f = vec![0.0; solver.get_x().len()];
-    solver.solve_in_place_real(&mut f);
+    let (a, b) = (Complex::new(0.0, 3.0), 0.0);
+    assert_eq!(nd.pinv_tol(a, b), 3.0 * DEFAULT_PINV_REL_TOL);
+    nd.set_pinv_rel_tol(1e-8);
+    assert_eq!(nd.pinv_rel_tol(), 1e-8);
+    assert_eq!(nd.pinv_tol(a, b), 3.0 * 1e-8);
+    let nd = nd.with_pinv_rel_tol(0.5);
+    assert_eq!(nd.pinv_tol(a, b), 1.5);
+}
+
+#[test]
+#[should_panic(expected = "non-negative")]
+fn pinv_rel_tol_rejects_negative() {
+    let _ = Poisson::new(1.0, 0.0, 4, 2, BoundaryCondition::Periodic).with_pinv_rel_tol(-1.0);
+}
+
+/// Dense matrix of a 1D operator function obtained column by column
+/// (`out[j]` is column `j`).
+fn dense_apply_1d(
+    solver: &Poisson,
+    alpha: f64,
+    beta: f64,
+    g: impl Fn(Complex<f64>) -> Complex<f64>,
+) -> Vec<Vec<Complex<f64>>> {
+    let n = solver.get_x().len();
+    (0..n)
+        .map(|i| {
+            let mut e = vec![Complex::new(0.0, 0.0); n];
+            e[i] = Complex::new(1.0, 0.0);
+            solver.apply_in_place(&mut e, alpha, beta, &g);
+            e
+        })
+        .collect()
+}
+
+/// Directionally split Euler step = Kronecker product `S_0 ⊗ S_1` of the 1D
+/// steps, and = the 1D steps applied fibre by fibre. Periodic (`n = 4`,
+/// `r = 3`, `dt = 0.05 h²`) and mixed Dirichlet/Neumann with different
+/// `n_d`, `r_d`.
+#[test]
+fn split_step_is_kronecker_product() {
+    const TOL: f64 = 1e-13;
+    for (ns, rs, bc) in [
+        ([4, 4], [3, 3], [BoundaryCondition::Periodic; 2]),
+        ([5, 3], [2, 4], [BoundaryCondition::Dirichlet, BoundaryCondition::Neumann]),
+        ([3, 4], [3, 2], [BoundaryCondition::Neumann, BoundaryCondition::Periodic]),
+    ] {
+        let h = 1.0 / ns[0] as f64;
+        let dt = 0.05 * h * h;
+        let solver = PoissonND::<2>::new([1.0; 2], [0.0; 2], ns, rs, bc);
+        let s1: [Vec<Vec<Complex<f64>>>; 2] = std::array::from_fn(|d| {
+            let p = Poisson::new(1.0, 0.0, ns[d], rs[d], bc[d]);
+            dense_apply_1d(&p, 0.0, 1.0, |l| 1.0 / (1.0 + dt * l))
+        });
+        let (m0, m1) = (s1[0].len(), s1[1].len());
+        let total = m0 * m1;
+        assert_eq!(total, solver.get_x().len());
+
+        // Columns of the ND operator vs the Kronecker product (direction 0 fastest).
+        let mut worst = 0.0f64;
+        for q in 0..total {
+            let (j0, j1) = (q % m0, q / m0);
+            let mut e = vec![Complex::new(0.0, 0.0); total];
+            e[q] = Complex::new(1.0, 0.0);
+            solver.euler_split_step_in_place(&mut e, 0.0, 1.0, dt);
+            for (p, &ep) in e.iter().enumerate() {
+                let (i0, i1) = (p % m0, p / m0);
+                let kron = s1[0][j0][i0] * s1[1][j1][i1];
+                worst = worst.max((ep - kron).norm());
+            }
+        }
+        assert!(worst < TOL, "{bc:?}: split vs Kronecker max diff {worst:.2e}");
+
+        // Fibre-by-fibre application of the dense 1D operators to a random vector.
+        let u = pseudo_random(total, 17);
+        let mut split = u.clone();
+        solver.euler_split_step_in_place(&mut split, 0.0, 1.0, dt);
+        let mut seq = u.clone();
+        for i1 in 0..m1 {
+            let fib: Vec<Complex<f64>> = (0..m0).map(|i0| seq[i0 + m0 * i1]).collect();
+            for i0 in 0..m0 {
+                seq[i0 + m0 * i1] = (0..m0).map(|j0| s1[0][j0][i0] * fib[j0]).sum();
+            }
+        }
+        for i0 in 0..m0 {
+            let fib: Vec<Complex<f64>> = (0..m1).map(|i1| seq[i0 + m0 * i1]).collect();
+            for i1 in 0..m1 {
+                seq[i0 + m0 * i1] = (0..m1).map(|j1| s1[1][j1][i1] * fib[j1]).sum();
+            }
+        }
+        let err = max_diff(&split, &seq) / max_norm(&seq);
+        assert!(err < TOL, "{bc:?}: split vs fibrewise rel err {err:.2e}");
+
+        // apply_in_place_dirs with the explicit closure equals the convenience method.
+        let mut dirs = u.clone();
+        solver.apply_in_place_dirs(&mut dirs, |mu| {
+            Complex::from(mu.iter().map(|&m| 1.0 / (1.0 + dt * m)).product::<f64>())
+        });
+        let err = max_diff(&dirs, &split) / max_norm(&split);
+        assert!(err < TOL, "{bc:?}: apply_in_place_dirs vs euler_split rel err {err:.2e}");
+    }
+}
+
+/// `exp(-t L)` in ND is the Kronecker product of the 1D exponentials:
+/// `apply(exp(-tλ))` = `exp(-tα) · apply_dirs(Π_d exp(-tβ μ_d))`, complex `α`, `β`.
+#[test]
+fn exp_is_kronecker_product() {
+    const TOL: f64 = 1e-14;
+    let alpha = Complex::new(0.3, -0.7);
+    let beta = Complex::new(1.0, 0.2);
+    let t = 2e-3;
+    let solver = PoissonND::<3>::new(
+        [1.0; 3],
+        [0.0; 3],
+        [3, 4, 2],
+        [2, 3, 3],
+        [
+            BoundaryCondition::Periodic,
+            BoundaryCondition::Dirichlet,
+            BoundaryCondition::Neumann,
+        ],
+    );
+    let u = pseudo_random(solver.get_x().len(), 19);
+    let mut a = u.clone();
+    solver.exp_in_place(&mut a, alpha, beta, t);
+    let mut b = u.clone();
+    solver.apply_in_place_dirs(&mut b, |mu| {
+        mu.iter().map(|&m| (-t * beta * m).exp()).product::<Complex<f64>>() * (-t * alpha).exp()
+    });
+    let err = max_diff(&a, &b) / max_norm(&a);
+    assert!(err < TOL, "exp vs Kronecker exp rel err {err:.2e}");
+
+    // Euler convenience = closure form.
+    let mut c = u.clone();
+    solver.euler_step_in_place(&mut c, alpha, beta, t);
+    let mut d = u.clone();
+    solver.apply_in_place(&mut d, alpha, beta, |l| 1.0 / (1.0 + t * l));
+    assert_eq!(c, d);
+}
+
+/// Neumann on `[0, 1]` = periodic on `[0, 2)` applied to the even extension:
+/// an Euler step of the Neumann solver (`n = 8`, `r = 4`) matches the periodic
+/// step with `2n` elements on the mirrored data.
+#[test]
+fn neumann_is_even_periodic_extension() {
+    const TOL: f64 = 1e-14;
+    let (n, r) = (8, 4);
+    let dt = 3e-3;
+    let neu = Poisson::new(1.0, 0.0, n, r, BoundaryCondition::Neumann);
+    let per = Poisson::new(2.0, 0.0, 2 * n, r, BoundaryCondition::Periodic);
+    let x_n = neu.get_x();
+    let x_p = per.get_x();
+    let nr = n * r;
+    assert_eq!(x_n.len(), nr + 1);
+    assert_eq!(x_p.len(), 2 * nr);
+
+    // Even extension: node p > nr of the periodic grid mirrors node 2nr - p.
+    let mirror = |p: usize| if p <= nr { p } else { 2 * nr - p };
+    for (p, &xp) in x_p.iter().enumerate() {
+        let xm = if p <= nr { xp } else { 2.0 - xp };
+        assert!((xm - x_n[mirror(p)]).abs() < 1e-14);
+    }
+
+    let u: Vec<Complex<f64>> = x_n
+        .iter()
+        .map(|&x| Complex::new((3.1 * x).cos() + 0.4 * (x * x - x).exp(), 0.2 * x))
+        .collect();
+    let mut u_neu = u.clone();
+    neu.euler_step_in_place(&mut u_neu, 0.0, 1.0, dt);
+    let mut u_ext: Vec<Complex<f64>> = (0..2 * nr).map(|p| u[mirror(p)]).collect();
+    per.euler_step_in_place(&mut u_ext, 0.0, 1.0, dt);
+
+    let err = max_diff(&u_neu, &u_ext[..=nr]) / max_norm(&u_neu);
+    assert!(err < TOL, "Neumann vs even periodic extension rel err {err:.2e}");
 }
