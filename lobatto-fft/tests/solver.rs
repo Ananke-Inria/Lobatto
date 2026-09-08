@@ -1,5 +1,6 @@
 use lobatto_fft::solver::*;
 use nalgebra::Complex;
+use std::cell::RefCell;
 use std::f64::consts::PI;
 
 /// A test case: (name, exact solution u(x), right-hand side f(x)).
@@ -1679,62 +1680,6 @@ fn apply_reproduces_solve() {
     }
 }
 
-/// The constant-mode filter of `test_pinv_filters_constant_mode_*` depends on
-/// the relative tolerance: the default filters, `0.0` lets the roundoff
-/// constant mode through. `pinv_tol(α, β)` scales exactly with the setter.
-#[test]
-fn pinv_rel_tol_setter() {
-    let (n, r) = (16, 4);
-    let x = Poisson::new(1.0, 0.0, n, r, BoundaryCondition::Periodic).get_x();
-    let f = |x: f64| (2.0 * PI * x).sin() + 0.3 * (4.0 * PI * x).cos();
-    let leak = |solver: &Poisson| {
-        let mut u1: Vec<Complex<f64>> = x.iter().map(|&xi| Complex::new(f(xi), 0.0)).collect();
-        let mut u2: Vec<Complex<f64>> =
-            x.iter().map(|&xi| Complex::new(f(xi) + 1.0, 0.0)).collect();
-        solver.solve_in_place(&mut u1, 0.0, 1.0);
-        solver.solve_in_place(&mut u2, 0.0, 1.0);
-        max_diff(&u1, &u2) / max_norm(&u1).max(1.0)
-    };
-
-    let solver = Poisson::new(1.0, 0.0, n, r, BoundaryCondition::Periodic);
-    assert_eq!(solver.pinv_rel_tol(), DEFAULT_PINV_REL_TOL);
-    assert!(leak(&solver) <= 1e-12);
-
-    let unfiltered = solver.with_pinv_rel_tol(0.0);
-    assert_eq!(unfiltered.pinv_tol(0.0, 1.0), 0.0);
-    assert!(
-        leak(&unfiltered) > 1e-6,
-        "rel_tol = 0 must let the roundoff constant mode through"
-    );
-
-    // Exact scaling of the absolute cutoff; with β = 0 the bound is |α|.
-    let mut solver = Poisson::new(1.0, 0.0, n, r, BoundaryCondition::Periodic);
-    assert_eq!(solver.pinv_tol(2.0, 0.0), 2.0 * DEFAULT_PINV_REL_TOL);
-    solver.set_pinv_rel_tol(1e-10);
-    assert_eq!(solver.pinv_tol(2.0, 0.0), 2.0 * 1e-10);
-
-    let mut nd = PoissonND::<2>::new(
-        [1.0; 2],
-        [0.0; 2],
-        [4; 2],
-        [2; 2],
-        [BoundaryCondition::Dirichlet; 2],
-    );
-    let (a, b) = (Complex::new(0.0, 3.0), 0.0);
-    assert_eq!(nd.pinv_tol(a, b), 3.0 * DEFAULT_PINV_REL_TOL);
-    nd.set_pinv_rel_tol(1e-8);
-    assert_eq!(nd.pinv_rel_tol(), 1e-8);
-    assert_eq!(nd.pinv_tol(a, b), 3.0 * 1e-8);
-    let nd = nd.with_pinv_rel_tol(0.5);
-    assert_eq!(nd.pinv_tol(a, b), 1.5);
-}
-
-#[test]
-#[should_panic(expected = "non-negative")]
-fn pinv_rel_tol_rejects_negative() {
-    let _ = Poisson::new(1.0, 0.0, 4, 2, BoundaryCondition::Periodic).with_pinv_rel_tol(-1.0);
-}
-
 /// Dense matrix of a 1D operator function obtained column by column
 /// (`out[j]` is column `j`).
 fn dense_apply_1d(
@@ -1893,4 +1838,156 @@ fn neumann_is_even_periodic_extension() {
 
     let err = max_diff(&u_neu, &u_ext[..=nr]) / max_norm(&u_neu);
     assert!(err < TOL, "Neumann vs even periodic extension rel err {err:.2e}");
+}
+
+// ── Accuracy of the symbol eigenvalues ───────────────────────────────────────
+//
+// For each Fourier mode k the solver diagonalises an r×r Hermitian symbol whose
+// largest eigenvalue is μ_max ~ (r·n)².  A backward-stable eigensolver returns
+// every eigenvalue with absolute error ≈ ε·μ_max, including the lowest one,
+// μ0(k) ≈ (πk)², which carries the physical solution.  The relative error on
+// μ0 therefore grows like n², and every solve inherits an error floor
+//
+//     ε · μ_max / |α + β μ0|.
+//
+// The tests below compare against exact values (an eigenvalue known to double
+// precision, single-mode analytic solutions).  Residual checks and
+// solve/apply round trips do not see the problem and are not used.
+
+/// Polynomial order used by the eigenvalue accuracy tests.
+const ORDER: usize = 3;
+
+/// Per-mode eigenvalues `μ[k][j]` of the stiffness symbol of a 1D solver.
+///
+/// `apply_mu_in_place` evaluates its closure once per `(k, j)`, mode after
+/// mode; recording the arguments recovers the spectrum.
+fn symbol_eigenvalues(solver: &Poisson) -> Vec<Vec<f64>> {
+    let mut f = vec![Complex::new(0.0, 0.0); solver.get_x().len()];
+    let seen = RefCell::new(Vec::new());
+    solver.apply_mu_in_place(&mut f, |mu| {
+        seen.borrow_mut().push(mu);
+        Complex::new(0.0, 0.0)
+    });
+    seen.into_inner().chunks(ORDER).map(<[f64]>::to_vec).collect()
+}
+
+/// Max nodal error of the solution of `(α - d²/dx²) u = f` on `[0, 1]`.
+fn solve_error_1d(
+    n: usize,
+    bc: BoundaryCondition,
+    alpha: f64,
+    exact: impl Fn(f64) -> f64,
+    rhs: impl Fn(f64) -> f64,
+) -> f64 {
+    let solver = Poisson::new(1.0, 0.0, n, ORDER, bc);
+    let x = solver.get_x();
+    let mut u: Vec<f64> = x.iter().map(|&xi| rhs(xi)).collect();
+    solver.solve_in_place_real(&mut u, alpha, 1.0);
+    x.iter()
+        .zip(&u)
+        .map(|(&xi, &ui)| (ui - exact(xi)).abs())
+        .fold(0.0, f64::max)
+}
+
+/// The lowest eigenvalue of mode `k = 1` is the discrete eigenvalue of
+/// `sin(πx)` (Dirichlet), `cos(πx)` (Neumann) or `e^{2iπx}` (periodic) on
+/// `[0, 1]`.  Its dispersion error is `O((π/n)^{2r})`, below 1e-16 for
+/// `n ≥ 256`, so `π²` (resp. `4π²`) is an exact double-precision reference.
+#[test]
+fn lowest_symbol_eigenvalue() {
+    let cases = [
+        (BoundaryCondition::Dirichlet, PI * PI),
+        (BoundaryCondition::Neumann, PI * PI),
+        (BoundaryCondition::Periodic, 4.0 * PI * PI),
+    ];
+    let mut worst = 0.0_f64;
+    for (bc, exact) in cases {
+        println!("{bc:?}: relative error of the lowest eigenvalue of mode k = 1");
+        for n in [256, 1024, 4096, 16384] {
+            let solver = Poisson::new(1.0, 0.0, n, ORDER, bc);
+            let mu0 = symbol_eigenvalues(&solver)[1]
+                .iter()
+                .cloned()
+                .fold(f64::INFINITY, f64::min);
+            let rel = ((mu0 - exact) / exact).abs();
+            println!("  n = {n:>5}   mu_max = {:.1e}   error = {rel:.1e}", solver.mu_max());
+            worst = worst.max(rel);
+        }
+    }
+    assert!(worst < 1e-13, "lowest eigenvalue relative error {worst:.1e}");
+}
+
+/// Solve `-u'' + u = f` for a single Fourier mode, where the discretisation
+/// error is negligible: the nodal error is the round-off floor of the solve
+/// and grows with `n`.
+#[test]
+fn solve_floor_1d() {
+    type Case = (&'static str, BoundaryCondition, fn(f64) -> f64);
+    let cases: [Case; 3] = [
+        ("Dirichlet, u = sin(pi x)", BoundaryCondition::Dirichlet, |x| (PI * x).sin()),
+        ("Neumann,   u = cos(pi x)", BoundaryCondition::Neumann, |x| (PI * x).cos()),
+        ("Periodic,  u = sin(2 pi x)", BoundaryCondition::Periodic, |x| (2.0 * PI * x).sin()),
+    ];
+    let mut worst = 0.0_f64;
+    for (name, bc, u) in cases {
+        // -u'' + u = (1 + w²) u with w = π or 2π.
+        let w = if bc == BoundaryCondition::Periodic { 2.0 * PI } else { PI };
+        let f = move |x: f64| (1.0 + w * w) * u(x);
+        println!("{name}");
+        for n in [1024, 4096, 16384] {
+            let err = solve_error_1d(n, bc, 1.0, u, f);
+            println!("  n = {n:>5}   max nodal error = {err:.1e}");
+            worst = worst.max(err);
+        }
+    }
+    assert!(worst < 1e-12, "1D solve error {worst:.1e}");
+}
+
+/// Same as `solve_floor_1d` in 2D: the floor is set by `Σ_d μ_max^{(d)}`.
+#[test]
+fn solve_floor_2d() {
+    let n = 1024;
+    let solver = PoissonND::<2>::new(
+        [1.0; 2],
+        [0.0; 2],
+        [n; 2],
+        [ORDER; 2],
+        [BoundaryCondition::Dirichlet; 2],
+    );
+    let u = |x: f64, y: f64| (PI * x).sin() * (PI * y).sin();
+    let pts = solver.get_x();
+    // -Δu + u = (1 + 2π²) u
+    let mut f: Vec<f64> = pts.iter().map(|&[x, y]| (1.0 + 2.0 * PI * PI) * u(x, y)).collect();
+    solver.solve_in_place_real(&mut f, 1.0, 1.0);
+    let err = pts
+        .iter()
+        .zip(&f)
+        .map(|(&[x, y], &ui)| (ui - u(x, y)).abs())
+        .fold(0.0, f64::max);
+    println!(
+        "2D Dirichlet, {n}x{n} elements, sum mu_max = {:.1e}: max nodal error = {err:.1e}",
+        solver.mu_max()
+    );
+    assert!(err < 1e-12, "2D solve error {err:.1e}");
+}
+
+/// Near a resonance the error floor is amplified by `1/|α + μ0|`.
+///
+/// With `α = -π²(1 - δ)` the mode `sin(πx)` is divided by `λ0 = π² δ`, and
+/// the solve reproduces `u = sin(πx)` from `f = λ0 u` with relative error
+/// `(error on μ0) / λ0`.
+#[test]
+fn near_resonance() {
+    let delta = 1e-6;
+    let alpha = -PI * PI * (1.0 - delta);
+    let lambda0 = PI * PI * delta;
+    let u = |x: f64| (PI * x).sin();
+    let mut worst = 0.0_f64;
+    println!("alpha = -pi^2 (1 - {delta:.0e}), lambda0 = {lambda0:.2e}");
+    for n in [256, 1024, 4096] {
+        let err = solve_error_1d(n, BoundaryCondition::Dirichlet, alpha, u, |x| lambda0 * u(x));
+        println!("  n = {n:>5}   relative error = {err:.1e}");
+        worst = worst.max(err);
+    }
+    assert!(worst < 1e-8, "near-resonance relative error {worst:.1e}");
 }

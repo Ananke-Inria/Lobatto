@@ -114,13 +114,10 @@
 //! return `(αM + βK)⁻¹ f`; `apply_*` take the **nodal vector** and return
 //! `g(αI + βM⁻¹K) f` — with `g(λ) = 1/λ` that is `(αM + βK)⁻¹ M f`.
 //!
-//! **Pseudo-inverse cutoff.** The solves annihilate eigenvalues with
-//! `|λ| ≤ pinv_rel_tol · (|α| + |β|·max|μ|)` (the roundoff constant mode of a
-//! pure Neumann/periodic Laplacian); the default
-//! [`solver::DEFAULT_PINV_REL_TOL`]` = 1e-12` can be changed with
-//! `with_pinv_rel_tol` / `set_pinv_rel_tol`; `pinv_tol(alpha, beta)` returns
-//! the absolute cutoff. The `apply_*` methods apply no cutoff — `g` decides
-//! what happens at `λ = 0`.
+//! **Kernel.** The solves annihilate exactly zero eigenvalues `λ = α + β·μ`:
+//! the constant mode of a pure Neumann/periodic Laplacian (`α = 0`) has
+//! `μ = 0` exactly and is projected out. No other cutoff is applied. The
+//! `apply_*` methods do not even do that — `g` decides what happens at `λ = 0`.
 
 pub mod hofft;
 pub mod solver;

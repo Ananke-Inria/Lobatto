@@ -143,24 +143,11 @@ pub struct Poisson {
     /// $\tilde{M}_{jj} = h w_j$, with DOF 0 accumulating contributions from both sides
     /// of the element interface: $\tilde{M}_{00} = 2h w_0$.
     periodic_mass_matrix: DVector<f64>,
-    /// Relative pseudo-inverse cutoff (default [`DEFAULT_PINV_REL_TOL`]); the
-    /// absolute cutoff used by the solves is [`pinv_tol`](Self::pinv_tol).
-    pinv_rel_tol: f64,
-    /// Spectral radius `max |μ|` of the stiffness symbols, precomputed for the
-    /// cutoff bound.
+    /// Spectral radius `max |μ|` of the stiffness symbols.
     mu_max: f64,
     /// Boundary condition type.
     bc: BoundaryCondition,
 }
-
-/// Default relative pseudo-inverse cutoff of the solvers (`1e-12`).
-///
-/// Per-mode eigenvalues with `|λ| ≤ pinv_rel_tol · (|α| + |β|·max |μ|)`
-/// are treated as zero: analytically zero eigenvalues
-/// — the constant mode when `α = 0` with periodic or Neumann conditions — are
-/// computed by the eigensolver as roundoff `~ε·λ_max`, and the relative bound
-/// filters them regardless of problem size.
-pub const DEFAULT_PINV_REL_TOL: f64 = 1e-12;
 
 /// Spectral radius `max |μ|` over a set of per-mode real eigenvalue vectors.
 fn max_abs_eigenvalue(eigenvalues: &[DVector<f64>]) -> f64 {
@@ -171,15 +158,202 @@ fn max_abs_eigenvalue(eigenvalues: &[DVector<f64>]) -> f64 {
 }
 
 /// Pseudo-inverse of the eigenvalue `lam`: `conj(λ)/|λ|²` (one real division,
-/// no square root), or `0` when `|λ|² ≤ tol_sqr`.
+/// no square root), or `0` when `λ` is exactly zero.
 #[inline(always)]
-fn pinv(lam: Complex<f64>, tol_sqr: f64) -> Complex<f64> {
+fn pinv(lam: Complex<f64>) -> Complex<f64> {
     let norm_sqr = lam.norm_sqr();
-    if norm_sqr > tol_sqr {
+    if norm_sqr > 0.0 {
         lam.conj() / norm_sqr
     } else {
         Complex::new(0.0, 0.0)
     }
+}
+
+/// Element-level data from which the `r × r` stiffness symbols are assembled.
+///
+/// The symbol of a mode with inter-element phase `φ` splits as
+/// $$\tilde{K}(\varphi) = \tilde{K}(0) + D(\varphi),$$
+/// where `K̃(0)` is the phase-free part (it annihilates the constant vector)
+/// and `D(φ)` collects the terms multiplied by `cos φ − 1` and `e^{-iφ} − 1`.
+/// `D` is formed from `sin(φ/2)` rather than by subtracting `1` from
+/// `cos φ`, so that its entries, of order `φ` and `φ²`, carry full relative
+/// precision even for the lowest modes where `φ ≪ 1`.
+struct LocalSymbol {
+    r: usize,
+    /// Phase-free symbol `K̃(0)` (real symmetric, `r × r`).
+    k0: DMatrix<f64>,
+    /// `K_{r,i} / h` for `i = 0..=r`: the last row of the element stiffness
+    /// matrix, which couples the two sides of an element interface.
+    k_row_r: DVector<f64>,
+    /// Diagonal of the periodic local mass matrix `M̃` (length `r`):
+    /// `h·w_j`, with the interface node `j = 0` weighted `2h·w_0`.
+    mass: DVector<f64>,
+}
+
+impl LocalSymbol {
+    fn new(r: usize, h: f64, basis: &CollocationBasis) -> Self {
+        let mass_matrix = basis.weights_matrix();
+        let diff_matrix = basis.diff_matrix(0);
+        // Element stiffness matrix K = Dᵀ M D on the reference element.
+        let stiffness: DMatrix<f64> = diff_matrix.transpose() * &mass_matrix * diff_matrix;
+
+        let mass = DVector::from_fn(r, |i, _| {
+            if i == 0 {
+                2.0 * h * mass_matrix[(0, 0)]
+            } else {
+                h * mass_matrix[(i, i)]
+            }
+        });
+        let k_row_r = DVector::from_fn(r + 1, |i, _| stiffness[(r, i)] / h);
+
+        // K̃(0): interior block K_{ij}/h; interface row/column accumulate the
+        // contributions of both neighbouring elements with phase 1.
+        let mut k0 = DMatrix::<f64>::zeros(r, r);
+        for i in 1..r {
+            for j in 1..r {
+                k0[(i, j)] = stiffness[(i, j)] / h;
+            }
+        }
+        k0[(0, 0)] = 2.0 * stiffness[(0, 0)] / h + 2.0 * k_row_r[0];
+        for i in 1..r {
+            k0[(0, i)] = stiffness[(0, i)] / h + k_row_r[i];
+            k0[(i, 0)] = k0[(0, i)];
+        }
+
+        Self {
+            r,
+            k0,
+            k_row_r,
+            mass,
+        }
+    }
+
+    /// Phase-dependent part `D(φ) = K̃(φ) − K̃(0)`, formed without cancellation.
+    ///
+    /// With `s = sin(φ/2)`, `c = cos(φ/2)`:
+    /// `cos φ − 1 = −2s²` and `e^{-iφ} − 1 = −2s(s + ic)`, hence
+    /// `D_00 = −4s²·K_{0r}/h`, `D_{0i} = −2s(s + ic)·K_{ri}/h`, `D_{i0} = conj(D_{0i})`,
+    /// all other entries zero.
+    fn phase_part(&self, phi: f64) -> DMatrix<Complex<f64>> {
+        let (s, c) = (0.5 * phi).sin_cos();
+        let mut d = DMatrix::<Complex<f64>>::zeros(self.r, self.r);
+        d[(0, 0)] = Complex::new(-4.0 * s * s * self.k_row_r[0], 0.0);
+        let factor = -2.0 * s * Complex::new(s, c);
+        for i in 1..self.r {
+            d[(0, i)] = factor * self.k_row_r[i];
+            d[(i, 0)] = d[(0, i)].conj();
+        }
+        d
+    }
+
+    /// Full symbol `K̃(φ) = K̃(0) + D(φ)`.
+    fn symbol(&self, phi: f64) -> DMatrix<Complex<f64>> {
+        self.k0.map(|v| Complex::new(v, 0.0)) + self.phase_part(phi)
+    }
+
+    /// Deflated eigendecomposition of the mass-normalised phase-free symbol.
+    ///
+    /// Diagonalises $A_0 = \tilde{M}^{-1/2} \tilde{K}(0) \tilde{M}^{-1/2}$, then
+    /// replaces the eigenpair belonging to the numerically zero eigenvalue by
+    /// the exact one: eigenvalue `0`, eigenvector `e ∝ M̃^{1/2}·𝟙` (the constant
+    /// nodal vector, which `K̃(0)` annihilates). The `r − 1` upper eigenvectors
+    /// are re-orthonormalised against `e` by modified Gram-Schmidt and sorted
+    /// by ascending eigenvalue.
+    fn deflated_basis(&self) -> DeflatedBasis {
+        let r = self.r;
+        let m_inv_sqrt = self.mass.map(|m| 1.0 / m.sqrt());
+        let a0 = DMatrix::from_fn(r, r, |i, j| m_inv_sqrt[i] * self.k0[(i, j)] * m_inv_sqrt[j]);
+        let eig = SymmetricEigen::new(a0);
+
+        // The computed eigenvalue closest to zero is the constant mode.
+        let null = (0..r)
+            .min_by(|&i, &j| {
+                eig.eigenvalues[i]
+                    .abs()
+                    .partial_cmp(&eig.eigenvalues[j].abs())
+                    .expect("finite eigenvalues")
+            })
+            .expect("r ≥ 1");
+
+        let mut upper: Vec<(f64, DVector<f64>)> = (0..r)
+            .filter(|&i| i != null)
+            .map(|i| (eig.eigenvalues[i], eig.eigenvectors.column(i).into_owned()))
+            .collect();
+        upper.sort_by(|a, b| a.0.partial_cmp(&b.0).expect("finite eigenvalues"));
+
+        let mut w0 = DMatrix::<f64>::zeros(r, r);
+        let mut lambda = DVector::<f64>::zeros(r);
+        w0.set_column(0, &self.mass.map(f64::sqrt).normalize());
+        for (j, (mu, mut v)) in upper.into_iter().enumerate() {
+            let j = j + 1;
+            for i in 0..j {
+                let q = w0.column(i);
+                let proj = q.dot(&v);
+                v.axpy(-proj, &q, 1.0);
+            }
+            v.normalize_mut();
+            w0.set_column(j, &v);
+            lambda[j] = mu;
+        }
+
+        DeflatedBasis { w0, lambda }
+    }
+
+    /// Lowest eigenvalue of the mode with phase `φ`, accurate to relative round-off.
+    ///
+    /// In the deflated basis `W0 = [e | W_u]` of `A0`, the mass-normalised
+    /// symbol of the mode reads
+    /// $$W_0^\dagger \tilde{M}^{-1/2} \tilde{K}(\varphi) \tilde{M}^{-1/2} W_0
+    /// = \begin{pmatrix} a & b^\dagger \\ b & L' \end{pmatrix},
+    /// \qquad L' = \mathrm{diag}(\Lambda_u) + W_u^\dagger \hat{D} W_u,$$
+    /// with `a = O(φ²/h²)`, `b = O(φ/h²)` and `L' = O(1/h²)`, where
+    /// `D̂ = M̃^{-1/2} D(φ) M̃^{-1/2}`. Its lowest eigenvalue is the root below
+    /// `λ'_min` of the secular function
+    /// $$f(\mu) = a - \mu - b^\dagger (L' - \mu)^{-1} b .$$
+    /// The eigensolver's value `mu_lo` is within `ε·μ_max` of that root, and
+    /// one Newton step from it,
+    /// $$y = (L' - \mu_\mathrm{lo})^{-1} b, \qquad
+    /// \mu_0 = \mu_\mathrm{lo} + \frac{a - \mu_\mathrm{lo} - b^\dagger y}{1 + \|y\|^2},$$
+    /// squares that error: all terms are of order `φ²/h²` with full relative
+    /// precision, nothing of size `μ_max` cancels. For `φ = 0` (`D = 0`) the
+    /// result is exactly `0`.
+    fn lowest_eigenvalue(&self, basis: &DeflatedBasis, phi: f64, mu_lo: f64) -> f64 {
+        let r = self.r;
+        let m_inv_sqrt = self.mass.map(|m| 1.0 / m.sqrt());
+        let mut d_hat = self.phase_part(phi);
+        for i in 0..r {
+            for j in 0..r {
+                d_hat[(i, j)] *= m_inv_sqrt[i] * m_inv_sqrt[j];
+            }
+        }
+        let w0 = basis.w0.map(|v| Complex::new(v, 0.0));
+        let proj = w0.adjoint() * d_hat * &w0;
+
+        let a = proj[(0, 0)].re;
+        if r == 1 {
+            return a;
+        }
+        let b = proj.view((1, 0), (r - 1, 1)).into_owned();
+        let mut shifted = proj.view((1, 1), (r - 1, r - 1)).into_owned();
+        for j in 0..r - 1 {
+            shifted[(j, j)] += basis.lambda[j + 1] - mu_lo;
+        }
+        let y = shifted
+            .lu()
+            .solve(&b)
+            .expect("L' − μ_lo is positive definite: μ_lo lies below the upper branches");
+        mu_lo + (a - mu_lo - b.dotc(&y).re) / (1.0 + y.norm_squared())
+    }
+}
+
+/// Orthonormal eigenbasis of `A0 = M̃^{-1/2} K̃(0) M̃^{-1/2}` with the constant
+/// mode deflated exactly (see [`LocalSymbol::deflated_basis`]).
+struct DeflatedBasis {
+    /// Orthonormal eigenvectors `W0`, column 0 being the exact null vector `e`.
+    w0: DMatrix<f64>,
+    /// Eigenvalues `Λ0`: `lambda[0] == 0` exactly, the upper `r − 1` positive
+    /// and ascending.
+    lambda: DVector<f64>,
 }
 
 impl Poisson {
@@ -209,51 +383,28 @@ impl Poisson {
             BoundaryCondition::Neumann => n + 1,
         };
 
-        let coeff_phase = if bc == BoundaryCondition::Periodic {
-            2.0
-        } else {
-            1.0
+        let n_fft = match bc {
+            BoundaryCondition::Periodic => n,
+            BoundaryCondition::Dirichlet | BoundaryCondition::Neumann => 2 * n,
         };
 
-        let mut symbol = vec![DMatrix::<Complex::<f64>>::zeros(r, r); n_freq];
-        let mass_matrix = lobatto_basis.weights_matrix();
-        let periodic_mass_matrix = DVector::from_fn(r, |i, _| {
-            if i == 0 {
-                h * 2.0 * mass_matrix[(0, 0)]
-            } else {
-                h * mass_matrix[(i, i)]
-            }
-        });
-        let diff_matrix = lobatto_basis.diff_matrix(0);
+        let local = LocalSymbol::new(r, h, &lobatto_basis);
+        let periodic_mass_matrix = local.mass.clone();
 
-        // Construct the stiffness matrix
-        let stiffness_matrix: Matrix<f64, Dyn, Dyn, VecStorage<f64, Dyn, Dyn>> =
-            diff_matrix.transpose() * mass_matrix.clone() * diff_matrix;
-
-        // Compute the stiffness symbol K̃(k) for each frequency. The mass part
-        // α·M̃ is diagonal and phase-free, so α and β are applied to the
+        // Stiffness symbol K̃(k) = K̃(0) + D(φ_k) for each frequency. The mass
+        // part α·M̃ is diagonal and phase-free, so α and β are applied to the
         // eigenvalues at solve time instead of being baked into the symbol.
-        for (k, s) in symbol.iter_mut().enumerate() {
-            let phase = -coeff_phase * PI * (k as f64) / (n as f64);
-            let cos = phase.cos();
-            let sin = phase.sin();
-            let exp = cos + Complex::<f64>::I * sin;
-
-            for i in 1..r {
-                for j in 1..r {
-                    s[(i, j)] = (stiffness_matrix[(i, j)] / h).into();
-                }
-            }
-
-            s[(0, 0)] = (2.0 * stiffness_matrix[(0, 0)] / h
-                + 2.0 * stiffness_matrix[(0, r)] * cos / h)
-                .into();
-
-            for i in 1..r {
-                s[(0, i)] = stiffness_matrix[(0, i)] / h + stiffness_matrix[(r, i)] * exp / h;
-                s[(i, 0)] = s[(0, i)].conj();
-            }
-        }
+        // Inter-element phase φ_k = 2πk/n_fft, reduced to (-π, π]: the symbol
+        // is 2π-periodic in φ, and sin(φ/2), which sets the lowest eigenvalue,
+        // keeps full relative precision only when |φ/2| is not close to π.
+        let phis: Vec<f64> = (0..n_freq)
+            .map(|k| {
+                let k = if 2 * k > n_fft { k as f64 - n_fft as f64 } else { k as f64 };
+                2.0 * PI * k / (n_fft as f64)
+            })
+            .collect();
+        let symbol: Vec<DMatrix<Complex<f64>>> =
+            phis.iter().map(|&phi| local.symbol(phi)).collect();
 
         let mass_sqrt_inv_c: DMatrix<Complex<f64>> =
             DMatrix::from_diagonal(&DVector::from_fn(r, |i, _| {
@@ -266,7 +417,17 @@ impl Poisson {
             .iter()
             .map(|s| SymmetricEigen::new(&mass_sqrt_inv_c * s * &mass_sqrt_inv_c))
             .collect();
-        let eigenvalues: Vec<DVector<f64>> = eigs.iter().map(|e| e.eigenvalues.clone()).collect();
+        let mut eigenvalues: Vec<DVector<f64>> =
+            eigs.iter().map(|e| e.eigenvalues.clone()).collect();
+
+        // The eigensolver returns the lowest eigenvalue of each mode with an
+        // absolute error ~ε·μ_max, i.e. a relative error growing like n²;
+        // recompute it without cancellation (the eigenvectors are accurate).
+        let basis = local.deflated_basis();
+        for (mu, &phi) in eigenvalues.iter_mut().zip(&phis) {
+            let j0 = mu.imin();
+            mu[j0] = local.lowest_eigenvalue(&basis, phi, mu[j0]);
+        }
 
         // M-orthonormal eigenvectors of M^{-1} K̃(k)
         let eigenvectors: Vec<DMatrix<Complex<f64>>> = eigs
@@ -274,11 +435,6 @@ impl Poisson {
             .map(|e| &mass_sqrt_inv_c * e.eigenvectors.clone())
             .collect();
 
-        // Spectral radius for the relative pseudo-inverse cutoff: an
-        // analytically zero eigenvalue (the constant mode of the k = 0 symbol
-        // when α = 0) is computed as roundoff ~ε·λ_max, which outgrows any
-        // absolute threshold as the spectral radius grows with n and r. The
-        // cutoff is scaled with the bound |α| + |β|·max |μ| on |α + β·μ|.
         let mu_max = max_abs_eigenvalue(&eigenvalues);
 
         Self {
@@ -287,41 +443,9 @@ impl Poisson {
             eigenvalues,
             eigenvectors,
             periodic_mass_matrix,
-            pinv_rel_tol: DEFAULT_PINV_REL_TOL,
             mu_max,
             bc,
         }
-    }
-
-    /// Builder-style setter for the relative pseudo-inverse cutoff
-    /// (see [`DEFAULT_PINV_REL_TOL`]).
-    ///
-    /// # Panics
-    /// If `rel_tol` is negative or NaN.
-    pub fn with_pinv_rel_tol(mut self, rel_tol: f64) -> Self {
-        self.set_pinv_rel_tol(rel_tol);
-        self
-    }
-
-    /// Set the relative pseudo-inverse cutoff (see [`DEFAULT_PINV_REL_TOL`]).
-    ///
-    /// # Panics
-    /// If `rel_tol` is negative or NaN.
-    pub fn set_pinv_rel_tol(&mut self, rel_tol: f64) {
-        assert!(rel_tol >= 0.0, "pinv_rel_tol must be non-negative (got {rel_tol})");
-        self.pinv_rel_tol = rel_tol;
-    }
-
-    /// Relative pseudo-inverse cutoff (default [`DEFAULT_PINV_REL_TOL`]).
-    pub fn pinv_rel_tol(&self) -> f64 {
-        self.pinv_rel_tol
-    }
-
-    /// Absolute pseudo-inverse cutoff used by
-    /// [`solve_in_place`](Self::solve_in_place) for the coefficients `α`, `β`:
-    /// `pinv_rel_tol · (|α| + |β|·max |μ|)`.
-    pub fn pinv_tol(&self, alpha: impl Into<Complex<f64>>, beta: impl Into<Complex<f64>>) -> f64 {
-        self.pinv_rel_tol * (alpha.into().norm() + beta.into().norm() * self.mu_max)
     }
 
     /// Spectral radius `max |μ|` of the stiffness operator `M⁻¹K` on this grid.
@@ -360,19 +484,17 @@ impl Poisson {
     /// 2. Per-mode symbol solve: $\hat{u}_k = V_k \Lambda_k^{-1} V_k^\dagger \hat{f}_k$.
     /// 3. Inverse FFT.
     ///
-    /// Eigenvalues below the pseudo-inverse cutoff [`pinv_tol`](Self::pinv_tol)
-    /// are annihilated (the kernel of a pure Neumann/periodic Laplacian is
-    /// projected out).
+    /// An exactly zero eigenvalue `λ = α + β·μ` is annihilated: the constant
+    /// mode of a pure periodic/Neumann Laplacian (`α = 0`) has `μ = 0` exactly,
+    /// so its kernel is projected out. No other cutoff is applied; a nearly
+    /// singular operator is the caller's responsibility.
     pub fn solve_in_place(
         &self,
         f: &mut [Complex<f64>],
         alpha: impl Into<Complex<f64>>,
         beta: impl Into<Complex<f64>>,
     ) {
-        let (alpha, beta) = (alpha.into(), beta.into());
-        let tol = self.pinv_tol(alpha, beta);
-        let tol_sqr = tol * tol;
-        self.apply_in_place(f, alpha, beta, |lam| pinv(lam, tol_sqr));
+        self.apply_in_place(f, alpha, beta, pinv);
     }
 
     /// Apply the operator function `g(L)` with `L = α I + β M⁻¹K` to the
@@ -560,9 +682,6 @@ pub struct PoissonND<const N: usize> {
     /// Per-direction DOF index offset for mass scaling: 1 for Dirichlet (first DOF
     /// is local node `j = 1`), 0 otherwise.
     j_offsets: [usize; N],
-    /// Relative pseudo-inverse cutoff (default [`DEFAULT_PINV_REL_TOL`]); the
-    /// absolute cutoff used by the solves is [`pinv_tol`](Self::pinv_tol).
-    pinv_rel_tol: f64,
     /// Bound `Σ_d max |μ^(d)|` on the tensor stiffness eigenvalue magnitude.
     mu_max: f64,
 }
@@ -617,9 +736,7 @@ impl<const N: usize> PoissonND<N> {
             }
         });
 
-        // Bound for the relative pseudo-inverse cutoff (see [`Poisson::new`]):
-        // `|α| + |β|·Σ_d max |μ^(d)|` bounds the combined eigenvalue magnitude
-        // `|α + β·Σ_d μ^(d)|`.
+        // `Σ_d max |μ^(d)|` bounds the combined eigenvalue magnitude `|Σ_d μ^(d)|`.
         let mu_max = solvers.iter().map(|s| s.mu_max).sum::<f64>();
 
         Self {
@@ -630,40 +747,8 @@ impl<const N: usize> PoissonND<N> {
             n_freq_total,
             n_freq_strides,
             j_offsets,
-            pinv_rel_tol: DEFAULT_PINV_REL_TOL,
             mu_max,
         }
-    }
-
-    /// Builder-style setter for the relative pseudo-inverse cutoff
-    /// (see [`DEFAULT_PINV_REL_TOL`]).
-    ///
-    /// # Panics
-    /// If `rel_tol` is negative or NaN.
-    pub fn with_pinv_rel_tol(mut self, rel_tol: f64) -> Self {
-        self.set_pinv_rel_tol(rel_tol);
-        self
-    }
-
-    /// Set the relative pseudo-inverse cutoff (see [`DEFAULT_PINV_REL_TOL`]).
-    ///
-    /// # Panics
-    /// If `rel_tol` is negative or NaN.
-    pub fn set_pinv_rel_tol(&mut self, rel_tol: f64) {
-        assert!(rel_tol >= 0.0, "pinv_rel_tol must be non-negative (got {rel_tol})");
-        self.pinv_rel_tol = rel_tol;
-    }
-
-    /// Relative pseudo-inverse cutoff (default [`DEFAULT_PINV_REL_TOL`]).
-    pub fn pinv_rel_tol(&self) -> f64 {
-        self.pinv_rel_tol
-    }
-
-    /// Absolute pseudo-inverse cutoff used by
-    /// [`solve_in_place`](Self::solve_in_place) for the coefficients `α`, `β`:
-    /// `pinv_rel_tol · (|α| + |β|·Σ_d max |μ^(d)|)`.
-    pub fn pinv_tol(&self, alpha: impl Into<Complex<f64>>, beta: impl Into<Complex<f64>>) -> f64 {
-        self.pinv_rel_tol * (alpha.into().norm() + beta.into().norm() * self.mu_max)
     }
 
     /// Bound `Σ_d max |μ^(d)|` on the spectral radius of the tensor stiffness
@@ -700,17 +785,15 @@ impl<const N: usize> PoissonND<N> {
     ///
     /// See the struct-level documentation for the four-step ND algorithm.
     /// Step 3 (symbol solve) is parallelised over independent mode tuples with Rayon.
-    /// Eigenvalues below the cutoff [`pinv_tol`](Self::pinv_tol) are annihilated.
+    /// An exactly zero eigenvalue `λ = α + β·Σ_d μ^(d)` (the constant mode of a
+    /// pure periodic/Neumann Laplacian) is annihilated; no other cutoff is applied.
     pub fn solve_in_place(
         &self,
         f: &mut [Complex<f64>],
         alpha: impl Into<Complex<f64>>,
         beta: impl Into<Complex<f64>>,
     ) {
-        let (alpha, beta) = (alpha.into(), beta.into());
-        let tol = self.pinv_tol(alpha, beta);
-        let tol_sqr = tol * tol;
-        self.apply_in_place(f, alpha, beta, |lam| pinv(lam, tol_sqr));
+        self.apply_in_place(f, alpha, beta, pinv);
     }
 
     /// Apply the operator function `g(L)` with `L = α I + β M⁻¹K` to the
@@ -977,17 +1060,11 @@ mod tests {
                     );
 
                     // 3. Round-trip with the operator eigenvalues λ = α + β·μ and the
-                    //    solver's own pseudo-inverse cutoff: Q diag(1/λ) Q† M V Λ = V
+                    //    solver's pseudo-inverse: Q diag(1/λ) Q† M V Λ = V
                     let lambda = |i: usize| alpha + beta * solver.eigenvalues[k][i];
                     let lambda_diag = DMatrix::from_diagonal(&DVector::from_fn(r, |i, _| lambda(i)));
-                    let lambda_inv = DMatrix::from_diagonal(&DVector::from_fn(r, |i, _| {
-                        let lam = lambda(i);
-                        if lam.norm() > solver.pinv_tol(alpha, beta) {
-                            1.0 / lam
-                        } else {
-                            Complex::new(0.0, 0.0)
-                        }
-                    }));
+                    let lambda_inv =
+                        DMatrix::from_diagonal(&DVector::from_fn(r, |i, _| pinv(lambda(i))));
                     let rhs = v * &lambda_inv * v.adjoint() * &m_c * v * &lambda_diag;
                     let recon_err = (v - &rhs).norm() / v.norm().max(1.0);
                     assert!(
@@ -999,16 +1076,51 @@ mod tests {
         }
     }
 
-    /// Regression: the pseudo-inverse must annihilate the operator kernel.
+    /// The deflated basis of `A0` is orthonormal, diagonalises `A0` to
+    /// round-off, and carries the constant mode as an exact zero eigenvalue.
+    #[test]
+    fn test_deflated_basis() {
+        for r in 1..=6 {
+            for n in [4usize, 64, 4096] {
+                let h = 1.0 / n as f64;
+                let basis = CollocationBasis::new(vec![(r + 1, Gauss::Lobatto)]);
+                let local = LocalSymbol::new(r, h, &basis);
+                let DeflatedBasis { w0, lambda } = local.deflated_basis();
+
+                let ortho_err = (w0.transpose() * &w0 - DMatrix::<f64>::identity(r, r)).norm();
+                assert!(ortho_err < 1e-14, "r={r} n={n}: W0 not orthonormal ({ortho_err:.2e})");
+
+                assert_eq!(lambda[0], 0.0, "r={r} n={n}: deflated eigenvalue not exactly 0");
+                for j in 1..r {
+                    assert!(lambda[j] > 0.0, "r={r} n={n}: upper eigenvalue {j} not positive");
+                    assert!(lambda[j] >= lambda[j - 1], "r={r} n={n}: eigenvalues not ascending");
+                }
+
+                let e = local.mass.map(f64::sqrt).normalize();
+                assert_eq!(w0.column(0), e, "r={r} n={n}: column 0 is not the exact null vector");
+
+                let m_inv_sqrt = local.mass.map(|m| 1.0 / m.sqrt());
+                let a0 = DMatrix::from_fn(r, r, |i, j| {
+                    m_inv_sqrt[i] * local.k0[(i, j)] * m_inv_sqrt[j]
+                });
+                let residual = (&a0 * &w0 - &w0 * DMatrix::from_diagonal(&lambda)).norm();
+                let scale = a0.norm().max(1.0);
+                assert!(
+                    residual < 1e-14 * scale,
+                    "r={r} n={n}: A0 W0 ≠ W0 Λ0 (residual {residual:.2e}, |A0| = {scale:.2e})"
+                );
+            }
+        }
+    }
+
+    /// The pseudo-inverse annihilates the operator kernel.
     ///
-    /// With `α = 0` and periodic BCs the `k = 0` symbol has an analytically zero
-    /// constant-mode eigenvalue, computed by the eigensolver as roundoff on the
-    /// order of `ε·λ_max`. At `(n, r) = (16, 4)` that roundoff exceeds `1e-12`,
-    /// so an *absolute* pseudo-inverse cutoff fails to filter it and the
-    /// constant mode of the RHS is amplified by `~1/λ ≈ 1e12`. The observable
+    /// With `α = 0` and periodic BCs the `k = 0` symbol has a constant-mode
+    /// eigenvalue that is exactly zero (deflated evaluation), so the solve
+    /// projects the constant mode out without any cutoff. The observable
     /// spec: the solution is invariant under a constant shift of the RHS.
     #[test]
-    fn test_pinv_filters_constant_mode_1d() {
+    fn test_constant_mode_annihilated_1d() {
         let (n, r) = (16, 4);
         let solver = Poisson::new(1.0, 0.0, n, r, BoundaryCondition::Periodic);
         let x = solver.get_x();
@@ -1032,11 +1144,10 @@ mod tests {
         );
     }
 
-    /// ND version of [`test_pinv_filters_constant_mode_1d`]: the roundoff of the
-    /// zero ND eigenvalue `λ^(0)_0 + λ^(1)_0` is the sum of two per-direction
-    /// roundoffs, so it crosses an absolute `1e-12` cutoff even sooner.
+    /// ND version of [`test_constant_mode_annihilated_1d`]: the ND eigenvalue
+    /// `μ^(0)_0 + μ^(1)_0` of the constant mode is the sum of two exact zeros.
     #[test]
-    fn test_pinv_filters_constant_mode_2d() {
+    fn test_constant_mode_annihilated_2d() {
         let solver = PoissonND::<2>::new(
             [1.0; 2],
             [0.0; 2],

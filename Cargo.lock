@@ -407,7 +407,7 @@ dependencies = [
 
 [[package]]
 name = "lobatto-fft"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "criterion",
  "lobatto 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",

@@ -14,3 +14,18 @@ Provides:
 Used by [`lobatto-fft`](https://crates.io/crates/lobatto-fft) as the grid layer under its HoFFT transforms and screened Poisson solvers.
 
 Part of the [QuadratiX](https://github.com/OndoMathX/QuadratiX) workspace.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

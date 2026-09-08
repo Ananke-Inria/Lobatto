@@ -54,7 +54,7 @@ configurations (e.g. Dirichlet in x, Neumann in y).
 
 ```toml
 [dependencies]
-lobatto-fft = "0.4"
+lobatto-fft = "0.5"
 ```
 
 ```rust
@@ -166,12 +166,10 @@ exponential are therefore cheaper than `m` solves.
 `(αM + βK)⁻¹ f`; `apply_*` take the **nodal vector** and return `g(αI + βM⁻¹K) f`
 (with `g(λ) = 1/λ`, that is `(αM + βK)⁻¹ M f`).
 
-**Pseudo-inverse cutoff** — the solves annihilate eigenvalues with
-`|λ| ≤ pinv_rel_tol · (|α| + |β| max|μ|)`, which filters the roundoff constant
-mode of a pure periodic/Neumann Laplacian. Default `DEFAULT_PINV_REL_TOL = 1e-12`;
-change it with `with_pinv_rel_tol(tol)` / `set_pinv_rel_tol(tol)`, inspect the
-absolute value with `pinv_tol(alpha, beta)` and the spectral radius with `mu_max()`.
-The `apply_*` methods apply no cutoff.
+**Kernel** — the solves annihilate exactly zero eigenvalues `λ = α + β μ`: the
+constant mode of a pure periodic/Neumann Laplacian (`α = 0`) has `μ = 0` exactly
+and is projected out. No other cutoff is applied; the spectral radius is
+available through `mu_max()`. The `apply_*` methods leave `λ = 0` to `g`.
 
 ### `hofft::Engine` / `hofft::EngineND<N>` — transform engines
 
