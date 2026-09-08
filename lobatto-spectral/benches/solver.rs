@@ -3,42 +3,40 @@ use lobatto_spectral::solver::*;
 use std::f64::consts::PI;
 use std::hint::black_box;
 
-/// Benchmark `solve_in_place` for the problem (M + K) u = f on [0, 1]
-/// using u(x) = exp(sin(2*pi*x)) as the test function.
-/// Sweeps over polynomial order r (single element, so ndof = r).
+/// Right-hand side of (M + K) u = f on [0, 1] for u(x) = exp(sin(2πx)).
+fn rhs_1d(x: f64) -> f64 {
+    let w = 2.0 * PI;
+    let s = (w * x).sin();
+    let c = (w * x).cos();
+    let u = s.exp();
+    u - w * w * (c * c - s) * u
+}
+
+fn u_1d(x: f64) -> f64 {
+    (2.0 * PI * x).sin().exp()
+}
+
+/// `(n, r)` pairs swept by every benchmark: `n·r` unknowns per direction.
+const CASES: &[(usize, usize)] = &[(1, 8), (1, 16), (2, 8), (4, 8), (1, 64), (8, 8)];
+
+/// Benchmark `solve_in_place` for (M + K) u = f on [0, 1].
 /// The 1D solver does not use Rayon, so no thread-count loop.
 fn bench_solve_in_place(c: &mut Criterion) {
-    let l = 1.0_f64;
-    let alpha = 1.0_f64;
-    let beta = 1.0_f64;
-    let w = 2.0 * PI / l;
-
-    let rhs_f = |x: f64| {
-        let s = (w * x).sin();
-        let cv = (w * x).cos();
-        let u = s.exp();
-        alpha * u - beta * w * w * (cv * cv - s) * u
-    };
-
-    let r_values: &[usize] = &[4, 8, 16, 32, 64];
-
     let mut group = c.benchmark_group("hot_solve_in_place");
 
-    for &r in r_values {
-        group.throughput(Throughput::Elements(r as u64));
-
-        let solver = Poisson::new(l, 0.0, r, alpha, beta, BoundaryCondition::Periodic);
+    for &(n, r) in CASES {
+        let solver = Poisson::new(1.0, 0.0, n, r, BoundaryCondition::Periodic);
         let x = solver.get_x();
-
-        let f_init: Vec<f64> = x.iter().map(|&xi| rhs_f(xi)).collect();
+        group.throughput(Throughput::Elements(x.len() as u64));
+        let f_init: Vec<f64> = x.iter().map(|&xi| rhs_1d(xi)).collect();
 
         group.bench_with_input(
-            BenchmarkId::from_parameter(r),
+            BenchmarkId::from_parameter(format!("n{n}_r{r}")),
             &(solver, f_init),
             |b, (solver, f_init)| {
                 b.iter(|| {
                     let mut f = black_box(f_init.clone());
-                    solver.solve_in_place(&mut f);
+                    solver.solve_in_place(&mut f, 1.0, 1.0);
                     f
                 })
             },
@@ -49,42 +47,24 @@ fn bench_solve_in_place(c: &mut Criterion) {
 }
 
 fn bench_solve_in_place_2d(c: &mut Criterion) {
-    let alpha = 1.0_f64;
-    let beta = 1.0_f64;
-    let w = 2.0 * PI;
-
-    let r_values: &[usize] = &[4, 8, 16, 32, 64];
     let thread_counts: &[usize] = &[1, 4, 8];
-
     let mut group = c.benchmark_group("hot_solve_in_place_2d");
 
-    for &r in r_values {
-        let ndof = r * r;
-        group.throughput(Throughput::Elements(ndof as u64));
-
+    for &(n, r) in CASES {
         let solver = PoissonND::<2>::new(
             [1.0; 2],
             [0.0; 2],
+            [n; 2],
             [r; 2],
-            alpha,
-            beta,
             [BoundaryCondition::Periodic; 2],
         );
         let x = solver.get_x();
+        group.throughput(Throughput::Elements(x.len() as u64));
 
-        let f_init: Vec<f64> = (0..ndof)
-            .map(|i| {
-                let (xi, yi) = (x[i][0], x[i][1]);
-                let rhs_1d = |t: f64| {
-                    let s = (w * t).sin();
-                    let cv = (w * t).cos();
-                    let u = s.exp();
-                    alpha * u - beta * w * w * (cv * cv - s) * u
-                };
-                let ux = (w * xi).sin().exp();
-                let uy = (w * yi).sin().exp();
-                rhs_1d(xi) * uy + ux * rhs_1d(yi) - alpha * ux * uy
-            })
+        // (M + K) u = f for u = u_1d(x) u_1d(y).
+        let f_init: Vec<f64> = x
+            .iter()
+            .map(|&[xi, yi]| rhs_1d(xi) * u_1d(yi) + u_1d(xi) * rhs_1d(yi) - u_1d(xi) * u_1d(yi))
             .collect();
 
         for &threads in thread_counts {
@@ -92,13 +72,16 @@ fn bench_solve_in_place_2d(c: &mut Criterion) {
                 .num_threads(threads)
                 .build()
                 .unwrap();
-            group.bench_function(BenchmarkId::new(format!("t={threads}"), r), |b| {
-                b.iter(|| {
-                    let mut f = black_box(f_init.clone());
-                    pool.install(|| solver.solve_in_place(&mut f));
-                    f
-                })
-            });
+            group.bench_function(
+                BenchmarkId::new(format!("t={threads}"), format!("n{n}_r{r}")),
+                |b| {
+                    b.iter(|| {
+                        let mut f = black_box(f_init.clone());
+                        pool.install(|| solver.solve_in_place(&mut f, 1.0, 1.0));
+                        f
+                    })
+                },
+            );
         }
     }
 
@@ -106,45 +89,26 @@ fn bench_solve_in_place_2d(c: &mut Criterion) {
 }
 
 fn bench_solve_in_place_3d(c: &mut Criterion) {
-    let alpha = 1.0_f64;
-    let beta = 1.0_f64;
-    let w = 2.0 * PI;
-
-    let r_values: &[usize] = &[4, 8, 16, 32, 64];
     let thread_counts: &[usize] = &[1, 4, 8];
-
     let mut group = c.benchmark_group("hot_solve_in_place_3d");
 
-    for &r in r_values {
-        let ndof = r * r * r;
-        group.throughput(Throughput::Elements(ndof as u64));
-
+    for &(n, r) in CASES {
         let solver = PoissonND::<3>::new(
             [1.0; 3],
             [0.0; 3],
+            [n; 3],
             [r; 3],
-            alpha,
-            beta,
             [BoundaryCondition::Periodic; 3],
         );
         let x = solver.get_x();
+        group.throughput(Throughput::Elements(x.len() as u64));
 
-        let f_init: Vec<f64> = (0..ndof)
-            .map(|i| {
-                let (xi, yi, zi) = (x[i][0], x[i][1], x[i][2]);
-                let rhs_1d = |t: f64| {
-                    let s = (w * t).sin();
-                    let cv = (w * t).cos();
-                    let u = s.exp();
-                    alpha * u - beta * w * w * (cv * cv - s) * u
-                };
-                let (ux, uy, uz) = (
-                    (w * xi).sin().exp(),
-                    (w * yi).sin().exp(),
-                    (w * zi).sin().exp(),
-                );
+        let f_init: Vec<f64> = x
+            .iter()
+            .map(|&[xi, yi, zi]| {
+                let (ux, uy, uz) = (u_1d(xi), u_1d(yi), u_1d(zi));
                 rhs_1d(xi) * uy * uz + ux * rhs_1d(yi) * uz + ux * uy * rhs_1d(zi)
-                    - 2.0 * alpha * ux * uy * uz
+                    - 2.0 * ux * uy * uz
             })
             .collect();
 
@@ -153,13 +117,16 @@ fn bench_solve_in_place_3d(c: &mut Criterion) {
                 .num_threads(threads)
                 .build()
                 .unwrap();
-            group.bench_function(BenchmarkId::new(format!("t={threads}"), r), |b| {
-                b.iter(|| {
-                    let mut f = black_box(f_init.clone());
-                    pool.install(|| solver.solve_in_place(&mut f));
-                    f
-                })
-            });
+            group.bench_function(
+                BenchmarkId::new(format!("t={threads}"), format!("n{n}_r{r}")),
+                |b| {
+                    b.iter(|| {
+                        let mut f = black_box(f_init.clone());
+                        pool.install(|| solver.solve_in_place(&mut f, 1.0, 1.0));
+                        f
+                    })
+                },
+            );
         }
     }
 

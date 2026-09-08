@@ -1,8 +1,9 @@
-//! Example: solve the 5-D periodic Laplace problem
+//! Example: solve the 5-D periodic screened Poisson problem
 //!
 //!   (α M + β K) u = f   on [0, 1]^5
 //!
-//! using the HoT solver (single spectral element per direction).
+//! with `n` spectral elements of order `r` per direction (dense fast
+//! diagonalisation).
 //!
 //! Exact solution: u = exp(sin(2π x_1)) · … · exp(sin(2π x_5))
 //!
@@ -44,25 +45,18 @@ fn main() {
         })
         .collect();
 
-    let r = 20_usize;
-    let ndof: usize = r.pow(5);
+    let (n, r) = (2_usize, 10_usize);
 
-    println!("╔══════════════════════════════════════════════════════════╗");
-    println!("║         5-D Laplace solver: HoT                          ║");
-    println!("╚══════════════════════════════════════════════════════════╝");
+    println!("5-D screened Poisson: n = {n} elements of order r = {r} per direction");
+    println!("  {} DOF/direction, {} total", n * r, (n * r).pow(5));
     println!();
-    println!("  HoT : r={r} → {r} DOF/direction, {ndof} total");
-    println!();
-
-    println!("── HoT (r={r}, single element) ──────────────────────────────");
 
     let t = Instant::now();
     let solver = PoissonND::<5>::new(
         [1.0; 5],
         [0.0; 5],
+        [n; 5],
         [r; 5],
-        alpha,
-        beta,
         [BoundaryCondition::Periodic; 5],
     );
     let setup_ms = t.elapsed().as_secs_f64() * 1e3;
@@ -70,10 +64,9 @@ fn main() {
 
     let t = Instant::now();
     let x = solver.get_x();
-    let mut f: Vec<f64> = (0..ndof)
-        .into_par_iter()
-        .map(|i| {
-            let [x0, x1, x2, x3, x4] = x[i];
+    let mut f: Vec<f64> = x
+        .par_iter()
+        .map(|&[x0, x1, x2, x3, x4]| {
             let u = u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4);
             alpha * u
                 - beta
@@ -88,24 +81,25 @@ fn main() {
     println!("  RHS build  : {rhs_ms:.1} ms");
 
     let t = Instant::now();
-    solver.solve_in_place(&mut f);
+    solver.solve_in_place(&mut f, alpha, beta);
     let solve_ms = t.elapsed().as_secs_f64() * 1e3;
     println!("  Solve time : {solve_ms:.1} ms");
 
-    let node_err = (0..ndof)
-        .map(|i| {
-            let [x0, x1, x2, x3, x4] = x[i];
-            let u_ex = u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4);
-            (f[i] - u_ex).abs()
+    let node_err = x
+        .iter()
+        .zip(&f)
+        .map(|(&[x0, x1, x2, x3, x4], &ui)| {
+            (ui - u1d(x0) * u1d(x1) * u1d(x2) * u1d(x3) * u1d(x4)).abs()
         })
         .fold(0.0_f64, f64::max);
     println!("  Max error  : {node_err:.3e}");
 
     let t = Instant::now();
-    let vals = solver.eval(&eval_pts, &f);
+    let mut vals = vec![0.0; eval_pts.len()];
+    solver.grid().eval(&eval_pts, &f, &mut vals);
     let eval_err = eval_pts
         .iter()
-        .zip(vals.iter())
+        .zip(&vals)
         .map(|(&[p0, p1, p2, p3, p4], &v)| {
             (v - u1d(p0) * u1d(p1) * u1d(p2) * u1d(p3) * u1d(p4)).abs()
         })
