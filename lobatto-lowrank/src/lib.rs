@@ -12,26 +12,26 @@
 //!
 //! with scalars $a_k$, each $\rho_k$ a nodal field on the left grid and each
 //! $\mu_k$ a nodal field on the right grid. Grids come from
-//! [`lobatto-grid`](https://crates.io/crates/lobatto-grid) and are shared by
-//! every term.
+//! [`lobatto-grid`](https://crates.io/crates/lobatto-grid); each side is a
+//! [`WeightedGrid`], the grid bundled with its mass weights, shared by every
+//! term and every sum derived from it. Sums built independently on equal
+//! grids can still be added.
 //!
 //! All norms, Gram matrices and compressions use the discrete `L²` inner
-//! product of the box, given by the tensor Gauss-Lobatto weights of each grid,
-//! never the plain Euclidean one.
+//! product of the box, given by the mass weights of each grid
+//! (`GridND::mass_weights`), never the plain Euclidean one.
 //!
 //! ## Status
 //!
 //! The structure and its basic operations ([`lowrank`]) are implemented; the
-//! algorithms (weights, assembly, Gram matrices, QR/SVD compression) are not
-//! yet and panic with `todo!()`. Since [`LowRankSum::new`] computes the grid
-//! weights, no sum can be built until [`weights`] is implemented.
+//! algorithms (assembly, Gram matrices, QR/SVD compression) are not yet and
+//! panic with `todo!()`.
 //!
 //! ## Modules
 //!
 //! | Module | Contents |
 //! |--------|----------|
-//! | [`weights`] | Tensor Gauss-Lobatto mass weights of a grid, in its node order. |
-//! | [`lowrank`] | [`LowRankSum`] and [`Term`]: construction, accessors, value, scaling, addition. |
+//! | [`lowrank`] | [`WeightedGrid`], [`LowRankSum`] and [`LowRankTerm`]: construction, accessors, value, scaling, addition. |
 //! | [`inner`] | Weighted Gram matrices, norm, inner product and distance, without assembling. |
 //! | [`dense`] | Conversion to and from the dense field on the full grid (tests, small sizes). |
 //! | [`compress`] | [`Truncation`] criteria and the weighted QR → SVD compression. |
@@ -40,7 +40,6 @@ pub mod compress;
 pub mod dense;
 pub mod inner;
 pub mod lowrank;
-pub mod weights;
 
 pub use compress::{Compressed, Truncation};
-pub use lowrank::{LowRankSum, Term};
+pub use lowrank::{LowRankSum, LowRankTerm, WeightedGrid};

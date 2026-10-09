@@ -51,6 +51,7 @@ pub enum Extension {
 /// | `Periodic`  | `k·r + j`                             |
 /// | `Odd`       | `k·r + j - 1` (left boundary excluded) |
 /// | `Even`      | `k·r + j`, plus the right endpoint at `n·r` |
+#[derive(Debug, Clone, PartialEq)]
 pub struct Grid1D {
     /// Number of elements `n`.
     pub(crate) n: usize,
@@ -270,6 +271,7 @@ impl Grid1D {
 /// One [`Grid1D`] per spatial direction, each with an independent
 /// [`Extension`]. The DOF tensor is stored flat in column-major order
 /// (direction 0 varies fastest) with `total = ∏_d n_dof_d` entries.
+#[derive(Debug, Clone, PartialEq)]
 pub struct GridND<const N: usize> {
     /// One 1D grid per spatial direction.
     pub(crate) grids: [Grid1D; N],

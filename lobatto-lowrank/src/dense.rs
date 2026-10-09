@@ -10,8 +10,6 @@
 //!
 //! Both directions form the dense field: tests and small sizes only.
 
-use std::sync::Arc;
-
 use lobatto_grid::GridND;
 
 use crate::lowrank::LowRankSum;
@@ -20,8 +18,8 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     /// Compress a field given on the full grid, in the layout of the module
     /// docs, by the SVD of its weighted unfolding.
     pub fn from_assembled(
-        left: Arc<GridND<P>>,
-        right: Arc<GridND<Q>>,
+        left: GridND<P>,
+        right: GridND<Q>,
         p: &[f64],
         rank: usize,
     ) -> Self {

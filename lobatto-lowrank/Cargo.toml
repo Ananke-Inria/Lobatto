@@ -16,7 +16,6 @@ rustdoc-args = ["--html-in-header", "katex.html"]
 serde = ["dep:serde"]
 
 [dependencies]
-lobatto = "0.1.3"
 lobatto-grid = "0.1.1"
 nalgebra = "0.34.1"
 serde = { version = "1", features = ["derive"], optional = true }
