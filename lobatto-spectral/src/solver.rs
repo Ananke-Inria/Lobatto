@@ -300,10 +300,10 @@ impl Poisson {
 
 /// Assemble the lumped mass diagonal and the stiffness matrix of a 1D grid.
 ///
-/// Each element contributes its reference matrices scaled by `h` (mass) and
-/// `1/h` (stiffness) at the DOFs given by [`Grid1D::eval_dof_index`], which
-/// handles the periodic wrap, the shared interface nodes and the Dirichlet
-/// endpoints (sentinel `n_dof`, skipped).
+/// The mass diagonal is [`Grid1D::mass_weights`]. Each element contributes its
+/// reference stiffness scaled by `1/h` at the DOFs given by
+/// [`Grid1D::eval_dof_index`], which handles the periodic wrap, the shared
+/// interface nodes and the Dirichlet endpoints (sentinel `n_dof`, skipped).
 fn assemble(grid: &Grid1D) -> (DVector<f64>, DMatrix<f64>) {
     let (n, r, h, n_dof) = (grid.n(), grid.r(), grid.h(), grid.n_dof());
     let basis = CollocationBasis::new(vec![(r + 1, Gauss::Lobatto)]);
@@ -311,7 +311,7 @@ fn assemble(grid: &Grid1D) -> (DVector<f64>, DMatrix<f64>) {
     let diff = basis.diff_matrix(0);
     let stiffness_ref = diff.transpose() * &mass_ref * &diff;
 
-    let mut mass = DVector::<f64>::zeros(n_dof);
+    let mass = DVector::from_vec(grid.mass_weights());
     let mut stiffness = DMatrix::<f64>::zeros(n_dof, n_dof);
     for k in 0..n {
         let dofs: Vec<usize> = (0..=r).map(|j| grid.eval_dof_index(k, j)).collect();
@@ -319,7 +319,6 @@ fn assemble(grid: &Grid1D) -> (DVector<f64>, DMatrix<f64>) {
             if gi == n_dof {
                 continue;
             }
-            mass[gi] += h * mass_ref[(i, i)];
             for (j, &gj) in dofs.iter().enumerate() {
                 if gj != n_dof {
                     stiffness[(gi, gj)] += stiffness_ref[(i, j)] / h;

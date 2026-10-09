@@ -1,0 +1,22 @@
+[package]
+name = "lobatto-lowrank"
+version = "0.1.0"
+edition = "2021"
+description = "Low-rank sums of products of fields on two Gauss-Lobatto grids, with weighted QR/SVD compression."
+license = "LGPL-3.0-only"
+repository = "https://github.com/OndoMathX/QuadratiX/tree/main/lobatto-lowrank"
+keywords = ["gauss-lobatto", "low-rank", "svd", "tensor-product"]
+categories = ["mathematics", "science"]
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--html-in-header", "katex.html"]
+
+[features]
+# Hook for (de)serialising sums; no derives yet.
+serde = ["dep:serde"]
+
+[dependencies]
+lobatto = "0.1.3"
+lobatto-grid = "0.1.0"
+nalgebra = "0.34.1"
+serde = { version = "1", features = ["derive"], optional = true }

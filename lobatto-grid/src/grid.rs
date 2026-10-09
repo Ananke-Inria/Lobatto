@@ -66,6 +66,8 @@ pub struct Grid1D {
     pub(crate) extension: Extension,
     /// Gauss-Lobatto nodes on the `[0, 1]` reference element (length `r + 1`).
     pub(crate) gauss_lobatto_points: Vec<f64>,
+    /// Gauss-Lobatto quadrature weights on the `[0, 1]` reference element (length `r + 1`).
+    pub(crate) gauss_lobatto_weights: Vec<f64>,
     /// Barycentric weights for the `r + 1` Gauss-Lobatto nodes.
     pub(crate) bary_weights: Vec<f64>,
 }
@@ -78,9 +80,9 @@ impl Grid1D {
             Extension::Odd => r * n - 1,
             Extension::Even => r * n + 1,
         };
-        let gauss_lobatto_points = CollocationBasis::new(vec![(r + 1, Gauss::Lobatto)])
-            .points_1d(0)
-            .to_vec();
+        let basis = CollocationBasis::new(vec![(r + 1, Gauss::Lobatto)]);
+        let gauss_lobatto_points = basis.points_1d(0).to_vec();
+        let gauss_lobatto_weights = basis.weights_1d(0).to_vec();
         let bary_weights = barycentric_weights(&gauss_lobatto_points);
         Self {
             n,
@@ -90,6 +92,7 @@ impl Grid1D {
             n_dof,
             extension,
             gauss_lobatto_points,
+            gauss_lobatto_weights,
             bary_weights,
         }
     }
@@ -132,6 +135,38 @@ impl Grid1D {
     /// Gauss-Lobatto nodes on the `[0, 1]` reference element (length `r + 1`).
     pub fn ref_points(&self) -> &[f64] {
         &self.gauss_lobatto_points
+    }
+
+    /// Gauss-Lobatto quadrature weights on the `[0, 1]` reference element (length `r + 1`).
+    pub fn ref_weights(&self) -> &[f64] {
+        &self.gauss_lobatto_weights
+    }
+
+    /// Diagonal of the lumped mass matrix: one quadrature weight per stored DOF.
+    ///
+    /// The reference weights $\hat w_j$ are scaled by the element width
+    /// `h = L/n` and assembled over the elements, so that
+    /// $\sum_i w_i\, u_i \approx \int u\,dx$ for a field `u` given by its
+    /// stored DOFs (length `N_dof`, in the order of [`get_x`](Self::get_x)):
+    ///
+    /// | Node | Weight |
+    /// |------|--------|
+    /// | interior to an element | `h·ŵ_j` |
+    /// | shared by two elements, periodic seam included | sum of the two end weights |
+    /// | stored boundary endpoint (`Even`) | its single end weight |
+    /// | unstored boundary endpoint (`Odd`) | dropped |
+    pub fn mass_weights(&self) -> Vec<f64> {
+        let h = self.h();
+        let mut w = vec![0.0; self.n_dof];
+        for k in 0..self.n {
+            for (j, &wj) in self.gauss_lobatto_weights.iter().enumerate() {
+                let i = self.eval_dof_index(k, j);
+                if i < self.n_dof {
+                    w[i] += h * wj;
+                }
+            }
+        }
+        w
     }
 
     /// Gauss-Lobatto nodes in `x`-increasing order on `[x_l, x_l + L]`.
@@ -302,6 +337,23 @@ impl<const N: usize> GridND<N> {
     /// Column-major strides for the DOF tensor (direction 0 varies fastest).
     pub fn strides(&self) -> [usize; N] {
         self.strides
+    }
+
+    /// Diagonal of the tensor-product lumped mass matrix (length `total`).
+    ///
+    /// Entry `p` is the product of the per-direction
+    /// [`Grid1D::mass_weights`] at the multi-index of `p`, in the column-major
+    /// DOF order (direction 0 fastest), so that $\sum_p w_p\, u_p$
+    /// approximates the integral of `u` over the box.
+    pub fn mass_weights(&self) -> Vec<f64> {
+        let w1d: [Vec<f64>; N] = std::array::from_fn(|d| self.grids[d].mass_weights());
+        (0..self.total)
+            .map(|p| {
+                (0..N)
+                    .map(|d| w1d[d][(p / self.strides[d]) % self.ndofs[d]])
+                    .product()
+            })
+            .collect()
     }
 
     /// Tensor-product Gauss-Lobatto grid in x-increasing column-major order.
