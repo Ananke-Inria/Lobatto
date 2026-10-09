@@ -411,7 +411,7 @@ version = "0.5.0"
 dependencies = [
  "criterion",
  "lobatto 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "lobatto-grid 0.1.0",
+ "lobatto-grid 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "nalgebra",
  "rayon",
  "rustfft",
@@ -424,20 +424,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "497839bac3982c9eab8795a310b3f49b4e392645bded53defe6088aad06e0f8b"
 dependencies = [
  "lobatto 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "lobatto-grid 0.1.0",
+ "lobatto-grid 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "nalgebra",
  "rayon",
  "rustfft",
-]
-
-[[package]]
-name = "lobatto-grid"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0bf01800fdd0ef188a0c17e2e8dcfa384b3150ec77c7ecfbec273db43b23f0c"
-dependencies = [
- "lobatto 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "rayon",
 ]
 
 [[package]]
@@ -451,11 +441,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lobatto-grid"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6f9eec839185623bd6348e2c8b542572a86bee4ab8952f897d8739f3ca86490"
+dependencies = [
+ "lobatto 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rayon",
+]
+
+[[package]]
 name = "lobatto-lowrank"
 version = "0.1.0"
 dependencies = [
  "lobatto 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "lobatto-grid 0.1.0",
+ "lobatto-grid 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "nalgebra",
  "serde",
 ]
@@ -467,7 +467,7 @@ dependencies = [
  "criterion",
  "lobatto 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "lobatto-fft 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "lobatto-grid 0.1.0",
+ "lobatto-grid 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "nalgebra",
  "rayon",
 ]
