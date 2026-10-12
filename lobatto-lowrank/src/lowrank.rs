@@ -1,82 +1,73 @@
-//! The [`LowRankSum`] structure, its construction and its basic operations.
+//! The [`LowRankSum`] structure, its construction, its accessors and its
+//! conversion to the full grid.
 //!
 //! A [`LowRankSum<P, Q>`] holds a field on a `P + Q` dimensional grid as a
 //! sum of `M` products `a_k · ρ_k ⊗ μ_k`, with `ρ_k` a nodal field on the
 //! `P`-dimensional left grid and `μ_k` a nodal field on the `Q`-dimensional
 //! right grid.
 //!
-//! A sum takes its two grids by value. Each side is a [`WeightedGrid`]: the
-//! grid and its mass weights, computed once and shared through an [`Arc`] by
-//! the sum and every sum derived from it (`clone`,
-//! [`zeros_like`](LowRankSum::zeros_like), [`add`](LowRankSum::add)), so these
-//! never copy a grid or its weights. Two sums built independently on equal
-//! grids can still be added: sides are compared by grid equality.
+//! # Storage
 //!
-//! The operations here only touch the term list: no inner product, no
-//! factorisation. Norms live in [`crate::inner`], the dense unfolding in
-//! [`crate::dense`], the compression in [`crate::compress`].
-
-use std::sync::Arc;
+//! The factors are stored as two column-major matrices, one factor per
+//! column: [`rho`](LowRankSum::rho) is `N_left × M` and
+//! [`mu`](LowRankSum::mu) is `N_right × M`, next to the coefficient vector
+//! [`coefficients`](LowRankSum::coefficients) of length `M`. A column is
+//! contiguous, so a single factor is available as a slice
+//! ([`rho_k`](LowRankSum::rho_k), [`mu_k`](LowRankSum::mu_k)), and Gram
+//! matrices, assembly and compression are matrix products and factorisations
+//! on the whole factor matrices.
+//!
+//! A sum owns its two grids, taken by value, and their mass weights, computed
+//! once at construction. Two sums can be added when their grids are equal.
+//!
+//! # Full grid and assembled field
+//!
+//! [`LowRankSum::full_grid`] is the `P + Q` dimensional grid, left directions
+//! first. [`LowRankSum::assemble`] returns the field on it, column-major with
+//! the left directions fastest: node pair `(i, j)`, with `i` a left node index
+//! and `j` a right node index, sits at flat index `i + j · N_left`, where
+//! `N_left = left.total()`. Equivalently, the assembled field is the
+//! column-major `N_left × N_right` unfolding matrix. Assembling forms the
+//! dense field: tests and small sizes only.
+//!
+//! Scaling, addition and the weighted inner products live in
+//! [`crate::algebra`], the compression in [`crate::compress`].
 
 use lobatto_grid::GridND;
-
-/// One side of a [`LowRankSum`]: a grid and its mass weights.
-///
-/// The weights are [`GridND::mass_weights`], computed once at construction.
-/// They define the discrete `L²` inner product used by every norm, Gram
-/// matrix and compression of the sums built on this side.
-#[derive(Debug)]
-pub struct WeightedGrid<const D: usize> {
-    grid: GridND<D>,
-    weights: Vec<f64>,
-}
-
-impl<const D: usize> WeightedGrid<D> {
-    /// Bundle a grid with its mass weights.
-    pub(crate) fn new(grid: GridND<D>) -> Self {
-        let weights = grid.mass_weights();
-        Self { grid, weights }
-    }
-
-    /// The grid.
-    pub fn grid(&self) -> &GridND<D> {
-        &self.grid
-    }
-
-    /// Mass weights, one per stored node, in the grid's node order.
-    pub fn weights(&self) -> &[f64] {
-        &self.weights
-    }
-
-    /// Number of stored nodes.
-    pub fn total(&self) -> usize {
-        self.grid.total()
-    }
-}
-
-/// One term `a · ρ ⊗ μ` of a [`LowRankSum`].
-#[derive(Debug, Clone, PartialEq)]
-pub struct LowRankTerm {
-    /// Scalar coefficient `a_k`.
-    pub a: f64,
-    /// Left factor `ρ_k`, one value per stored node of the left grid.
-    pub rho: Vec<f64>,
-    /// Right factor `μ_k`, one value per stored node of the right grid.
-    pub mu: Vec<f64>,
-}
+use nalgebra::{DMatrix, DVector};
 
 /// A field on a `P + Q` dimensional grid stored as a sum of `M` products of a
 /// left field on a `P`-dimensional grid and a right field on a
 /// `Q`-dimensional grid.
+///
+/// The mass weights of each grid ([`GridND::mass_weights`]) define the
+/// discrete `L²` inner product used by every norm, Gram matrix and
+/// compression. The sum stores their square roots, computed once at
+/// construction: scaling the factor rows by them maps the weighted inner
+/// product to the plain Euclidean one, which is the form every operation
+/// uses.
 ///
 /// The sum is not kept canonical between operations: an addition simply
 /// concatenates the terms, and only [`LowRankSum::compress`] returns the
 /// canonical form (orthonormal factors, `a_k = σ_k ≥ 0` decreasing).
 #[derive(Debug, Clone)]
 pub struct LowRankSum<const P: usize, const Q: usize> {
-    pub(crate) left: Arc<WeightedGrid<P>>,
-    pub(crate) right: Arc<WeightedGrid<Q>>,
-    pub(crate) terms: Vec<LowRankTerm>,
+    pub(crate) left: GridND<P>,
+    pub(crate) right: GridND<Q>,
+    /// Square roots of the mass weights of the left grid.
+    pub(crate) sqrt_w_left: DVector<f64>,
+    /// Square roots of the mass weights of the right grid.
+    pub(crate) sqrt_w_right: DVector<f64>,
+    /// Reciprocals of `sqrt_w_left`.
+    pub(crate) inv_sqrt_w_left: DVector<f64>,
+    /// Reciprocals of `sqrt_w_right`.
+    pub(crate) inv_sqrt_w_right: DVector<f64>,
+    /// Coefficients `a_k`, length `M`.
+    pub(crate) a: DVector<f64>,
+    /// Left factors, `N_left × M`, column `k` is `ρ_k`.
+    pub(crate) rho: DMatrix<f64>,
+    /// Right factors, `N_right × M`, column `k` is `μ_k`.
+    pub(crate) mu: DMatrix<f64>,
 }
 
 impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
@@ -84,70 +75,64 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
 
     /// The empty sum, i.e. the zero field, on the grids `left` and `right`.
     pub fn new(left: GridND<P>, right: GridND<Q>) -> Self {
+        let sqrt_w_left = DVector::from_vec(left.mass_weights()).map(f64::sqrt);
+        let sqrt_w_right = DVector::from_vec(right.mass_weights()).map(f64::sqrt);
+        let (nl, nr) = (left.total(), right.total());
         Self {
-            left: Arc::new(WeightedGrid::new(left)),
-            right: Arc::new(WeightedGrid::new(right)),
-            terms: Vec::new(),
+            left,
+            right,
+            inv_sqrt_w_left: sqrt_w_left.map(|x| 1.0 / x),
+            inv_sqrt_w_right: sqrt_w_right.map(|x| 1.0 / x),
+            sqrt_w_left,
+            sqrt_w_right,
+            a: DVector::zeros(0),
+            rho: DMatrix::zeros(nl, 0),
+            mu: DMatrix::zeros(nr, 0),
         }
     }
 
-    /// The empty sum on the same sides as `self`, sharing its grids and weights.
+    /// The empty sum on the same grids as `self`.
     pub fn zeros_like(&self) -> Self {
-        Self {
-            left: Arc::clone(&self.left),
-            right: Arc::clone(&self.right),
-            terms: Vec::new(),
-        }
+        Self::new(self.left.clone(), self.right.clone())
     }
 
-    /// A single product `a · ρ ⊗ μ`.
+    /// The rank-one field `f(x_1, …, x_P) · g(x_{P+1}, …, x_{P+Q})`.
     ///
-    /// # Panics
-    ///
-    /// If the factor lengths differ from the grids' `total()`.
-    pub fn product(left: GridND<P>, right: GridND<Q>, a: f64, rho: Vec<f64>, mu: Vec<f64>) -> Self {
+    /// `f` is sampled at the stored nodes of `left` ([`GridND::get_x`]), `g` at
+    /// those of `right`, and the sum holds the single term `1 · ρ ⊗ μ`. On an
+    /// `Odd` (Dirichlet) direction the end nodes are not stored, so the field
+    /// is zero there whatever `f` or `g`.
+    pub fn new_from_fn(
+        left: GridND<P>,
+        right: GridND<Q>,
+        f: impl Fn([f64; P]) -> f64,
+        g: impl Fn([f64; Q]) -> f64,
+    ) -> Self {
+        let rho: Vec<f64> = left.get_x().into_iter().map(f).collect();
+        let mu: Vec<f64> = right.get_x().into_iter().map(g).collect();
         let mut s = Self::new(left, right);
-        s.push(a, rho, mu);
+        s.a = DVector::from_element(1, 1.0);
+        s.rho = DMatrix::from_vec(rho.len(), 1, rho);
+        s.mu = DMatrix::from_vec(mu.len(), 1, mu);
         s
     }
 
-    /// Append the term `a · ρ ⊗ μ`.
-    ///
-    /// # Panics
-    ///
-    /// If the factor lengths differ from the grids' `total()`.
-    pub fn push(&mut self, a: f64, rho: Vec<f64>, mu: Vec<f64>) {
-        assert_eq!(
-            rho.len(),
-            self.n_left(),
-            "left factor has {} entries, left grid has {} nodes",
-            rho.len(),
-            self.n_left()
-        );
-        assert_eq!(
-            mu.len(),
-            self.n_right(),
-            "right factor has {} entries, right grid has {} nodes",
-            mu.len(),
-            self.n_right()
-        );
-        self.terms.push(LowRankTerm { a, rho, mu });
-    }
-
-    /// Remove every term: the zero field on the same sides.
+    /// Remove every term: the zero field on the same grids.
     pub fn clear(&mut self) {
-        self.terms.clear();
+        self.a = DVector::zeros(0);
+        self.rho = DMatrix::zeros(self.n_left(), 0);
+        self.mu = DMatrix::zeros(self.n_right(), 0);
     }
 
     // ── Accessors ───────────────────────────────────────────────────────────
 
-    /// The left side: grid and mass weights.
-    pub fn left(&self) -> &WeightedGrid<P> {
+    /// The left grid.
+    pub fn left(&self) -> &GridND<P> {
         &self.left
     }
 
-    /// The right side: grid and mass weights.
-    pub fn right(&self) -> &WeightedGrid<Q> {
+    /// The right grid.
+    pub fn right(&self) -> &GridND<Q> {
         &self.right
     }
 
@@ -161,73 +146,435 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
         self.right.total()
     }
 
-    /// Mass weights of the left grid, in its node order.
-    pub fn w_left(&self) -> &[f64] {
-        self.left.weights()
+    /// Square roots of the mass weights of the left grid, in its node order.
+    ///
+    /// The weights themselves are [`GridND::mass_weights`] of [`left`](Self::left).
+    pub fn sqrt_w_left(&self) -> &[f64] {
+        self.sqrt_w_left.as_slice()
     }
 
-    /// Mass weights of the right grid, in its node order.
-    pub fn w_right(&self) -> &[f64] {
-        self.right.weights()
+    /// Square roots of the mass weights of the right grid, in its node order.
+    ///
+    /// The weights themselves are [`GridND::mass_weights`] of [`right`](Self::right).
+    pub fn sqrt_w_right(&self) -> &[f64] {
+        self.sqrt_w_right.as_slice()
     }
 
-    /// The terms.
-    pub fn terms(&self) -> &[LowRankTerm] {
-        &self.terms
+    /// The coefficients `a_k`, length `M`.
+    pub fn coefficients(&self) -> &[f64] {
+        self.a.as_slice()
+    }
+
+    /// The left factors, `N_left × M`: column `k` is `ρ_k`.
+    pub fn rho(&self) -> &DMatrix<f64> {
+        &self.rho
+    }
+
+    /// The right factors, `N_right × M`: column `k` is `μ_k`.
+    pub fn mu(&self) -> &DMatrix<f64> {
+        &self.mu
+    }
+
+    /// The left factor `ρ_k`, one value per stored node of the left grid.
+    pub fn rho_k(&self, k: usize) -> &[f64] {
+        // Column k of the column-major storage; a column view would be a
+        // temporary whose slice cannot be returned.
+        let n = self.rho.nrows();
+        &self.rho.as_slice()[k * n..(k + 1) * n]
+    }
+
+    /// The right factor `μ_k`, one value per stored node of the right grid.
+    pub fn mu_k(&self, k: usize) -> &[f64] {
+        let n = self.mu.nrows();
+        &self.mu.as_slice()[k * n..(k + 1) * n]
     }
 
     /// Number of terms `M`.
     pub fn len(&self) -> usize {
-        self.terms.len()
+        self.a.len()
     }
 
     /// Whether the sum has no term (the zero field).
     pub fn is_empty(&self) -> bool {
-        self.terms.is_empty()
+        self.a.is_empty()
     }
 
-    /// Whether `other` lives on the same grids: shared sides, or equal grids.
+    /// Whether `other` lives on equal grids.
     pub fn same_grids(&self, other: &Self) -> bool {
-        let left = Arc::ptr_eq(&self.left, &other.left) || self.left.grid == other.left.grid;
-        let right =
-            Arc::ptr_eq(&self.right, &other.right) || self.right.grid == other.right.grid;
-        left && right
+        self.left == other.left && self.right == other.right
     }
-
-    // ── Basic operations ────────────────────────────────────────────────────
 
     /// The field at the node pair `(i, j)`, `Σ_k a_k ρ_k(i) μ_k(j)`.
     ///
     /// `i` is a flat left node index, `j` a flat right node index.
     pub fn value(&self, i: usize, j: usize) -> f64 {
-        self.terms.iter().map(|t| t.a * t.rho[i] * t.mu[j]).sum()
+        (0..self.len())
+            .map(|k| self.a[k] * self.rho[(i, k)] * self.mu[(j, k)])
+            .sum()
     }
 
-    /// Multiply the field by `c` (the coefficients `a_k`, not the factors).
-    pub fn scale(&mut self, c: f64) {
-        for t in &mut self.terms {
-            t.a *= c;
+    /// The field at a batch of points `xs` of `R^N`, `N = P + Q`, by
+    /// interpolation, written to `out`: `out[i]` is
+    /// `Σ_k a_k ρ_k(x_1, …, x_P) μ_k(x_{P+1}, …, x_N)` at `xs[i]`.
+    ///
+    /// Each factor is interpolated on its own grid with the extended
+    /// evaluation of `lobatto-grid` ([`GridND::eval_extended_plan`]): inside
+    /// the domain this is the nodal interpolant, outside each direction is
+    /// folded back by its extension (periodic wrap, even reflection, or odd
+    /// reflection with a sign flip). One plan per side is built for all the
+    /// points and reused for every term, so the points are located once. The
+    /// field is never assembled. For a single point, pass a batch of one.
+    ///
+    /// `N` is checked at compile time, as for [`full_grid`](Self::full_grid):
+    ///
+    /// ```
+    /// use lobatto_grid::{Extension, GridND};
+    /// use lobatto_lowrank::LowRankSum;
+    ///
+    /// let grid = || GridND::<1>::new([4], [4], [1.0], [0.0], [Extension::Even]);
+    /// let sum = LowRankSum::new_from_fn(grid(), grid(), |[x]| x * x, |[y]| 1.0 - y);
+    /// let xs = [[0.3, 0.6], [0.5, 0.1]];
+    /// let mut out = [0.0; 2];
+    /// sum.get_values(&xs, &mut out);
+    /// assert!((out[0] - 0.09 * 0.4).abs() < 1e-14);
+    /// assert!((out[1] - 0.25 * 0.9).abs() < 1e-14);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// If `out.len() != xs.len()`.
+    pub fn get_values<const N: usize>(&self, xs: &[[f64; N]], out: &mut [f64]) {
+        const { assert!(N == P + Q, "a point of the full grid has dimension P + Q") };
+        assert_eq!(
+            out.len(),
+            xs.len(),
+            "get_values: {} points but an output of length {}",
+            xs.len(),
+            out.len()
+        );
+        out.fill(0.0);
+        if self.is_empty() || xs.is_empty() {
+            return;
+        }
+        let (xl, xr): (Vec<[f64; P]>, Vec<[f64; Q]>) = xs
+            .iter()
+            .map(|x| {
+                (
+                    std::array::from_fn(|d| x[d]),
+                    std::array::from_fn(|d| x[P + d]),
+                )
+            })
+            .unzip();
+        let plan_l = self.left.eval_extended_plan(&xl);
+        let plan_r = self.right.eval_extended_plan(&xr);
+        let (mut rho_x, mut mu_x) = (vec![0.0; xs.len()], vec![0.0; xs.len()]);
+        for k in 0..self.len() {
+            self.left.eval_with_plan(&plan_l, self.rho_k(k), &mut rho_x);
+            self.right.eval_with_plan(&plan_r, self.mu_k(k), &mut mu_x);
+            let a = self.a[k];
+            for ((o, &r), &m) in out.iter_mut().zip(&rho_x).zip(&mu_x) {
+                *o += a * r * m;
+            }
         }
     }
 
-    /// The sum of two fields: the term lists concatenated, no compression.
+    // ── Full grid ───────────────────────────────────────────────────────────
+
+    /// The full `N = P + Q` dimensional grid: the left directions, then the
+    /// right ones.
     ///
-    /// # Panics
+    /// `N` is a separate parameter because stable Rust cannot write
+    /// `GridND<{P + Q}>`; it is checked at compile time, so the caller names
+    /// it:
     ///
-    /// If the two sums are not on the same grids (see [`Self::same_grids`]).
-    pub fn add(&self, other: &Self) -> Self {
-        let mut s = self.clone();
-        s.add_assign(other);
+    /// ```
+    /// use lobatto_grid::{Extension, GridND};
+    /// use lobatto_lowrank::LowRankSum;
+    ///
+    /// let grid = || GridND::<2>::new([2, 3], [3, 2], [1.0, 2.0], [0.0, -1.0], [Extension::Periodic; 2]);
+    /// let sum = LowRankSum::new(grid(), grid());
+    /// let g: GridND<4> = sum.full_grid();
+    ///
+    /// // Left nodes fastest: pair (i, j) sits at i + j·N_left.
+    /// assert_eq!(g.total(), sum.n_left() * sum.n_right());
+    /// assert_eq!(g.strides()[2], sum.n_left());
+    /// ```
+    ///
+    /// A wrong dimension does not build:
+    ///
+    /// ```compile_fail
+    /// # use lobatto_grid::{Extension, GridND};
+    /// # use lobatto_lowrank::LowRankSum;
+    /// # let grid = || GridND::<2>::new([2, 3], [3, 2], [1.0, 2.0], [0.0, -1.0], [Extension::Periodic; 2]);
+    /// let sum = LowRankSum::new(grid(), grid());
+    /// let g: GridND<5> = sum.full_grid();
+    /// ```
+    pub fn full_grid<const N: usize>(&self) -> GridND<N> {
+        const { assert!(N == P + Q, "the full grid has dimension P + Q") };
+        GridND::from_grids(std::array::from_fn(|d| {
+            if d < P {
+                self.left.axis(d).clone()
+            } else {
+                self.right.axis(d - P).clone()
+            }
+        }))
+    }
+
+    /// The full field `Σ_k a_k ρ_k(i) μ_k(j)` in the layout of the module docs,
+    /// i.e. a field on [`full_grid`](Self::full_grid).
+    ///
+    /// One matrix product, `(ρ · diag(a)) · μᵀ`, whose column-major
+    /// `N_left × N_right` result is exactly that layout. Length
+    /// `N_left · N_right`; cost `M · N_left · N_right`. The zero field for an
+    /// empty sum.
+    pub fn assemble(&self) -> Vec<f64> {
+        let mut rho_a = self.rho.clone();
+        for (mut col, &a) in rho_a.column_iter_mut().zip(self.a.iter()) {
+            col *= a;
+        }
+        let p = rho_a * self.mu.transpose();
+        p.data.into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lobatto_grid::Extension;
+
+    /// A 2 + 1 sum with mixed extensions on both sides, no terms.
+    fn empty_sum() -> LowRankSum<2, 1> {
+        let left = GridND::<2>::new(
+            [2, 3],
+            [3, 2],
+            [1.0, 2.0],
+            [0.0, -1.0],
+            [Extension::Periodic, Extension::Odd],
+        );
+        let right = GridND::<1>::new([3], [4], [1.5], [0.5], [Extension::Even]);
+        LowRankSum::new(left, right)
+    }
+
+    /// Append `a · f ⊗ g`, sampling `f` and `g` on the left and right nodes.
+    fn push_sampled(
+        s: &mut LowRankSum<2, 1>,
+        a: f64,
+        f: impl Fn([f64; 2]) -> f64,
+        g: impl Fn([f64; 1]) -> f64,
+    ) {
+        let mut t = LowRankSum::new_from_fn(s.left().clone(), s.right().clone(), f, g);
+        t.scale(a);
+        s.add_assign(&t);
+    }
+
+    fn f0(x: [f64; 2]) -> f64 {
+        x[0].sin() + x[1]
+    }
+    fn g0(y: [f64; 1]) -> f64 {
+        y[0].cos()
+    }
+    fn f1(x: [f64; 2]) -> f64 {
+        x[0] * x[1]
+    }
+    fn g1(y: [f64; 1]) -> f64 {
+        y[0] * y[0]
+    }
+
+    fn two_term_sum() -> LowRankSum<2, 1> {
+        let mut s = empty_sum();
+        push_sampled(&mut s, 2.0, f0, g0);
+        push_sampled(&mut s, -0.5, f1, g1);
         s
     }
 
-    /// In-place version of [`LowRankSum::add`].
-    ///
-    /// # Panics
-    ///
-    /// If the two sums are not on the same grids (see [`Self::same_grids`]).
-    pub fn add_assign(&mut self, other: &Self) {
-        assert!(self.same_grids(other), "adding sums on different grids");
-        self.terms.extend_from_slice(&other.terms);
+    #[test]
+    fn storage_shapes_and_column_slices() {
+        let s = two_term_sum();
+        assert_eq!(s.len(), 2);
+        assert_eq!(s.coefficients(), &[2.0, -0.5]);
+        assert_eq!(s.rho().shape(), (s.n_left(), 2));
+        assert_eq!(s.mu().shape(), (s.n_right(), 2));
+        let x = s.left().get_x();
+        for (i, xi) in x.iter().enumerate() {
+            assert_eq!(s.rho_k(1)[i], f1(*xi));
+        }
+        let mut e = s.clone();
+        e.clear();
+        assert!(e.is_empty());
+        assert_eq!(e.rho().shape(), (s.n_left(), 0));
+    }
+
+    #[test]
+    fn matches_separable_function_on_full_grid() {
+        let s = two_term_sum();
+        let p = s.assemble();
+        let x = s.full_grid::<3>().get_x();
+        assert_eq!(p.len(), x.len());
+        for (pv, xv) in p.iter().zip(&x) {
+            let (l, r) = ([xv[0], xv[1]], [xv[2]]);
+            let exact = 2.0 * f0(l) * g0(r) - 0.5 * f1(l) * g1(r);
+            assert!((pv - exact).abs() < 1e-14, "{pv} vs {exact} at {xv:?}");
+        }
+    }
+
+    #[test]
+    fn matches_value_at_every_pair() {
+        let s = two_term_sum();
+        let p = s.assemble();
+        let nl = s.n_left();
+        for j in 0..s.n_right() {
+            for i in 0..nl {
+                assert!((p[i + j * nl] - s.value(i, j)).abs() < 1e-14, "(i, j) = ({i}, {j})");
+            }
+        }
+    }
+
+    #[test]
+    fn empty_sum_is_zero_field() {
+        let s = empty_sum();
+        let p = s.assemble();
+        assert_eq!(p.len(), s.n_left() * s.n_right());
+        assert!(p.iter().all(|&v| v == 0.0));
+    }
+
+    /// Left: periodic × Neumann, right: Neumann; order 4 everywhere.
+    fn grids_2_1() -> (GridND<2>, GridND<1>) {
+        let left = GridND::<2>::new(
+            [3, 2],
+            [4, 4],
+            [2.0, 1.5],
+            [-1.0, 0.5],
+            [Extension::Periodic, Extension::Even],
+        );
+        let right = GridND::<1>::new([2], [4], [1.0], [0.0], [Extension::Even]);
+        (left, right)
+    }
+
+    #[test]
+    fn new_from_fn_is_rank_one_and_matches_at_nodes() {
+        let (left, right) = grids_2_1();
+        let s = LowRankSum::new_from_fn(left, right, f0, g0);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s.coefficients()[0], 1.0);
+        let xs = s.full_grid::<3>().get_x();
+        let mut out = vec![f64::NAN; xs.len()];
+        s.get_values(&xs, &mut out);
+        for (x, v) in xs.iter().zip(&out) {
+            let exact = f0([x[0], x[1]]) * g0([x[2]]);
+            assert!((v - exact).abs() < 1e-13, "at {x:?}");
+        }
+    }
+
+    #[test]
+    fn get_values_is_exact_for_polynomials_off_the_nodes() {
+        // Interpolation of order r = 4 is exact for degree ≤ 4 in the Neumann
+        // directions; keep the periodic direction constant, where polynomials
+        // are not periodic.
+        let (left, right) = grids_2_1();
+        let f = |x: [f64; 2]| 1.0 + x[1].powi(4) - 2.0 * x[1];
+        let g = |y: [f64; 1]| y[0].powi(3) - 0.5;
+        let s = LowRankSum::new_from_fn(left, right, f, g);
+        let xs: Vec<[f64; 3]> = (0..20)
+            .map(|k| {
+                let t = k as f64 / 19.0;
+                [-1.0 + 2.0 * t, 0.5 + 1.5 * (1.0 - t), (0.37 + t).fract()]
+            })
+            .collect();
+        let mut out = vec![f64::NAN; xs.len()];
+        s.get_values(&xs, &mut out);
+        for (x, v) in xs.iter().zip(&out) {
+            let exact = f([x[0], x[1]]) * g([x[2]]);
+            assert!((v - exact).abs() < 1e-12, "at {x:?}");
+        }
+    }
+
+    #[test]
+    fn get_values_adds_over_terms() {
+        let (left, right) = grids_2_1();
+        let a = LowRankSum::new_from_fn(left.clone(), right.clone(), f0, g0);
+        let b = LowRankSum::new_from_fn(left, right, f1, g1);
+        let ab = a.add(&b);
+        let x = [[0.3, 1.1, 0.8]];
+        let (mut va, mut vb, mut vab) = ([0.0], [0.0], [0.0]);
+        a.get_values(&x, &mut va);
+        b.get_values(&x, &mut vb);
+        ab.get_values(&x, &mut vab);
+        assert!((vab[0] - (va[0] + vb[0])).abs() < 1e-14);
+    }
+
+    #[test]
+    fn get_values_wraps_periodic_direction() {
+        let (left, right) = grids_2_1();
+        let s = LowRankSum::new_from_fn(left, right, f0, g0);
+        // Period L = 2 in direction 0.
+        let mut out = [0.0; 2];
+        s.get_values(&[[0.3, 1.1, 0.8], [0.3 + 2.0, 1.1, 0.8]], &mut out);
+        assert!((out[0] - out[1]).abs() < 1e-13);
+    }
+
+    #[test]
+    fn get_values_reflects_odd_direction_with_sign_flip() {
+        let left = GridND::<1>::new([3], [4], [1.0], [0.0], [Extension::Odd]);
+        let right = GridND::<1>::new([2], [3], [1.0], [0.0], [Extension::Even]);
+        let s = LowRankSum::new_from_fn(left, right, |[x]| (std::f64::consts::PI * x).sin(), |[y]| 1.0 + y);
+        // Odd reflection about x = 0: u(-x) = -u(x).
+        let (x, y) = (0.27, 0.4);
+        let mut out = [0.0; 3];
+        s.get_values(&[[-x, y], [x, y], [0.0, y]], &mut out);
+        assert!((out[0] + out[1]).abs() < 1e-13);
+        assert!(out[2].abs() < 1e-14);
+    }
+
+    #[test]
+    fn get_values_batch_matches_points_one_at_a_time() {
+        let (left, right) = grids_2_1();
+        let a = LowRankSum::new_from_fn(left.clone(), right.clone(), f0, g0);
+        let s = a.add(&LowRankSum::new_from_fn(left, right, f1, g1));
+        let xs: Vec<[f64; 3]> = (0..50)
+            .map(|k| {
+                let t = k as f64 / 49.0;
+                // Spans the domain and goes past it in every direction.
+                [-2.0 + 5.0 * t, 0.0 + 2.5 * (1.0 - t), -0.5 + 2.0 * (0.37 + t).fract()]
+            })
+            .collect();
+        let mut out = vec![f64::NAN; xs.len()];
+        s.get_values(&xs, &mut out);
+        for (x, v) in xs.iter().zip(&out) {
+            let mut one = [f64::NAN];
+            s.get_values(&[*x], &mut one);
+            assert!((v - one[0]).abs() < 1e-14, "at {x:?}");
+        }
+    }
+
+    #[test]
+    fn get_values_of_empty_sum_and_empty_batch() {
+        let (left, right) = grids_2_1();
+        let empty = LowRankSum::new(left.clone(), right.clone());
+        let mut out = vec![f64::NAN; 3];
+        empty.get_values(&[[0.1, 0.9, 0.2]; 3], &mut out);
+        assert!(out.iter().all(|&v| v == 0.0));
+
+        let s = LowRankSum::new_from_fn(left, right, f0, g0);
+        let mut none: [f64; 0] = [];
+        s.get_values::<3>(&[], &mut none);
+    }
+
+    #[test]
+    #[should_panic(expected = "get_values: 2 points but an output of length 1")]
+    fn get_values_checks_output_length() {
+        let (left, right) = grids_2_1();
+        let s = LowRankSum::new_from_fn(left, right, f0, g0);
+        s.get_values(&[[0.1, 0.9, 0.2]; 2], &mut [0.0]);
+    }
+
+    #[test]
+    fn assembly_commutes_with_addition() {
+        let a = two_term_sum();
+        let mut b = empty_sum();
+        push_sampled(&mut b, 3.0, |x| x[1].exp(), |y| y[0] - 1.0);
+        let (pa, pb, pab) = (a.assemble(), b.assemble(), a.add(&b).assemble());
+        for ((u, v), w) in pa.iter().zip(&pb).zip(&pab) {
+            assert!((u + v - w).abs() < 1e-14);
+        }
     }
 }

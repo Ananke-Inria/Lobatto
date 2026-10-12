@@ -8,14 +8,17 @@ repository = "https://github.com/OndoMathX/QuadratiX/tree/main/lobatto-lowrank"
 keywords = ["gauss-lobatto", "low-rank", "svd", "tensor-product"]
 categories = ["mathematics", "science"]
 
+[[bench]]
+name = "compress"
+harness = false
+
 [package.metadata.docs.rs]
 rustdoc-args = ["--html-in-header", "katex.html"]
 
-[features]
-# Hook for (de)serialising sums; no derives yet.
-serde = ["dep:serde"]
-
 [dependencies]
-lobatto-grid = "0.1.1"
+lobatto-grid = "0.1.2"
 nalgebra = "0.34.1"
-serde = { version = "1", features = ["derive"], optional = true }
+rayon = "1"
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }

@@ -12,10 +12,9 @@
 //!
 //! with scalars $a_k$, each $\rho_k$ a nodal field on the left grid and each
 //! $\mu_k$ a nodal field on the right grid. Grids come from
-//! [`lobatto-grid`](https://crates.io/crates/lobatto-grid); each side is a
-//! [`WeightedGrid`], the grid bundled with its mass weights, shared by every
-//! term and every sum derived from it. Sums built independently on equal
-//! grids can still be added.
+//! [`lobatto-grid`](https://crates.io/crates/lobatto-grid); a sum owns its two
+//! grids and their mass weights, and two sums can be added when their grids
+//! are equal.
 //!
 //! All norms, Gram matrices and compressions use the discrete `L²` inner
 //! product of the box, given by the mass weights of each grid
@@ -23,23 +22,22 @@
 //!
 //! ## Status
 //!
-//! The structure and its basic operations ([`lowrank`]) are implemented; the
-//! algorithms (assembly, Gram matrices, QR/SVD compression) are not yet and
-//! panic with `todo!()`.
+//! The structure, the full grid, the assembled field and point evaluation
+//! ([`lowrank`]), the algebra (scaling, addition, Gram matrices, norm, inner
+//! product, distance) and the weighted QR → SVD compression ([`compress`])
+//! are implemented.
 //!
 //! ## Modules
 //!
 //! | Module | Contents |
 //! |--------|----------|
-//! | [`lowrank`] | [`WeightedGrid`], [`LowRankSum`] and [`LowRankTerm`]: construction, accessors, value, scaling, addition. |
-//! | [`inner`] | Weighted Gram matrices, norm, inner product and distance, without assembling. |
-//! | [`dense`] | Conversion to and from the dense field on the full grid (tests, small sizes). |
-//! | [`compress`] | [`Truncation`] criteria and the weighted QR → SVD compression. |
+//! | [`lowrank`] | [`LowRankSum`]: factor-matrix storage, construction, accessors, value, point evaluation, full grid and assembled field. |
+//! | [`algebra`] | Scaling, addition, weighted Gram matrices, norm, inner product and distance, without assembling. |
+//! | [`compress`] | [`Truncation`] criteria, the weighted QR → SVD compression, and its dense counterpart from an assembled field. |
 
+pub mod algebra;
 pub mod compress;
-pub mod dense;
-pub mod inner;
 pub mod lowrank;
 
 pub use compress::{Compressed, Truncation};
-pub use lowrank::{LowRankSum, LowRankTerm, WeightedGrid};
+pub use lowrank::LowRankSum;
