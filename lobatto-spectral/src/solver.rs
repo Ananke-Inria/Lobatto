@@ -49,6 +49,7 @@
 //! [`lobatto_grid::GridND::get_x`].
 
 use lobatto::collocation::{CollocationBasis, Gauss};
+use lobatto_grid::grid::nd_fiber_base;
 use lobatto_grid::{Extension, Grid1D, GridND};
 use nalgebra::{DMatrix, DVector, SymmetricEigen};
 use rayon::prelude::*;
@@ -121,27 +122,6 @@ fn mul(v: &DMatrix<f64>, x: &[f64], out: &mut [f64]) {
             *o += a * xk;
         }
     }
-}
-
-/// Flat start index of the `s`-th fibre along direction `d` of a
-/// column-major tensor of shape `sizes`. For a fixed `d`, distinct `s`
-/// yield disjoint index sets.
-fn nd_fiber_base<const N: usize>(
-    s: usize,
-    d: usize,
-    sizes: &[usize; N],
-    strides: &[usize; N],
-) -> usize {
-    let mut base = 0usize;
-    let mut rem = s;
-    for d2 in 0..N {
-        if d2 == d {
-            continue;
-        }
-        base += (rem % sizes[d2]) * strides[d2];
-        rem /= sizes[d2];
-    }
-    base
 }
 
 // ── 1D solver ────────────────────────────────────────────────────────────────

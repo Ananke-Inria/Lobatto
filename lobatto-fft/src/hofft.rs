@@ -62,6 +62,7 @@
 //! independent coefficients by discarding modes determined by the spectral symmetry.
 
 use lobatto::collocation::{CollocationBasis, Gauss};
+use lobatto_grid::grid::{nd_col_major_strides, nd_fiber_base};
 use lobatto_grid::{Grid1D, GridND};
 use rayon::prelude::*;
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
@@ -911,38 +912,4 @@ impl<const N: usize> EngineND<N> {
             });
         }
     }
-}
-
-// ── ND helpers ───────────────────────────────────────────────────────────────
-
-/// Compute column-major strides for a fixed-size shape array.
-///
-/// Returns `st` with `st[0] = 1` and `st[d] = st[d-1] * sizes[d-1]` for `d ≥ 1`,
-/// so that flat index `Σ_d i_d * st[d]` maps the multi-index `(i_0, …, i_{N-1})`
-/// with direction 0 varying fastest.
-pub(crate) fn nd_col_major_strides<const N: usize>(sizes: &[usize; N]) -> [usize; N] {
-    let mut st = [1usize; N];
-    for d in 1..N {
-        st[d] = st[d - 1] * sizes[d - 1];
-    }
-    st
-}
-
-/// Compute the start offset of the `s`-th fiber along direction `d`.
-///
-/// `s` enumerates all index combinations for dimensions other than `d` in column-major
-/// order (direction 0 varies fastest, skipping `d`), so `s ∈ [0, total / sizes[d])`.
-/// The returned offset is `Σ_{d' ≠ d} i_{d'} * strides[d']` for the multi-index
-/// corresponding to `s`.
-pub(crate) fn nd_fiber_base(s: usize, d: usize, sizes: &[usize], strides: &[usize]) -> usize {
-    let mut base = 0usize;
-    let mut rem = s;
-    for d2 in 0..sizes.len() {
-        if d2 == d {
-            continue;
-        }
-        base += (rem % sizes[d2]) * strides[d2];
-        rem /= sizes[d2];
-    }
-    base
 }

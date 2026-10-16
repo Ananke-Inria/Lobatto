@@ -47,7 +47,8 @@
 //! | `Dirichlet` | `k·r + j - 1` (left boundary excluded) |
 //! | `Neumann`   | `k·r + j`, plus the right endpoint at `n·r` |
 
-use crate::hofft::{nd_col_major_strides, nd_fiber_base, Engine, EngineND, Extension};
+use crate::hofft::{Engine, EngineND, Extension};
+use lobatto_grid::grid::{nd_col_major_strides, nd_fiber_base};
 use lobatto::collocation::{CollocationBasis, Gauss};
 use nalgebra::*;
 use rayon::prelude::*;
