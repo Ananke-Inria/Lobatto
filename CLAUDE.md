@@ -8,7 +8,7 @@ Rust workspace for Gauss–Lobatto spectral-element numerics.
 | `lobatto-grid` | Grid geometry (`Grid1D`/`GridND<N>` on arbitrary domains, `Extension` folding, DOF indexing) and interpolation (`eval`/`eval_extended`/`convect`, `EvalPlan`, `Scalar`) |
 | `lobatto-fft` | HoFFT transforms (`hofft::Engine`/`EngineND`), screened Poisson solvers (`solver::Poisson`/`PoissonND`); engines/solvers expose their grid via `grid()` |
 | `lobatto-spectral` | Screened Poisson solvers by dense fast diagonalisation (same interface as `lobatto-fft::solver`, real only, small `n·r`); solvers expose their grid via `grid()` |
-| `lobatto-lowrank` | Low-rank sums of products `Σ a_k ρ_k ⊗ μ_k` of fields on two grids (`LowRankSum<P, Q>`), weighted L² norms and QR → SVD compression (`Truncation`); structure only, algorithms are `todo!()` |
+| `lobatto-lowrank` | Low-rank sums of products `Σ a_k ρ_k ⊗ μ_k` of fields on two grids (`LowRankSum<P, Q>`), weighted L² algebra (Gram, norm, inner product, marginals, factor maps) and QR → SVD compression (`Truncation`), point evaluation via `lobatto-grid` plans |
 
 Conventions:
 - Crates are published to crates.io individually with **version-only dependencies** between them (no path deps): publish the upstream crate first, then bump the requirement downstream.

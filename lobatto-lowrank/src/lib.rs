@@ -20,20 +20,48 @@
 //! product of the box, given by the mass weights of each grid
 //! (`GridND::mass_weights`), never the plain Euclidean one.
 //!
-//! ## Status
+//! ## Quick start
 //!
-//! The structure, the full grid, the assembled field and point evaluation
-//! ([`lowrank`]), the algebra (scaling, addition, Gram matrices, norm, inner
-//! product, distance) and the weighted QR → SVD compression ([`compress`])
-//! are implemented.
+//! ```
+//! use lobatto_grid::{Extension, GridND};
+//! use lobatto_lowrank::{LowRankSum, Truncation};
+//!
+//! // Left and right grids: 4 × 4 elements of order 4 on [-1, 1]², Neumann.
+//! let grid = || GridND::<2>::new([4, 4], [4, 4], [2.0; 2], [-1.0; 2], [Extension::Even; 2]);
+//!
+//! // Nodal factors (the two grids are equal, so they share their nodes).
+//! let x = grid().get_x();
+//! let cos: Vec<f64> = x.iter().map(|p| p[0].cos()).collect();
+//! let sin: Vec<f64> = x.iter().map(|p| p[0].sin()).collect();
+//!
+//! // cos(x₁ − y₁) + cos(x₁ + y₁), expanded into four products.
+//! let mut f = LowRankSum::new(grid(), grid());
+//! f.push(1.0, &cos, &cos);
+//! f.push(1.0, &sin, &sin);
+//! f.push(1.0, &cos, &cos);
+//! f.push(-1.0, &sin, &sin);
+//!
+//! // The field is 2 cos x₁ cos y₁: compression finds rank one.
+//! let c = f.compress(Truncation::RelativeTol(1e-12));
+//! assert_eq!(c.kept, 1);
+//!
+//! // Weighted L² norm: 2 · (2 ∫ cos² over [-1, 1])² = 4 (1 + sin 2 / 2).
+//! let norm = 4.0 * (1.0 + 2f64.sin() / 2.0);
+//! assert!((c.norm - norm).abs() < 1e-8 * norm);
+//!
+//! // Interpolation at points of the 4D box, without assembling the field.
+//! let mut out = [0.0];
+//! f.get_values(&[[0.3, -0.2, 0.5, 0.9]], &mut out);
+//! assert!((out[0] - 2.0 * 0.3f64.cos() * 0.5f64.cos()).abs() < 1e-5);
+//! ```
 //!
 //! ## Modules
 //!
 //! | Module | Contents |
 //! |--------|----------|
 //! | [`lowrank`] | [`LowRankSum`]: factor-matrix storage, construction, accessors, value, point evaluation, full grid and assembled field. |
-//! | [`algebra`] | Scaling, addition, weighted Gram matrices, norm, inner product and distance, without assembling. |
-//! | [`compress`] | [`Truncation`] criteria, the weighted QR → SVD compression, and its dense counterpart from an assembled field. |
+//! | [`algebra`] | Scaling, addition, term-by-term building ([`push`](LowRankSum::push)), weighted Gram matrices, norm, inner product and distance, marginals, and maps of the factors, all without assembling. |
+//! | [`compress`] | [`Truncation`] criteria and the weighted QR → SVD compression to canonical form. |
 
 pub mod algebra;
 pub mod compress;
