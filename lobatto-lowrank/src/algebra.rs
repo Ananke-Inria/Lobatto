@@ -42,6 +42,23 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
         }
     }
 
+    /// Append the term `a · ρ ⊗ μ`, `rho` of length `N_left`, `mu` of length
+    /// `N_right` (nodal values in the order of `GridND::get_x`).
+    ///
+    /// No compression; amortised `O(N_left + N_right)` like
+    /// [`add_assign`](Self::add_assign).
+    ///
+    /// # Panics
+    ///
+    /// If `rho` or `mu` does not have the length of its grid.
+    pub fn push(&mut self, a: f64, rho: &[f64], mu: &[f64]) {
+        assert_eq!(rho.len(), self.n_left(), "rho length differs from the left grid");
+        assert_eq!(mu.len(), self.n_right(), "mu length differs from the right grid");
+        self.a.extend([a]);
+        self.rho.extend(rho.iter().copied());
+        self.mu.extend(mu.iter().copied());
+    }
+
     /// In-place version of [`LowRankSum::add`].
     ///
     /// # Panics
@@ -155,6 +172,85 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     pub fn distance_squared(&self, other: &Self) -> f64 {
         let d = self.norm_squared() - 2.0 * self.inner(other) + other.norm_squared();
         d.max(0.0)
+    }
+
+    // ── Marginals ───────────────────────────────────────────────────────────
+
+    /// The field summed over the right directions with the right grid's mass
+    /// weights, `Σ_k a_k (Σ_j w_j μ_k[j]) ρ_k`: a nodal field on the left grid.
+    ///
+    /// The quadrature of the field in the right variables, computed as
+    /// `ρ (a ∘ μᵀ w)` without assembling the field. Cost
+    /// `(N_left + N_right) · M`. All zeros for an empty sum.
+    pub fn marginal_left(&self) -> Vec<f64> {
+        let mut c = self.mu.tr_mul(&self.sqrt_w_right.component_mul(&self.sqrt_w_right));
+        c.component_mul_assign(&self.a);
+        (&self.rho * c).data.into()
+    }
+
+    /// The field summed over the left directions,
+    /// `Σ_k a_k (Σ_i w_i ρ_k[i]) μ_k`: a nodal field on the right grid.
+    ///
+    /// `μ (a ∘ ρᵀ w)`; see [`marginal_left`](Self::marginal_left).
+    pub fn marginal_right(&self) -> Vec<f64> {
+        let mut c = self.rho.tr_mul(&self.sqrt_w_left.component_mul(&self.sqrt_w_left));
+        c.component_mul_assign(&self.a);
+        (&self.mu * c).data.into()
+    }
+
+    /// Apply `f` to every left factor in place, `ρ_k ← f(ρ_k)`; the
+    /// coefficients are unchanged. (A pointwise weight, a diffusion step.)
+    ///
+    /// `f` is called once per term, in order `k = 0..M`, on the contiguous
+    /// column `ρ_k` (length `N_left`).
+    pub fn map_left_in_place(&mut self, mut f: impl FnMut(&mut [f64])) {
+        for mut col in self.rho.column_iter_mut() {
+            f(col.as_mut_slice());
+        }
+    }
+
+    /// Apply `f` to every right factor in place, `μ_k ← f(μ_k)`.
+    ///
+    /// See [`map_left_in_place`](Self::map_left_in_place).
+    pub fn map_right_in_place(&mut self, mut f: impl FnMut(&mut [f64])) {
+        for mut col in self.mu.column_iter_mut() {
+            f(col.as_mut_slice());
+        }
+    }
+
+    /// The sum `Σ_k a_k · L(ρ_k) ⊗ R(μ_k)` for maps `L` of the left factors
+    /// and `R` of the right factors, on the same grids and with the same
+    /// number of terms. Each map writes its result into the output slice,
+    /// which has the length of its input.
+    ///
+    /// The output slices are zero-filled before each call. `self` is left
+    /// untouched; for an in-place update use
+    /// [`map_left_in_place`](Self::map_left_in_place) and
+    /// [`map_right_in_place`](Self::map_right_in_place).
+    pub fn map(
+        &self,
+        left: impl Fn(&[f64], &mut [f64]),
+        right: impl Fn(&[f64], &mut [f64]),
+    ) -> Self {
+        let mut rho = DMatrix::zeros(self.n_left(), self.len());
+        for (src, mut dst) in self.rho.column_iter().zip(rho.column_iter_mut()) {
+            left(src.as_slice(), dst.as_mut_slice());
+        }
+        let mut mu = DMatrix::zeros(self.n_right(), self.len());
+        for (src, mut dst) in self.mu.column_iter().zip(mu.column_iter_mut()) {
+            right(src.as_slice(), dst.as_mut_slice());
+        }
+        Self {
+            left: self.left.clone(),
+            right: self.right.clone(),
+            sqrt_w_left: self.sqrt_w_left.clone(),
+            sqrt_w_right: self.sqrt_w_right.clone(),
+            inv_sqrt_w_left: self.inv_sqrt_w_left.clone(),
+            inv_sqrt_w_right: self.inv_sqrt_w_right.clone(),
+            a: self.a.clone(),
+            rho,
+            mu,
+        }
     }
 }
 
@@ -391,6 +487,125 @@ mod tests {
         let other_right = GridND::<1>::new([3], [4], [1.0], [0.0], [Extension::Even]);
         let b = LowRankSum::new_from_fn(l, other_right, |x| x[0], |y| y[0]);
         a.inner(&b);
+    }
+
+    #[test]
+    fn marginals_match_weighted_sums_of_assembled_field() {
+        let s = three_terms();
+        let (nl, nr) = (s.n_left(), s.n_right());
+        let (wl, wr) = (s.left().mass_weights(), s.right().mass_weights());
+        let p = s.assemble();
+        let (ml, mr) = (s.marginal_left(), s.marginal_right());
+        assert_eq!((ml.len(), mr.len()), (nl, nr));
+        for i in 0..nl {
+            let exact: f64 = (0..nr).map(|j| wr[j] * p[i + nl * j]).sum();
+            assert!((ml[i] - exact).abs() < 1e-13 * (1.0 + exact.abs()));
+        }
+        for j in 0..nr {
+            let exact: f64 = (0..nl).map(|i| wl[i] * p[i + nl * j]).sum();
+            assert!((mr[j] - exact).abs() < 1e-13 * (1.0 + exact.abs()));
+        }
+    }
+
+    #[test]
+    fn marginals_of_rank_one_polynomial_are_exact() {
+        // 3 (1 + x₁) y²: ∫ y² over [0, 1] = 1/3, ∫∫ (1 + x₁) over
+        // [-1, 1) × [0.5, 2] = 2 · (3² − 1.5²) / 2 = 6.75.
+        let (l, r) = grids();
+        let mut s = LowRankSum::new_from_fn(l, r, |x| 1.0 + x[1], |y| y[0] * y[0]);
+        s.scale(3.0);
+        for (v, x) in s.marginal_left().iter().zip(s.left().get_x()) {
+            assert!((v - (1.0 + x[1])).abs() < 1e-14);
+        }
+        for (v, y) in s.marginal_right().iter().zip(s.right().get_x()) {
+            assert!((v - 3.0 * 6.75 * y[0] * y[0]).abs() < 1e-13);
+        }
+    }
+
+    #[test]
+    fn marginals_of_empty_sum_are_zero() {
+        let (l, r) = grids();
+        let s = LowRankSum::new(l, r);
+        assert!(s.marginal_left().iter().all(|&v| v == 0.0));
+        assert!(s.marginal_right().iter().all(|&v| v == 0.0));
+        assert_eq!((s.marginal_left().len(), s.marginal_right().len()), (s.n_left(), s.n_right()));
+    }
+
+    #[test]
+    fn push_matches_add_assign_of_rank_one_sums() {
+        let s = three_terms();
+        let mut p = s.zeros_like();
+        for k in 0..s.len() {
+            p.push(s.coefficients()[k], s.rho_k(k), s.mu_k(k));
+        }
+        assert_eq!(p.coefficients(), s.coefficients());
+        assert_eq!(p.rho(), s.rho());
+        assert_eq!(p.mu(), s.mu());
+    }
+
+    #[test]
+    #[should_panic(expected = "rho length differs from the left grid")]
+    fn push_panics_on_wrong_length() {
+        let mut s = three_terms();
+        let mu = s.mu_k(0).to_vec();
+        s.push(1.0, &[0.0; 3], &mu);
+    }
+
+    #[test]
+    fn map_in_place_applies_to_every_factor_in_order() {
+        let s = three_terms();
+        let mut t = s.clone();
+        let (mut kl, mut kr) = (0.0, 0.0);
+        t.map_left_in_place(|r| {
+            kl += 1.0;
+            r.iter_mut().for_each(|v| *v *= kl);
+        });
+        t.map_right_in_place(|m| {
+            kr += 1.0;
+            m.iter_mut().for_each(|v| *v += kr);
+        });
+        assert_eq!(t.coefficients(), s.coefficients());
+        for k in 0..s.len() {
+            let c = (k + 1) as f64;
+            assert!(t.rho_k(k).iter().zip(s.rho_k(k)).all(|(x, y)| *x == c * y));
+            assert!(t.mu_k(k).iter().zip(s.mu_k(k)).all(|(x, y)| *x == y + c));
+        }
+    }
+
+    #[test]
+    fn map_matches_map_in_place_and_keeps_self() {
+        let s = three_terms();
+        let left = |r: &[f64], out: &mut [f64]| {
+            for (o, v) in out.iter_mut().zip(r) {
+                *o = v * v;
+            }
+        };
+        let right = |m: &[f64], out: &mut [f64]| {
+            // Reversal: the output is a genuine function of the whole input.
+            for (o, v) in out.iter_mut().zip(m.iter().rev()) {
+                *o = 2.0 * v;
+            }
+        };
+        let mapped = s.map(left, right);
+        let mut t = s.clone();
+        t.map_left_in_place(|r| r.iter_mut().for_each(|v| *v *= *v));
+        t.map_right_in_place(|m| {
+            m.reverse();
+            m.iter_mut().for_each(|v| *v *= 2.0);
+        });
+        assert!(mapped.same_grids(&s));
+        assert_eq!(mapped.coefficients(), t.coefficients());
+        assert_eq!(mapped.rho(), t.rho());
+        assert_eq!(mapped.mu(), t.mu());
+        assert_eq!(s.rho(), three_terms().rho());
+    }
+
+    #[test]
+    fn map_of_empty_sum_is_empty() {
+        let (l, r) = grids();
+        let s = LowRankSum::new(l, r).map(|_, _| unreachable!(), |_, _| unreachable!());
+        assert!(s.is_empty());
+        assert_eq!((s.rho().nrows(), s.mu().nrows()), (s.n_left(), s.n_right()));
     }
 
     #[test]

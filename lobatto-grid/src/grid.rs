@@ -9,6 +9,7 @@
 
 use lobatto::collocation::{CollocationBasis, Gauss};
 use lobatto::utilities::barycentric_weights;
+use rayon::prelude::*;
 
 // ── Extension ────────────────────────────────────────────────────────────────
 
@@ -71,6 +72,9 @@ pub struct Grid1D {
     pub(crate) gauss_lobatto_weights: Vec<f64>,
     /// Barycentric weights for the `r + 1` Gauss-Lobatto nodes.
     pub(crate) bary_weights: Vec<f64>,
+    /// Reference differentiation matrix on `[0, 1]`, `(r + 1) × (r + 1)`
+    /// column-major: entry `j + (r + 1)·i` is `ℓ_i'(ξ_j)`.
+    pub(crate) diff_matrix: Vec<f64>,
 }
 
 impl Grid1D {
@@ -85,6 +89,7 @@ impl Grid1D {
         let gauss_lobatto_points = basis.points_1d(0).to_vec();
         let gauss_lobatto_weights = basis.weights_1d(0).to_vec();
         let bary_weights = barycentric_weights(&gauss_lobatto_points);
+        let diff_matrix = basis.diff_matrix_1d(0).as_slice().to_vec();
         Self {
             n,
             r,
@@ -95,6 +100,7 @@ impl Grid1D {
             gauss_lobatto_points,
             gauss_lobatto_weights,
             bary_weights,
+            diff_matrix,
         }
     }
 
@@ -262,6 +268,49 @@ impl Grid1D {
             Extension::Even => k * self.r + j,
         }
     }
+
+    /// ∂u/∂x at the Gauss–Lobatto points; a node shared by
+    /// two elements (the periodic seam included) takes the average of the
+    /// two; an `Even` boundary node its one element's value; the unstored
+    /// `Odd` boundary zeros enter as zeros.
+    ///
+    /// `u` and `out` are stored DOFs (length `N_dof`, in the order of
+    /// [`get_x`](Self::get_x)). Non-assembled: no global matrix is formed;
+    /// each element gathers its `r + 1` nodal values, applies the reference
+    /// differentiation matrix scaled by `1/h`, and adds the result into
+    /// `out`, with weight `1/2` at the nodes it shares with a neighbour.
+    /// Cost `n·(r + 1)²`.
+    ///
+    /// # Panics
+    ///
+    /// If `u` or `out` does not have length `N_dof`.
+    pub fn derivative(&self, u: &[f64], out: &mut [f64]) {
+        assert_eq!(u.len(), self.n_dof, "u length differs from N_dof");
+        assert_eq!(out.len(), self.n_dof, "out length differs from N_dof");
+        let (n, r) = (self.n, self.r);
+        let inv_h = 1.0 / self.h();
+        let mut ul = vec![0.0; r + 1];
+        out.fill(0.0);
+        for k in 0..n {
+            for (j, v) in ul.iter_mut().enumerate() {
+                let i = self.eval_dof_index(k, j);
+                *v = if i < self.n_dof { u[i] } else { 0.0 };
+            }
+            for j in 0..=r {
+                let i = self.eval_dof_index(k, j);
+                if i == self.n_dof {
+                    continue;
+                }
+                // The element end nodes are shared, except the domain
+                // endpoints of a non-periodic grid.
+                let shared = (j == 0 && (k > 0 || self.extension == Extension::Periodic))
+                    || (j == r && (k < n - 1 || self.extension == Extension::Periodic));
+                let weight = if shared { 0.5 * inv_h } else { inv_h };
+                let du: f64 = (0..=r).map(|m| self.diff_matrix[j + (r + 1) * m] * ul[m]).sum();
+                out[i] += weight * du;
+            }
+        }
+    }
 }
 
 // ── ND grid ─────────────────────────────────────────────────────────────────
@@ -369,6 +418,53 @@ impl<const N: usize> GridND<N> {
             .map(|p| std::array::from_fn(|d| x1d[d][(p / self.strides[d]) % self.ndofs[d]]))
             .collect()
     }
+
+    /// ∂u/∂x_d of a nodal field `u` (column-major, direction 0 fastest),
+    /// written into `out` (same length): `Grid1D::derivative` of direction
+    /// `d` along every fibre of that direction.
+    ///
+    /// Parallel over the fibres, without `unsafe`. Direction 0 has contiguous
+    /// fibres and is differentiated in place in `out`. For `d > 0` the fibres
+    /// are strided: each one is gathered and differentiated into a contiguous
+    /// row of a temporary (fibre-major, length `total`), which is then
+    /// transposed into `out` one contiguous run of direction-`d` index at a
+    /// time.
+    ///
+    /// # Panics
+    ///
+    /// If `d ≥ N`, or `u` or `out` does not have length `total`.
+    pub fn derivative(&self, d: usize, u: &[f64], out: &mut [f64]) {
+        assert_eq!(u.len(), self.total, "u length differs from total");
+        assert_eq!(out.len(), self.total, "out length differs from total");
+        let g = &self.grids[d];
+        let (m, s) = (self.ndofs[d], self.strides[d]);
+        if s == 1 {
+            out.par_chunks_mut(m)
+                .zip(u.par_chunks(m))
+                .for_each(|(o, f)| g.derivative(f, o));
+            return;
+        }
+        let mut tmp = vec![0.0; self.total];
+        tmp.par_chunks_mut(m)
+            .enumerate()
+            .for_each_init(
+                || vec![0.0; m],
+                |fibre, (f, o)| {
+                    let base = nd_fiber_base(f, d, &self.ndofs, &self.strides);
+                    for (j, v) in fibre.iter_mut().enumerate() {
+                        *v = u[base + s * j];
+                    }
+                    g.derivative(fibre, o);
+                },
+            );
+        // Run c = j + m·i_high of out is out[i_low + s·c], i_low = 0..s.
+        out.par_chunks_mut(s).enumerate().for_each(|(c, o)| {
+            let (j, i_high) = (c % m, c / m);
+            for (i_low, v) in o.iter_mut().enumerate() {
+                *v = tmp[(i_low + s * i_high) * m + j];
+            }
+        });
+    }
 }
 
 // ── ND helpers ───────────────────────────────────────────────────────────────
@@ -378,10 +474,30 @@ impl<const N: usize> GridND<N> {
 /// Returns `st` with `st[0] = 1` and `st[d] = st[d-1] * sizes[d-1]` for `d ≥ 1`,
 /// so that flat index `Σ_d i_d * st[d]` maps the multi-index `(i_0, …, i_{N-1})`
 /// with direction 0 varying fastest.
-pub(crate) fn nd_col_major_strides<const N: usize>(sizes: &[usize; N]) -> [usize; N] {
+pub fn nd_col_major_strides<const N: usize>(sizes: &[usize; N]) -> [usize; N] {
     let mut st = [1usize; N];
     for d in 1..N {
         st[d] = st[d - 1] * sizes[d - 1];
     }
     st
+}
+
+/// Flat start index of the `s`-th fibre along direction `d` of a
+/// column-major tensor of shape `sizes` with strides `strides` (as returned
+/// by [`GridND::strides`]).
+///
+/// `s ∈ 0..total / sizes[d]` enumerates the index combinations of the other
+/// directions in column-major order (direction 0 fastest, `d` skipped); the
+/// fibre is `base + j·strides[d]` for `j ∈ 0..sizes[d]`. For a fixed `d`,
+/// distinct `s` give disjoint fibres covering the whole tensor.
+///
+/// Closed form: the directions before `d` form one index
+/// `s % strides[d]` (stride 1), those after `d` one index `s / strides[d]`
+/// (stride `strides[d]·sizes[d]`), so the cost is independent of `N`.
+/// Requires column-major strides, `strides[d] = Π_{d' < d} sizes[d']`
+/// (checked in debug builds).
+pub fn nd_fiber_base(s: usize, d: usize, sizes: &[usize], strides: &[usize]) -> usize {
+    debug_assert_eq!(strides[d], sizes[..d].iter().product::<usize>());
+    let sd = strides[d];
+    s % sd + sd * sizes[d] * (s / sd)
 }

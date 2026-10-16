@@ -28,6 +28,13 @@
 //! particular `f64` and `Complex<f64>` fields share the same code paths and
 //! plans.
 //!
+//! ## Differentiation and indexing
+//!
+//! | Routine | Description |
+//! |---------|-------------|
+//! | [`Grid1D::derivative`], [`GridND::derivative`] | Nodal derivative, element by element (no assembled matrix), averaged at shared nodes; ND along every fibre of one direction, Rayon-parallel. |
+//! | [`grid::nd_col_major_strides`], [`grid::nd_fiber_base`] | Column-major strides of a DOF tensor and the start index of its `s`-th fibre along a direction. |
+//!
 //! ## Quick start
 //!
 //! ```rust
