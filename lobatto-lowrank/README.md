@@ -29,7 +29,7 @@ Factors and Gram matrices are [`nalgebra`](https://crates.io/crates/nalgebra) `D
 ```toml
 [dependencies]
 lobatto-grid = "0.1"
-lobatto-lowrank = "0.1"
+lobatto-lowrank = "0.2"
 ```
 
 ```rust

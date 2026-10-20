@@ -1,6 +1,6 @@
 [package]
 name = "lobatto-lowrank"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Low-rank sums of products of fields on two Gauss-Lobatto grids, with weighted QR/SVD compression."
 license = "LGPL-3.0-only"
@@ -16,6 +16,7 @@ harness = false
 rustdoc-args = ["--html-in-header", "katex.html"]
 
 [dependencies]
+faer = { version = "0.24", default-features = false, features = ["std"] }
 lobatto-grid = "0.1.2"
 nalgebra = "0.34.1"
 rayon = "1"

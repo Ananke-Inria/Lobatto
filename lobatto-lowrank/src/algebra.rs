@@ -5,7 +5,9 @@
 //! addition concatenates the terms and never compresses. The inner products
 //! are computed from the factor matrices, without assembling the field: the
 //! weighted Gram matrices are matrix products `Fᵀ (W G)` and the contractions
-//! `aᵀ (G^L ∘ G^R) b` (`∘` the entry-wise product).
+//! `aᵀ (G^L ∘ G^R) b` (`∘` the entry-wise product). The distance between
+//! close fields goes through a thin QR of the concatenated factors instead,
+//! which avoids the cancellation of the Gram contractions.
 
 use nalgebra::{DMatrix, DVector};
 
@@ -151,27 +153,58 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
         self.a.dot(&(cl.component_mul(&cr) * &other.a))
     }
 
-    /// Squared weighted `L²` distance to another sum on the same grids,
-    /// without assembling either field.
+    /// Weighted `L²` distance to another sum on the same grids, accurate
+    /// also for close fields, without assembling either field.
+    ///
+    /// With the factors of both sums side by side and scaled by the
+    /// square-root weights, $\tilde A = W_L^{1/2} [\rho^a \mid \rho^b]$ and
+    /// $\tilde B = W_R^{1/2} [\mu^a \mid \mu^b]$, and the coefficients
+    /// $c = (a, -b)$, the weighted unfolding of the difference is
     ///
     /// $$
-    /// \|\rho - \rho'\|^2 = \|\rho\|^2 - 2 \langle \rho, \rho' \rangle + \|\rho'\|^2,
+    /// \tilde A \operatorname{diag}(c) \tilde B^T
+    /// = Q_A \, (R_A \operatorname{diag}(c) R_B^T) \, Q_B^T
     /// $$
     ///
-    /// from [`norm_squared`](Self::norm_squared) and [`inner`](Self::inner).
+    /// for thin QR factorisations $\tilde A = Q_A R_A$, $\tilde B = Q_B R_B$.
+    /// The `Q` factors have orthonormal columns, so the distance is the
+    /// Frobenius norm of the core $R_A \operatorname{diag}(c) R_B^T$, at most
+    /// `(M_a + M_b) × (M_a + M_b)`. Only the `R` factors are formed; neither
+    /// sum is modified and no difference sum is built: the two QR inputs
+    /// (`N_left × (M_a + M_b)` and `N_right × (M_a + M_b)`) are the only
+    /// large allocations. Cost `(N_left + N_right) · (M_a + M_b)²`.
     ///
-    /// Accuracy: the three terms cancel when the fields are close, so the
-    /// absolute error is about machine precision times `‖ρ‖² + ‖ρ'‖²`, and
-    /// the relative error grows like `ε · ‖ρ‖² / ‖ρ − ρ'‖²`. A distance below
-    /// about `1e-8 · ‖ρ‖` is not resolved; compressing the difference gives an
-    /// accurate one. A tiny negative result from rounding is clamped to zero.
+    /// Accuracy: the QR is backward stable and the norm is a sum of squares,
+    /// so the absolute error is about machine precision times `‖ρ‖ + ‖ρ'‖`
+    /// on the distance itself. The expansion
+    /// $\|\rho\|^2 - 2 \langle \rho, \rho' \rangle + \|\rho'\|^2$ from
+    /// [`norm_squared`](Self::norm_squared) and [`inner`](Self::inner) would
+    /// instead cancel for close fields and resolve no distance below about
+    /// `1e-8 · ‖ρ‖`. Zero if both sums are empty.
     ///
     /// # Panics
     ///
     /// If the two sums are not on equal grids (see [`Self::same_grids`]).
-    pub fn distance_squared(&self, other: &Self) -> f64 {
-        let d = self.norm_squared() - 2.0 * self.inner(other) + other.norm_squared();
-        d.max(0.0)
+    pub fn distance(&self, other: &Self) -> f64 {
+        assert!(self.same_grids(other), "distance between sums on different grids");
+        let (ma, m) = (self.len(), self.len() + other.len());
+        // Column-major: the factor storages chained are the concatenated
+        // columns, and the weights cycle once per column.
+        let a = DMatrix::from_iterator(
+            self.n_left(),
+            m,
+            self.rho.iter().chain(other.rho.iter()).zip(self.sqrt_w_left.iter().cycle()).map(|(x, s)| x * s),
+        );
+        let b = DMatrix::from_iterator(
+            self.n_right(),
+            m,
+            self.mu.iter().chain(other.mu.iter()).zip(self.sqrt_w_right.iter().cycle()).map(|(x, s)| x * s),
+        );
+        let (mut r_a, r_b) = (a.qr().r(), b.qr().r());
+        for (k, mut col) in r_a.column_iter_mut().enumerate() {
+            col *= if k < ma { self.a[k] } else { -other.a[k - ma] };
+        }
+        (r_a * r_b.transpose()).norm()
     }
 
     // ── Marginals ───────────────────────────────────────────────────────────
@@ -451,32 +484,63 @@ mod tests {
     }
 
     #[test]
-    fn distance_squared_matches_assembled_difference() {
-        let (a, b) = (three_terms(), two_other_terms());
-        let mut minus_b = b.clone();
-        minus_b.scale(-1.0);
-        let d = a.add(&minus_b);
-        let exact = assembled_inner(&d, &d);
-        let tol = 1e-12 * (a.norm_squared() + b.norm_squared());
-        assert!((a.distance_squared(&b) - exact).abs() < tol);
-        assert!((a.distance_squared(&b) - b.distance_squared(&a)).abs() < tol);
-    }
-
-    #[test]
-    fn distance_squared_to_self_is_rounding_level_and_nonnegative() {
-        let a = three_terms();
-        let d = a.distance_squared(&a.clone());
-        assert!(d >= 0.0);
-        assert!(d < 1e-13 * a.norm_squared(), "{d}");
-    }
-
-    #[test]
     fn inner_with_empty_sum_is_zero() {
         let a = three_terms();
         let empty = a.zeros_like();
         assert_eq!(a.inner(&empty), 0.0);
         assert_eq!(empty.inner(&a), 0.0);
-        assert!((a.distance_squared(&empty) - a.norm_squared()).abs() < 1e-13 * a.norm_squared());
+    }
+
+    #[test]
+    fn distance_matches_assembled_difference_and_is_symmetric() {
+        let (a, b) = (three_terms(), two_other_terms());
+        let mut minus_b = b.clone();
+        minus_b.scale(-1.0);
+        let exact = assembled_inner(&a.add(&minus_b), &a.add(&minus_b)).sqrt();
+        let tol = 1e-13 * (a.norm_squared().sqrt() + b.norm_squared().sqrt());
+        assert!((a.distance(&b) - exact).abs() < tol);
+        assert!((b.distance(&a) - exact).abs() < tol);
+    }
+
+    #[test]
+    fn distance_resolves_close_fields() {
+        // b = a + δ·t with δ = 1e-10: ‖a − b‖ = δ‖t‖, far below the
+        // `1e-8 · ‖a‖` that ‖a‖² − 2⟨a, b⟩ + ‖b‖² resolves.
+        let a = three_terms();
+        let (l, r) = grids();
+        let t = LowRankSum::new_from_fn(l, r, |x| x[0].cos() * x[1], |y| 1.0 + y[0]);
+        let exact = 1e-10 * t.norm_squared().sqrt();
+        let mut b = a.clone();
+        let mut dt = t.clone();
+        dt.scale(1e-10);
+        b.add_assign(&dt);
+        let d = a.distance(&b);
+        assert!((d - exact).abs() < 1e-4 * exact, "{d:e} vs {exact:e}");
+    }
+
+    #[test]
+    fn distance_to_self_is_rounding_level() {
+        let a = three_terms();
+        assert!(a.distance(&a.clone()) < 1e-14 * a.norm_squared().sqrt());
+    }
+
+    #[test]
+    fn distance_with_empty_sums() {
+        let a = three_terms();
+        let empty = a.zeros_like();
+        assert_eq!(empty.distance(&empty), 0.0);
+        let norm = a.norm_squared().sqrt();
+        assert!((a.distance(&empty) - norm).abs() < 1e-13 * norm);
+        assert!((empty.distance(&a) - norm).abs() < 1e-13 * norm);
+    }
+
+    #[test]
+    #[should_panic(expected = "distance between sums on different grids")]
+    fn distance_panics_on_different_grids() {
+        let a = three_terms();
+        let (l, _) = grids();
+        let other_right = GridND::<1>::new([3], [4], [1.0], [0.0], [Extension::Even]);
+        a.distance(&LowRankSum::new_from_fn(l, other_right, |x| x[0], |y| y[0]));
     }
 
     #[test]

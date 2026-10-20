@@ -9,7 +9,9 @@
 //! 2. Thin Householder QR of both (nalgebra), $\tilde A = Q_A R_A$,
 //!    $\tilde B = Q_B R_B$.
 //! 3. Core matrix $C = R_A \operatorname{diag}(a) R_B^T$, at most `M × M`.
-//! 4. SVD $C = U \Sigma V^T$, singular values sorted decreasing.
+//! 4. SVD $C = U \Sigma V^T$, singular values sorted decreasing, by faer
+//!    (nalgebra's SVD returns wrong singular values on some cores; see
+//!    `core_svd`).
 //! 5. Keep `r` triplets: $\rho_k = W_L^{-1/2} Q_A U_{:,k}$,
 //!    $\mu_k = W_R^{-1/2} Q_B V_{:,k}$, $a_k = \sigma_k$.
 //!
@@ -18,6 +20,11 @@
 //! affects [`LowRankSum::norm_squared`]. Linearly dependent factors (after an
 //! addition) need no special care: they give near-zero rows of `R` and zero
 //! singular values. Cost `O((N_left + N_right)·M² + M³)`.
+
+use faer::dyn_stack::{MemBuffer, MemStack};
+use faer::linalg::svd::{self, ComputeSvdVectors};
+use faer::{diag::DiagMut, MatMut, MatRef, Par};
+use nalgebra::{DMatrix, DVector};
 
 use crate::lowrank::LowRankSum;
 
@@ -95,10 +102,8 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
         }
         let core = r_a * r_b.transpose();
 
-        // 4. SVD, singular values sorted decreasing by nalgebra.
-        let svd = core.svd(true, true);
-        let (u, v_t) = (svd.u.expect("U requested"), svd.v_t.expect("Vᵀ requested"));
-        let sigma = svd.singular_values;
+        // 4. SVD, singular values sorted decreasing.
+        let (u, sigma, v) = core_svd(&core);
         let s = sigma.len();
         let energy: f64 = sigma.iter().map(|x| x * x).sum();
 
@@ -129,7 +134,7 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
                 rho
             },
             || {
-                let mut mu = q_b * v_t.rows(0, r).transpose();
+                let mut mu = q_b * v.columns(0, r);
                 for mut col in mu.column_iter_mut() {
                     col.component_mul_assign(&self.inv_sqrt_w_right);
                 }
@@ -152,6 +157,50 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     pub fn orthonormalize(&mut self) -> Compressed {
         self.compress(Truncation::Rank(self.len()))
     }
+}
+
+/// Thin SVD `core = U diag(σ) Vᵀ` with `σ` decreasing; returns `V`, not `Vᵀ`.
+///
+/// Computed by faer, which reads `core` and writes `U`, `σ` and `V` through
+/// views of the nalgebra column-major storage: no conversion copies.
+/// nalgebra's own SVD (0.34 and 0.35) is not used: on some rank-deficient
+/// cores with clustered small singular values it returns orthonormal `U` and
+/// `V` but wrong singular values, which breaks the guarantee of [`LowRankSum::compress`].
+///
+/// In debug builds the result is checked on one probe vector `x`,
+/// `‖C x − U Σ Vᵀ x‖ ≤ 1e-12 ‖C‖_F ‖x‖`, at cost `O(m·n)`.
+fn core_svd(core: &DMatrix<f64>) -> (DMatrix<f64>, DVector<f64>, DMatrix<f64>) {
+    let (m, n) = core.shape();
+    let k = m.min(n);
+    let mut u = DMatrix::zeros(m, k);
+    let mut sigma = DVector::zeros(k);
+    let mut v = DMatrix::zeros(n, k);
+    let thin = ComputeSvdVectors::Thin;
+    let mut mem = MemBuffer::new(svd::svd_scratch::<f64>(m, n, thin, thin, Par::Seq, Default::default()));
+    svd::svd(
+        MatRef::from_column_major_slice(core.as_slice(), m, n),
+        DiagMut::from_slice_mut(sigma.as_mut_slice()),
+        Some(MatMut::from_column_major_slice_mut(u.as_mut_slice(), m, k)),
+        Some(MatMut::from_column_major_slice_mut(v.as_mut_slice(), n, k)),
+        Par::Seq,
+        MemStack::new(&mut mem),
+        Default::default(),
+    )
+    .expect("SVD of the core did not converge");
+
+    #[cfg(debug_assertions)]
+    {
+        // A probe with no special structure: x_j = 1 + frac(j·φ⁻¹).
+        let x = DVector::from_fn(n, |j, _| 1.0 + (j as f64 * 0.618_033_988_749_895).fract());
+        let mut y = v.tr_mul(&x);
+        y.component_mul_assign(&sigma);
+        let err = (core * &x - &u * y).norm();
+        debug_assert!(
+            err <= 1e-12 * core.norm() * x.norm(),
+            "inaccurate SVD of the core: residual {err:e}"
+        );
+    }
+    (u, sigma, v)
 }
 
 #[cfg(test)]
@@ -270,8 +319,8 @@ mod tests {
             assert!((x - y).abs() < 1e-12 * dense[0], "σ_{k}: {x} vs {y}");
         }
         // Error of the truncation = discarded energy.
-        let tail: f64 = c.discarded.iter().map(|x| x * x).sum();
-        assert!((orig.distance_squared(&s) - tail).abs() < 1e-12 * c.norm * c.norm);
+        let tail = c.discarded.iter().map(|x| x * x).sum::<f64>().sqrt();
+        assert!((orig.distance(&s) - tail).abs() < 1e-12 * c.norm);
         assert!((c.norm * c.norm - orig.norm_squared()).abs() < 1e-12 * c.norm * c.norm);
         assert_canonical(&s);
     }

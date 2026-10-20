@@ -13,6 +13,9 @@
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
+use faer::dyn_stack::{MemBuffer, MemStack};
+use faer::linalg::svd::{self, ComputeSvdVectors};
+use faer::{diag::DiagMut, MatMut, MatRef, Par};
 use lobatto_grid::{Extension, GridND};
 use lobatto_lowrank::{LowRankSum, Truncation};
 use nalgebra::{DMatrix, DVector};
@@ -103,8 +106,36 @@ fn bench_compress_steps(c: &mut Criterion) {
             b.iter_batched(|| scaled.clone(), |x| x.qr(), BatchSize::LargeInput)
         });
         group.bench_function(BenchmarkId::new("form_q", &p), |b| b.iter(|| qr.q()));
+        // nalgebra's SVD, kept for comparison; `compress` uses faer's (below).
         group.bench_function(BenchmarkId::new("svd_core", &p), |b| {
             b.iter_batched(|| core.clone(), |x| x.svd(true, true), BatchSize::SmallInput)
+        });
+        group.bench_function(BenchmarkId::new("svd_core_faer", &p), |b| {
+            let k = core.nrows().min(core.ncols());
+            let thin = ComputeSvdVectors::Thin;
+            b.iter(|| {
+                let (mut u, mut v) = (DMatrix::zeros(core.nrows(), k), DMatrix::zeros(core.ncols(), k));
+                let mut sigma = DVector::zeros(k);
+                let mut mem = MemBuffer::new(svd::svd_scratch::<f64>(
+                    core.nrows(),
+                    core.ncols(),
+                    thin,
+                    thin,
+                    Par::Seq,
+                    Default::default(),
+                ));
+                svd::svd(
+                    MatRef::from_column_major_slice(core.as_slice(), core.nrows(), core.ncols()),
+                    DiagMut::from_slice_mut(sigma.as_mut_slice()),
+                    Some(MatMut::from_column_major_slice_mut(u.as_mut_slice(), core.nrows(), k)),
+                    Some(MatMut::from_column_major_slice_mut(v.as_mut_slice(), core.ncols(), k)),
+                    Par::Seq,
+                    MemStack::new(&mut mem),
+                    Default::default(),
+                )
+                .unwrap();
+                (u, sigma, v)
+            })
         });
         group.bench_function(BenchmarkId::new("q_times_u", &p), |b| {
             b.iter(|| &q * u.columns(0, r))
