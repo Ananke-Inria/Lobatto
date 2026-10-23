@@ -150,6 +150,16 @@ pub struct Poisson {
     bc: BoundaryCondition,
 }
 
+/// Work buffers of one 1D application ([`Poisson::apply_mu_with`]): the
+/// engine's extended buffer and FFT scratch ([`Engine::work_lens`]), and two
+/// per-mode vectors of length `r`. One per thread in the directional solves.
+struct Work1D {
+    buf: Vec<Complex<f64>>,
+    scratch: Vec<Complex<f64>>,
+    col: DVector<Complex<f64>>,
+    v: DVector<Complex<f64>>,
+}
+
 /// Spectral radius `max |μ|` over a set of per-mode real eigenvalue vectors.
 fn max_abs_eigenvalue(eigenvalues: &[DVector<f64>]) -> f64 {
     eigenvalues
@@ -529,6 +539,25 @@ impl Poisson {
     /// real eigenvalue `μ` of the stiffness operator `M⁻¹K` (neither `α` nor
     /// `β` applied): `u = g(M⁻¹K) f`.
     pub fn apply_mu_in_place<G: Fn(f64) -> Complex<f64>>(&self, f: &mut [Complex<f64>], g: G) {
+        self.apply_mu_with(f, &g, &mut self.work());
+    }
+
+    /// Work buffers for [`apply_mu_with`](Self::apply_mu_with).
+    fn work(&self) -> Work1D {
+        let (buf_len, scratch_len) = self.planner.work_lens();
+        let zero = Complex::<f64>::default();
+        Work1D {
+            buf: vec![zero; buf_len],
+            scratch: vec![zero; scratch_len],
+            col: DVector::zeros(self.r),
+            v: DVector::zeros(self.r),
+        }
+    }
+
+    /// [`apply_mu_in_place`](Self::apply_mu_in_place) with the work buffers
+    /// supplied by the caller, so that repeated applications (one per fibre
+    /// in [`PoissonND::apply_mu_in_place_dir`]) do not allocate.
+    fn apply_mu_with(&self, f: &mut [Complex<f64>], g: &impl Fn(f64) -> Complex<f64>, w: &mut Work1D) {
         // Step 1: mass-scale f in place, then forward FFT.
         // Local node index j determines the mass weight:
         //   Periodic / Neumann:  j = idx % r
@@ -541,31 +570,29 @@ impl Poisson {
         for (idx, v) in f.iter_mut().enumerate() {
             *v *= self.periodic_mass_matrix[(idx + j_offset) % self.r];
         }
-        self.planner.forward(f);
+        self.planner.forward_with(f, &mut w.buf, &mut w.scratch);
 
         // Step 2: symbol application via eigendecomposition.
         // For each mode k: v = Q†·g_k, pointwise multiply by g(μ), result = Q·v.
-        let n_freq = self.eigenvalues.len();
-        let mut col = DVector::<Complex<f64>>::zeros(self.r);
-        for k in 0..n_freq {
-            self.planner.get_values(k, f, col.as_mut_slice());
+        for k in 0..self.eigenvalues.len() {
+            self.planner.get_values(k, f, w.col.as_mut_slice());
             // Q† · col
-            let mut v = self.eigenvectors[k].ad_mul(&col);
+            self.eigenvectors[k].ad_mul_to(&w.col, &mut w.v);
             for j in 0..self.r {
-                v[j] *= g(self.eigenvalues[k][j]);
+                w.v[j] *= g(self.eigenvalues[k][j]);
             }
             // Q · v
-            col.gemv(
+            w.col.gemv(
                 Complex::new(1.0, 0.0),
                 &self.eigenvectors[k],
-                &v,
+                &w.v,
                 Complex::new(0.0, 0.0),
             );
-            self.planner.set_values(k, f, col.as_slice());
+            self.planner.set_values(k, f, w.col.as_slice());
         }
 
         // Step 3: recover symmetric modes, inverse FFT.
-        self.planner.inverse(f);
+        self.planner.inverse_with(f, &mut w.buf, &mut w.scratch);
     }
 
     /// Real-input variant of [`solve_in_place`](Self::solve_in_place).
@@ -935,6 +962,107 @@ impl<const N: usize> PoissonND<N> {
         self.fft.inverse(f);
     }
 
+    /// Solve `(α M_d + β K_d) ⊗ M_rest · u = f` in place: the screened
+    /// Poisson problem with diffusion along direction `d` only.
+    ///
+    /// The operator acts as the mass matrix in every other direction, so
+    /// `M_rest` cancels and the solve splits into independent 1D solves, one
+    /// per fibre along `d`:
+    /// $$u = \bigl((\alpha M_d + \beta K_d)^{-1} M_d \otimes I\bigr) f.$$
+    /// The input convention is that of [`solve_in_place`](Self::solve_in_place)
+    /// (strong-form right-hand side), and the result equals
+    /// [`apply_in_place_dirs`](Self::apply_in_place_dirs) with a `g` that
+    /// keeps only `μ⁽ᵈ⁾`, but without the transforms in the other directions:
+    /// one 1D HoFFT solve per fibre instead of `2N` full-array sweeps. An
+    /// exactly zero eigenvalue is annihilated, as in
+    /// [`Poisson::solve_in_place`].
+    ///
+    /// # Panics
+    ///
+    /// If `d ≥ N` or `f` does not have one value per DOF.
+    pub fn solve_in_place_dir(
+        &self,
+        d: usize,
+        f: &mut [Complex<f64>],
+        alpha: impl Into<Complex<f64>>,
+        beta: impl Into<Complex<f64>>,
+    ) {
+        self.apply_in_place_dir(d, f, alpha, beta, pinv);
+    }
+
+    /// Apply `g(L_d)` with `L_d = α I + β M_d⁻¹K_d` along direction `d` only,
+    /// to the **nodal vector** `f` in place: the 1D
+    /// [`Poisson::apply_in_place`] on every fibre along `d`.
+    ///
+    /// See [`solve_in_place_dir`](Self::solve_in_place_dir) for the
+    /// decoupling and [`Poisson::apply_in_place`] for the functional calculus
+    /// and the nodal-vector input convention. `g` must be `Sync`: it is
+    /// called from the Rayon fibre loop.
+    ///
+    /// # Panics
+    ///
+    /// If `d ≥ N` or `f` does not have one value per DOF.
+    pub fn apply_in_place_dir<G: Fn(Complex<f64>) -> Complex<f64> + Sync>(
+        &self,
+        d: usize,
+        f: &mut [Complex<f64>],
+        alpha: impl Into<Complex<f64>>,
+        beta: impl Into<Complex<f64>>,
+        g: G,
+    ) {
+        let (a, b) = (alpha.into(), beta.into());
+        self.apply_mu_in_place_dir(d, f, |mu| g(a + b * mu));
+    }
+
+    /// Like [`apply_in_place_dir`](Self::apply_in_place_dir), but `g` receives
+    /// the raw eigenvalue `μ⁽ᵈ⁾` of `M_d⁻¹K_d` (neither `α` nor `β` applied):
+    /// `u = (g(M_d⁻¹K_d) ⊗ I) f`.
+    ///
+    /// Direction 0 has contiguous fibres, solved in place. For `d > 0` each
+    /// strided fibre is gathered into a per-thread buffer, solved and
+    /// scattered back, fibres in parallel. All work buffers (the fibre, the
+    /// 1D engine's extended buffer and FFT scratch, the per-mode vectors) are
+    /// per thread: no allocation per fibre.
+    ///
+    /// # Panics
+    ///
+    /// If `d ≥ N` or `f` does not have one value per DOF.
+    pub fn apply_mu_in_place_dir<G: Fn(f64) -> Complex<f64> + Sync>(
+        &self,
+        d: usize,
+        f: &mut [Complex<f64>],
+        g: G,
+    ) {
+        assert!(d < N, "direction {d} out of range for N = {N}");
+        let total = self.fft.total;
+        assert_eq!(f.len(), total, "expected {total} DOFs, got {}", f.len());
+        let (ndofs, strides) = (&self.fft.ndofs, &self.fft.strides);
+        let (m, stride) = (ndofs[d], strides[d]);
+        let solver = &self.solvers[d];
+        if stride == 1 {
+            f.par_chunks_mut(m)
+                .for_each_init(|| solver.work(), |w, fibre| solver.apply_mu_with(fibre, &g, w));
+            return;
+        }
+        // SAFETY: nd_fiber_base yields disjoint index sets for distinct `s`,
+        // so concurrent reads and writes through the raw pointer never alias.
+        let ptr = f.as_mut_ptr() as usize;
+        (0..total / m).into_par_iter().for_each_init(
+            || (vec![Complex::<f64>::default(); m], solver.work()),
+            |(fibre, w), s| {
+                let base = nd_fiber_base(s, d, ndofs, strides);
+                let p = ptr as *mut Complex<f64>;
+                for (k, x) in fibre.iter_mut().enumerate() {
+                    *x = unsafe { *p.add(base + k * stride) };
+                }
+                solver.apply_mu_with(fibre, &g, w);
+                for (k, &x) in fibre.iter().enumerate() {
+                    unsafe { *p.add(base + k * stride) = x };
+                }
+            },
+        );
+    }
+
     /// Real-input variant of [`solve_in_place`](Self::solve_in_place).
     ///
     /// For real $\alpha$, $\beta$ the operator $(\alpha M + \beta K)$ is real,
@@ -1276,5 +1404,73 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Mixed 3D grid: periodic, Dirichlet and Neumann directions, strides 1,
+    /// 6 and 30.
+    fn solver_3d() -> PoissonND<3> {
+        PoissonND::<3>::new(
+            [1.0, 2.0, 0.5],
+            [0.0, -1.0, 0.3],
+            [2, 3, 2],
+            [3, 2, 4],
+            [BoundaryCondition::Periodic, BoundaryCondition::Dirichlet, BoundaryCondition::Neumann],
+        )
+    }
+
+    /// Complex test field with no special structure.
+    fn field(total: usize) -> Vec<Complex<f64>> {
+        (0..total)
+            .map(|p| Complex::new((1.7 * p as f64).sin(), (0.9 * p as f64).cos()))
+            .collect()
+    }
+
+    /// The directional solve is the 1D solve on every fibre, bit for bit.
+    #[test]
+    fn test_dir_solve_is_1d_solve_on_every_fibre() {
+        let s = solver_3d();
+        let (ndofs, strides, total) = (s.fft.ndofs, s.fft.strides, s.fft.total);
+        let f = field(total);
+        let (alpha, beta) = (Complex::new(0.4, 0.2), 1.3);
+        for d in 0..3 {
+            let mut u = f.clone();
+            s.solve_in_place_dir(d, &mut u, alpha, beta);
+            for k in 0..total / ndofs[d] {
+                let base = nd_fiber_base(k, d, &ndofs, &strides);
+                let mut fibre: Vec<Complex<f64>> =
+                    (0..ndofs[d]).map(|j| f[base + j * strides[d]]).collect();
+                s.solvers[d].solve_in_place(&mut fibre, alpha, beta);
+                for (j, v) in fibre.iter().enumerate() {
+                    assert_eq!(u[base + j * strides[d]], *v, "d={d} fibre {k} j={j}");
+                }
+            }
+        }
+    }
+
+    /// The directional application equals the full ND machinery with a `g`
+    /// that keeps only `μ⁽ᵈ⁾`: the other directions' transforms cancel.
+    #[test]
+    fn test_dir_apply_matches_nd_apply_keeping_one_direction() {
+        let s = solver_3d();
+        let f = field(s.fft.total);
+        let (alpha, beta, dt) = (0.3, 1.1, 0.05);
+        for d in 0..3 {
+            let mut u = f.clone();
+            s.apply_in_place_dir(d, &mut u, alpha, beta, |lam| 1.0 / (1.0 + dt * lam));
+            let mut v = f.clone();
+            s.apply_in_place_dirs(&mut v, |mu| {
+                Complex::from(1.0 / (1.0 + dt * (alpha + beta * mu[d])))
+            });
+            let diff = u.iter().zip(&v).map(|(a, b)| (a - b).norm()).fold(0.0, f64::max);
+            assert!(diff < 1e-12, "d={d}: {diff:.2e}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "direction 3 out of range for N = 3")]
+    fn test_dir_solve_panics_on_out_of_range_direction() {
+        let s = solver_3d();
+        let mut f = vec![Complex::new(0.0, 0.0); s.fft.total];
+        s.solve_in_place_dir(3, &mut f, 1.0, 1.0);
     }
 }

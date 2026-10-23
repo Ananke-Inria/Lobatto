@@ -539,9 +539,29 @@ impl Engine {
     ///
     /// On output, `f` contains the packed frequency-domain representation.
     pub fn forward(&self, f: &mut [Complex<f64>]) {
-        debug_assert_eq!(f.len(), self.n_dof);
+        let (buf_len, scratch_len) = self.work_lens();
+        let zero = Complex::<f64>::default();
+        self.forward_with(f, &mut vec![zero; buf_len], &mut vec![zero; scratch_len]);
+    }
 
-        let mut buf = vec![Complex::<f64>::default(); self.r * self.n_fft];
+    /// Lengths of the work buffers of [`forward_with`](Self::forward_with) and
+    /// [`inverse_with`](Self::inverse_with): the extended buffer `r·n_fft`, and
+    /// the in-place FFT scratch (the larger of the forward and inverse plans').
+    pub(crate) fn work_lens(&self) -> (usize, usize) {
+        let scratch = self.fw_fft.get_inplace_scratch_len().max(self.i_fft.get_inplace_scratch_len());
+        (self.r * self.n_fft, scratch)
+    }
+
+    /// [`forward`](Self::forward) with the extended buffer and the FFT
+    /// scratch supplied by the caller (lengths from
+    /// [`work_lens`](Self::work_lens)): no allocation. Both are overwritten.
+    pub(crate) fn forward_with(
+        &self,
+        f: &mut [Complex<f64>],
+        buf: &mut [Complex<f64>],
+        scratch: &mut [Complex<f64>],
+    ) {
+        debug_assert_eq!(f.len(), self.n_dof);
 
         match self.extension {
             Extension::Periodic => {
@@ -587,7 +607,7 @@ impl Engine {
             }
         }
 
-        self.fw_fft.process(&mut buf);
+        self.fw_fft.process_with_scratch(buf, scratch);
 
         // Compact extraction using symmetry properties.
         match self.extension {
@@ -618,9 +638,21 @@ impl Engine {
     ///
     /// On output, `g` contains the physical DOFs in `x`-increasing order.
     pub fn inverse(&self, g: &mut [Complex<f64>]) {
-        debug_assert_eq!(g.len(), self.n_dof);
+        let (buf_len, scratch_len) = self.work_lens();
+        let zero = Complex::<f64>::default();
+        self.inverse_with(g, &mut vec![zero; buf_len], &mut vec![zero; scratch_len]);
+    }
 
-        let mut buf = vec![Complex::<f64>::default(); self.r * self.n_fft];
+    /// [`inverse`](Self::inverse) with the extended buffer and the FFT
+    /// scratch supplied by the caller (lengths from
+    /// [`work_lens`](Self::work_lens)): no allocation. Both are overwritten.
+    pub(crate) fn inverse_with(
+        &self,
+        g: &mut [Complex<f64>],
+        buf: &mut [Complex<f64>],
+        scratch: &mut [Complex<f64>],
+    ) {
+        debug_assert_eq!(g.len(), self.n_dof);
 
         let norm = self.n_fft as f64;
 
@@ -636,7 +668,7 @@ impl Engine {
             }
         }
 
-        self.i_fft.process(&mut buf);
+        self.i_fft.process_with_scratch(buf, scratch);
 
         match self.extension {
             Extension::Periodic => {

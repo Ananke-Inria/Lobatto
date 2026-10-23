@@ -252,17 +252,24 @@ impl Poisson {
     pub fn apply_mu_in_place<G: Fn(f64) -> f64>(&self, f: &mut [f64], g: G) {
         let n_dof = self.grid.n_dof();
         assert_eq!(f.len(), n_dof, "expected {n_dof} DOFs, got {}", f.len());
+        self.apply_mu_with(f, &g, &mut vec![0.0; n_dof]);
+    }
+
+    /// [`apply_mu_in_place`](Self::apply_mu_in_place) with the work vector
+    /// `hat` (length `N_dof`) supplied by the caller, so that repeated
+    /// applications (one per fibre in [`PoissonND::apply_mu_in_place_dir`])
+    /// do not allocate.
+    fn apply_mu_with(&self, f: &mut [f64], g: &impl Fn(f64) -> f64, hat: &mut [f64]) {
         // 1. Mass scaling.
         for (fi, m) in f.iter_mut().zip(self.mass_diag.iter()) {
             *fi *= m;
         }
         // 2. Vᵀ, pointwise g(μ), V.
-        let mut hat = vec![0.0; n_dof];
-        tr_mul(&self.eigenvectors, f, &mut hat);
+        tr_mul(&self.eigenvectors, f, hat);
         for (h, &mu) in hat.iter_mut().zip(self.eigenvalues.iter()) {
             *h *= g(mu);
         }
-        mul(&self.eigenvectors, &hat, f);
+        mul(&self.eigenvectors, hat, f);
     }
 
     /// Implicit Euler step `u = (I + dt·L)⁻¹ f` with `L = α I + β M⁻¹K`, on the
@@ -524,6 +531,96 @@ impl<const N: usize> PoissonND<N> {
         });
     }
 
+    /// Solve `(α M_d + β K_d) ⊗ M_rest · u = f` in place: the screened
+    /// Poisson problem with diffusion along direction `d` only.
+    ///
+    /// The operator acts as the mass matrix in every other direction, so
+    /// `M_rest` cancels and the solve splits into independent 1D solves, one
+    /// per fibre along `d`:
+    /// $$u = \bigl((\alpha M_d + \beta K_d)^{-1} M_d \otimes I\bigr) f.$$
+    /// The input convention is that of [`solve_in_place`](Self::solve_in_place)
+    /// (strong-form right-hand side), and the result equals
+    /// [`apply_in_place_dirs`](Self::apply_in_place_dirs) with a `g` that
+    /// keeps only `μ⁽ᵈ⁾`, but without the transforms in the other directions:
+    /// one pass over the data instead of `2N` sweeps. Eigenvalues with
+    /// `|λ| ≤ 1e-12 · (|α| + |β|·max |μ⁽ᵈ⁾|)` are annihilated, as in
+    /// [`Poisson::solve_in_place`].
+    ///
+    /// # Panics
+    ///
+    /// If `d ≥ N` or `f` does not have one value per DOF.
+    pub fn solve_in_place_dir(&self, d: usize, f: &mut [f64], alpha: f64, beta: f64) {
+        assert!(d < N, "direction {d} out of range for N = {N}");
+        let tol = PINV_REL_TOL * (alpha.abs() + beta.abs() * self.solvers[d].mu_max);
+        self.apply_in_place_dir(d, f, alpha, beta, |lam| pinv(lam, tol));
+    }
+
+    /// Apply `g(L_d)` with `L_d = α I + β M_d⁻¹K_d` along direction `d` only,
+    /// to the **nodal vector** `f` in place: the 1D
+    /// [`Poisson::apply_in_place`] on every fibre along `d`.
+    ///
+    /// See [`solve_in_place_dir`](Self::solve_in_place_dir) for the
+    /// decoupling and [`Poisson::apply_in_place`] for the functional calculus
+    /// and the nodal-vector input convention. `g` must be `Sync`: it is
+    /// called from the Rayon fibre loop.
+    ///
+    /// # Panics
+    ///
+    /// If `d ≥ N` or `f` does not have one value per DOF.
+    pub fn apply_in_place_dir<G: Fn(f64) -> f64 + Sync>(
+        &self,
+        d: usize,
+        f: &mut [f64],
+        alpha: f64,
+        beta: f64,
+        g: G,
+    ) {
+        self.apply_mu_in_place_dir(d, f, |mu| g(alpha + beta * mu));
+    }
+
+    /// Like [`apply_in_place_dir`](Self::apply_in_place_dir), but `g` receives
+    /// the raw eigenvalue `μ⁽ᵈ⁾` of `M_d⁻¹K_d` (neither `α` nor `β` applied):
+    /// `u = (g(M_d⁻¹K_d) ⊗ I) f`.
+    ///
+    /// Direction 0 has contiguous fibres, solved in place. For `d > 0` each
+    /// strided fibre is gathered into a per-thread buffer, solved and
+    /// scattered back, fibres in parallel. Per-thread work vectors: no
+    /// allocation per fibre.
+    ///
+    /// # Panics
+    ///
+    /// If `d ≥ N` or `f` does not have one value per DOF.
+    pub fn apply_mu_in_place_dir<G: Fn(f64) -> f64 + Sync>(&self, d: usize, f: &mut [f64], g: G) {
+        assert!(d < N, "direction {d} out of range for N = {N}");
+        let total = self.grid.total();
+        assert_eq!(f.len(), total, "expected {total} DOFs, got {}", f.len());
+        let (ndofs, strides) = (self.grid.ndofs(), self.grid.strides());
+        let (m, stride) = (ndofs[d], strides[d]);
+        let solver = &self.solvers[d];
+        if stride == 1 {
+            f.par_chunks_mut(m)
+                .for_each_init(|| vec![0.0; m], |hat, fibre| solver.apply_mu_with(fibre, &g, hat));
+            return;
+        }
+        // SAFETY: nd_fiber_base yields disjoint index sets for distinct `s`,
+        // so concurrent reads and writes through the raw pointer never alias.
+        let ptr = f.as_mut_ptr() as usize;
+        (0..total / m).into_par_iter().for_each_init(
+            || (vec![0.0; m], vec![0.0; m]),
+            |(fibre, hat), s| {
+                let base = nd_fiber_base(s, d, &ndofs, &strides);
+                let p = ptr as *mut f64;
+                for (k, x) in fibre.iter_mut().enumerate() {
+                    *x = unsafe { *p.add(base + k * stride) };
+                }
+                solver.apply_mu_with(fibre, &g, hat);
+                for (k, &x) in fibre.iter().enumerate() {
+                    unsafe { *p.add(base + k * stride) = x };
+                }
+            },
+        );
+    }
+
     /// Unsplit implicit Euler step `u = (I + dt·L)⁻¹ f` with `L = α I + β M⁻¹K`,
     /// on the nodal vector `f` (see [`apply_in_place`](Self::apply_in_place)).
     pub fn euler_step_in_place(&self, f: &mut [f64], alpha: f64, beta: f64, dt: f64) {
@@ -700,5 +797,62 @@ mod tests {
             .map(|(p, &v)| (v - ux[p % nx] * uy[p / nx]).abs())
             .fold(0.0, f64::max);
         assert!(diff < 1e-13, "split Euler ≠ tensor product of 1D steps ({diff:.2e})");
+    }
+
+    /// Mixed 3D grid: periodic, Dirichlet and Neumann directions, strides 1,
+    /// 6 and 30.
+    fn solver_3d() -> PoissonND<3> {
+        PoissonND::<3>::new(
+            [1.0, 2.0, 0.5],
+            [0.0, -1.0, 0.3],
+            [2, 3, 2],
+            [3, 2, 4],
+            [BoundaryCondition::Periodic, BoundaryCondition::Dirichlet, BoundaryCondition::Neumann],
+        )
+    }
+
+    /// The directional solve is the 1D solve on every fibre, bit for bit.
+    #[test]
+    fn dir_solve_is_1d_solve_on_every_fibre() {
+        let s = solver_3d();
+        let (ndofs, strides, total) = (s.grid.ndofs(), s.grid.strides(), s.grid.total());
+        let f: Vec<f64> = (0..total).map(|p| (1.7 * p as f64).sin()).collect();
+        for d in 0..3 {
+            let mut u = f.clone();
+            s.solve_in_place_dir(d, &mut u, 0.4, 1.3);
+            for k in 0..total / ndofs[d] {
+                let base = nd_fiber_base(k, d, &ndofs, &strides);
+                let mut fibre: Vec<f64> = (0..ndofs[d]).map(|j| f[base + j * strides[d]]).collect();
+                s.solvers[d].solve_in_place(&mut fibre, 0.4, 1.3);
+                for (j, v) in fibre.iter().enumerate() {
+                    assert_eq!(u[base + j * strides[d]], *v, "d={d} fibre {k} j={j}");
+                }
+            }
+        }
+    }
+
+    /// The directional application equals the full ND machinery with a `g`
+    /// that keeps only `μ⁽ᵈ⁾`: the other directions' transforms cancel.
+    #[test]
+    fn dir_apply_matches_nd_apply_keeping_one_direction() {
+        let s = solver_3d();
+        let f: Vec<f64> = (0..s.grid.total()).map(|p| (0.9 * p as f64).cos()).collect();
+        let (alpha, beta, dt) = (0.3, 1.1, 0.05);
+        for d in 0..3 {
+            let mut u = f.clone();
+            s.apply_in_place_dir(d, &mut u, alpha, beta, |lam| 1.0 / (1.0 + dt * lam));
+            let mut v = f.clone();
+            s.apply_in_place_dirs(&mut v, |mu| 1.0 / (1.0 + dt * (alpha + beta * mu[d])));
+            let diff = u.iter().zip(&v).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
+            assert!(diff < 1e-12, "d={d}: {diff:.2e}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "direction 3 out of range for N = 3")]
+    fn dir_solve_panics_on_out_of_range_direction() {
+        let s = solver_3d();
+        let mut f = vec![0.0; s.grid.total()];
+        s.solve_in_place_dir(3, &mut f, 1.0, 1.0);
     }
 }
