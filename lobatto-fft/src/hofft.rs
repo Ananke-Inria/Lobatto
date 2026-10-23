@@ -890,30 +890,7 @@ impl<const N: usize> EngineND<N> {
     /// using the corresponding 1D [`Engine`]; the compact layout preserves
     /// the buffer length, so no reallocation occurs.
     pub fn forward(&self, f: &mut [Complex<f64>]) {
-        debug_assert_eq!(f.len(), self.total);
-        let sizes = self.ndofs.as_slice();
-        let strides = self.strides.as_slice();
-
-        for d in 0..N {
-            let dim_d = self.ndofs[d];
-            let n_fibers = self.total / dim_d;
-            let stride_d = self.strides[d];
-            // Cast to usize (Copy + Send) to share the pointer across threads.
-            // SAFETY: fibers at distinct `s` access non-overlapping indices, so
-            // parallel mutable access is sound.
-            let ptr = f.as_mut_ptr() as usize;
-            (0..n_fibers).into_par_iter().for_each(|s| {
-                let base = nd_fiber_base(s, d, sizes, strides);
-                let ptr = ptr as *mut Complex<f64>;
-                let mut fiber: Vec<Complex<f64>> = (0..dim_d)
-                    .map(|m| unsafe { *ptr.add(base + m * stride_d) })
-                    .collect();
-                self.planners[d].forward(fiber.as_mut_slice());
-                for (m, &v) in fiber.iter().enumerate() {
-                    unsafe { *ptr.add(base + m * stride_d) = v };
-                }
-            });
-        }
+        self.sweep(f, true);
     }
 
     /// Apply inverse HoFFT direction by direction, in place.
@@ -921,27 +898,59 @@ impl<const N: usize> EngineND<N> {
     /// `g` must have length `total`. Each direction is transformed independently
     /// using the corresponding 1D [`Engine`].
     pub fn inverse(&self, g: &mut [Complex<f64>]) {
-        debug_assert_eq!(g.len(), self.total);
-        let sizes = self.ndofs.as_slice();
-        let strides = self.strides.as_slice();
+        self.sweep(g, false);
+    }
 
+    /// The 1D forward (`forward = true`) or inverse transform of every fibre,
+    /// direction by direction, fibres in parallel.
+    // Hot path: per-task buffers only (`for_each_init`), no allocation per
+    // fibre; a per-fibre `Vec` here made it five times slower.
+    fn sweep(&self, f: &mut [Complex<f64>], forward: bool) {
+        debug_assert_eq!(f.len(), self.total);
+        let zero = Complex::<f64>::default();
         for d in 0..N {
-            let dim_d = self.ndofs[d];
-            let n_fibers = self.total / dim_d;
-            let stride_d = self.strides[d];
-            // SAFETY: same non-overlapping fiber argument as in `forward`.
-            let ptr = g.as_mut_ptr() as usize;
-            (0..n_fibers).into_par_iter().for_each(|s| {
-                let base = nd_fiber_base(s, d, sizes, strides);
-                let ptr = ptr as *mut Complex<f64>;
-                let mut fiber: Vec<Complex<f64>> = (0..dim_d)
-                    .map(|m| unsafe { *ptr.add(base + m * stride_d) })
-                    .collect();
-                self.planners[d].inverse(fiber.as_mut_slice());
-                for (m, &v) in fiber.iter().enumerate() {
-                    unsafe { *ptr.add(base + m * stride_d) = v };
+            let (dim_d, stride_d) = (self.ndofs[d], self.strides[d]);
+            let engine = &self.planners[d];
+            let (buf_len, scratch_len) = engine.work_lens();
+            let transform = |fiber: &mut [Complex<f64>], buf: &mut [Complex<f64>], scratch: &mut [Complex<f64>]| {
+                if forward {
+                    engine.forward_with(fiber, buf, scratch);
+                } else {
+                    engine.inverse_with(fiber, buf, scratch);
                 }
-            });
+            };
+            let min_len = (FIBRE_BATCH / dim_d).max(1);
+            if stride_d == 1 {
+                // Contiguous fibres: transformed in place, no gather/scatter.
+                f.par_chunks_mut(dim_d).with_min_len(min_len).for_each_init(
+                    || (vec![zero; buf_len], vec![zero; scratch_len]),
+                    |(buf, scratch), fiber| transform(fiber, buf, scratch),
+                );
+                continue;
+            }
+            // Cast to usize (Copy + Send) to share the pointer across threads.
+            // SAFETY: fibers at distinct `s` access non-overlapping indices
+            // (tested in `solver::tests`), so parallel mutable access is sound.
+            let ptr = f.as_mut_ptr() as usize;
+            (0..self.total / dim_d).into_par_iter().with_min_len(min_len).for_each_init(
+                || (vec![zero; dim_d], vec![zero; buf_len], vec![zero; scratch_len]),
+                |(fiber, buf, scratch), s| {
+                    let base = nd_fiber_base(s, d, &self.ndofs, &self.strides);
+                    let ptr = ptr as *mut Complex<f64>;
+                    for (m, v) in fiber.iter_mut().enumerate() {
+                        *v = unsafe { *ptr.add(base + m * stride_d) };
+                    }
+                    transform(fiber, buf, scratch);
+                    for (m, &v) in fiber.iter().enumerate() {
+                        unsafe { *ptr.add(base + m * stride_d) = v };
+                    }
+                },
+            );
         }
     }
 }
+
+/// Minimum number of values per Rayon task in the fibre loops of
+/// [`EngineND`] and the solvers: short fibres are batched so that a task
+/// amortises its dispatch and its per-task work buffers.
+pub(crate) const FIBRE_BATCH: usize = 4096;

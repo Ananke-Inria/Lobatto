@@ -99,6 +99,11 @@ fn pinv(lam: f64, tol: f64) -> f64 {
     }
 }
 
+/// Minimum number of values per Rayon task in the fibre loops: short fibres
+/// are batched so that a task amortises its dispatch and its per-task work
+/// buffers.
+const FIBRE_BATCH: usize = 4096;
+
 /// `out = Vᵀ x` for a square column-major matrix `v`.
 fn tr_mul(v: &DMatrix<f64>, x: &[f64], out: &mut [f64]) {
     let n = v.nrows();
@@ -504,31 +509,51 @@ impl<const N: usize> PoissonND<N> {
 
     /// Apply `Vᵀ_d` (`transpose`) or `V_d` to every fibre of `f` along
     /// direction `d`, fibres in parallel.
+    // Hot path: per-task buffers only (`for_each_init`), no allocation per
+    // fibre; two `Vec`s per fibre here made the solve twice as slow.
     fn sweep(&self, f: &mut [f64], d: usize, transpose: bool) {
         let ndofs = self.grid.ndofs();
         let strides = self.grid.strides();
         let n_d = ndofs[d];
         let stride = strides[d];
         let v = &self.solvers[d].eigenvectors;
-        // SAFETY: nd_fiber_base yields disjoint index sets for distinct `s`,
-        // so concurrent reads and writes through the raw pointer never alias.
-        let ptr = f.as_mut_ptr() as usize;
-        (0..f.len() / n_d).into_par_iter().for_each(|s| {
-            let base = nd_fiber_base(s, d, &ndofs, &strides);
-            let p = ptr as *mut f64;
-            let fiber: Vec<f64> = (0..n_d)
-                .map(|k| unsafe { *p.add(base + k * stride) })
-                .collect();
-            let mut out = vec![0.0; n_d];
+        let product = |fiber: &[f64], out: &mut [f64]| {
             if transpose {
-                tr_mul(v, &fiber, &mut out);
+                tr_mul(v, fiber, out);
             } else {
-                mul(v, &fiber, &mut out);
+                mul(v, fiber, out);
             }
-            for (k, &o) in out.iter().enumerate() {
-                unsafe { *p.add(base + k * stride) = o };
-            }
-        });
+        };
+        let min_len = (FIBRE_BATCH / n_d).max(1);
+        if stride == 1 {
+            // Contiguous fibres: no gather; the product goes through `out`.
+            f.par_chunks_mut(n_d).with_min_len(min_len).for_each_init(
+                || vec![0.0; n_d],
+                |out, fiber| {
+                    product(fiber, out);
+                    fiber.copy_from_slice(out);
+                },
+            );
+            return;
+        }
+        // SAFETY: nd_fiber_base yields disjoint index sets for distinct `s`
+        // (tested in `tests`), so concurrent reads and writes through the raw
+        // pointer never alias.
+        let ptr = f.as_mut_ptr() as usize;
+        (0..f.len() / n_d).into_par_iter().with_min_len(min_len).for_each_init(
+            || (vec![0.0; n_d], vec![0.0; n_d]),
+            |(fiber, out), s| {
+                let base = nd_fiber_base(s, d, &ndofs, &strides);
+                let p = ptr as *mut f64;
+                for (k, x) in fiber.iter_mut().enumerate() {
+                    *x = unsafe { *p.add(base + k * stride) };
+                }
+                product(fiber, out);
+                for (k, &o) in out.iter().enumerate() {
+                    unsafe { *p.add(base + k * stride) = o };
+                }
+            },
+        );
     }
 
     /// Solve `(α M_d + β K_d) ⊗ M_rest · u = f` in place: the screened
@@ -597,15 +622,17 @@ impl<const N: usize> PoissonND<N> {
         let (ndofs, strides) = (self.grid.ndofs(), self.grid.strides());
         let (m, stride) = (ndofs[d], strides[d]);
         let solver = &self.solvers[d];
+        let min_len = (FIBRE_BATCH / m).max(1);
         if stride == 1 {
             f.par_chunks_mut(m)
+                .with_min_len(min_len)
                 .for_each_init(|| vec![0.0; m], |hat, fibre| solver.apply_mu_with(fibre, &g, hat));
             return;
         }
         // SAFETY: nd_fiber_base yields disjoint index sets for distinct `s`,
         // so concurrent reads and writes through the raw pointer never alias.
         let ptr = f.as_mut_ptr() as usize;
-        (0..total / m).into_par_iter().for_each_init(
+        (0..total / m).into_par_iter().with_min_len(min_len).for_each_init(
             || (vec![0.0; m], vec![0.0; m]),
             |(fibre, hat), s| {
                 let base = nd_fiber_base(s, d, &ndofs, &strides);
@@ -854,5 +881,37 @@ mod tests {
         let s = solver_3d();
         let mut f = vec![0.0; s.grid.total()];
         s.solve_in_place_dir(3, &mut f, 1.0, 1.0);
+    }
+
+    /// The fibres of every direction partition the DOF array: the `unsafe`
+    /// fibre loops (sweeps, directional solves) write disjoint entries.
+    fn assert_fibres_partition<const N: usize>(s: &PoissonND<N>) {
+        let (ndofs, strides, total) = (s.grid.ndofs(), s.grid.strides(), s.grid.total());
+        for d in 0..N {
+            let mut seen = vec![false; total];
+            for k in 0..total / ndofs[d] {
+                let base = nd_fiber_base(k, d, &ndofs, &strides);
+                for j in 0..ndofs[d] {
+                    let p = base + j * strides[d];
+                    assert!(!seen[p], "d={d}: index {p} in two fibres");
+                    seen[p] = true;
+                }
+            }
+            assert!(seen.iter().all(|&b| b), "d={d}: fibres do not cover the array");
+        }
+    }
+
+    #[test]
+    fn unsafe_fibre_loops_touch_disjoint_entries() {
+        let bc = ALL_BC;
+        assert_fibres_partition(&PoissonND::<1>::new([1.0], [0.0], [3], [4], [bc[1]]));
+        assert_fibres_partition(&solver_3d());
+        assert_fibres_partition(&PoissonND::<5>::new(
+            [1.0; 5],
+            [0.0; 5],
+            [2, 1, 3, 1, 2],
+            [2, 3, 2, 2, 3],
+            [bc[0], bc[1], bc[2], bc[2], bc[0]],
+        ));
     }
 }

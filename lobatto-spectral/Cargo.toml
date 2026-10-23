@@ -1,6 +1,6 @@
 [package]
 name = "lobatto-spectral"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 description = "High-order screened Poisson solvers on Gauss-Lobatto grids by dense fast diagonalisation."
 license = "LGPL-3.0-only"

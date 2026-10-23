@@ -62,19 +62,15 @@ Doc-comment math (KaTeX renders on docs.rs via each crate's `katex.html`; hover/
   - The benchmark comes first: it decides whether the eigensolve work is worth doing at all.
 
 
-### 5. Allocation-free hot paths (candidate fixes — gated on item 3's data, apply in this order)
+### 5. Allocation-free hot paths — done (2026-10-23)
 
-Sites: `EngineND::forward`/`inverse` and `Engine::forward`/`inverse` in `lobatto-fft/src/hofft.rs`; the symbol solve in `lobatto-fft/src/solver.rs` (`PoissonND::solve_in_place`); `PoissonND::sweep` in `lobatto-spectral/src/solver.rs`. Same gather → `Vec` → transform → scatter pattern everywhere.
+Per-task scratch (`for_each_init`) in `EngineND` sweeps (via `Engine::forward_with`/`inverse_with`, `process_with_scratch`), the lobatto-fft per-mode step (`ad_mul_to`/`mul_to`), and the lobatto-spectral `sweep`; contiguous `d == 0` path; `with_min_len` batching (`FIBRE_BATCH`); fibre-disjointness `debug_assert!` at construction; strategy documented in the module docs. Bit-exact against `tests/reference.rs` (stored pre-optimisation solutions) in both crates; no new `unsafe`.
 
-- Thread-local scratch via `rayon::for_each_init` at every per-fibre / per-mode closure; fill with a plain index loop (no `collect`/`from_fn`). Extra memory `O(n_threads · dim_d)`.
-- rustfft scratch: `Engine::forward`/`inverse` take a scratch argument (their `buf` plus `get_inplace_scratch_len()`) and call `process_with_scratch`. `Engine` is shared by `&self` across threads, so scratch is passed in, not stored.
-- Contiguous fast path for `d == 0` (`stride == 1` in the column-major layout): `par_chunks_mut(dim_d)`, no gather/scatter, no `unsafe`. One of the `N` directions per sweep in both crates.
-- Batch several fibres per Rayon task when `dim_d` is small (amortises task dispatch).
-- Symbol solve: hoist the `ad_mul` temporary; one per-thread scratch for the whole mode tuple.
-- Real-input transform: already item 2.
-- Guard: a `debug_assert!` (once per shape, not per task) that the `nd_fiber_base` index sets are disjoint across `s`, so the `unsafe` invariant is checkable.
-- Document the scratch strategy in the module docs of `hofft.rs` and both `solver.rs` so it isn't reverted by accident.
-- Acceptance: allocator traffic per `solve_in_place` down ≥ 90 % (`dhat`); wall time down ≥ 30 % on the item-3 configurations; bit-exact or ≤ 1 ULP vs the pre-optimisation output on the convergence tests (store a reference solution under `tests/`); no new `unsafe`; `cargo test --release --workspace` and clippy clean.
+Measured on a 5D, 1.1M-DOF mixed-BC solve (14 threads, counting allocator / wall time, outside Criterion because of concurrent sessions):
+- lobatto-fft `apply_in_place_dirs`: 6.5M → 4.7k allocations, ~39–49 ms → 14 ms (sweeps 16.5 → 3.3 ms; per-mode step ~32 → 11 ms). Item 3's read-through was 2 buffers per fibre, not 3: rustfft allocates no scratch at these FFT lengths.
+- lobatto-spectral: 1.37M → 4.1k allocations, 11.5–14 ms → 6.1 ms.
+
+Remaining candidate (not done): the lobatto-fft per-mode step now dominates (~11 of 14 ms): `get_values`/`set_values` gather `∏ r_d` values scattered over the whole array per mode tuple, and the 4 × 4 products go through nalgebra's strided views. Plain loops would change rounding (no longer bit-exact).
 
 ### Deferred / smaller items
 

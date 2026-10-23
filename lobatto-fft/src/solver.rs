@@ -47,7 +47,7 @@
 //! | `Dirichlet` | `k·r + j - 1` (left boundary excluded) |
 //! | `Neumann`   | `k·r + j`, plus the right endpoint at `n·r` |
 
-use crate::hofft::{Engine, EngineND, Extension};
+use crate::hofft::{Engine, EngineND, Extension, FIBRE_BATCH};
 use lobatto_grid::grid::{nd_col_major_strides, nd_fiber_base};
 use lobatto::collocation::{CollocationBasis, Gauss};
 use nalgebra::*;
@@ -900,63 +900,74 @@ impl<const N: usize> PoissonND<N> {
 
         self.fft.forward(f);
 
-        // Step 2: symbol solve — independent mode tuples in parallel.
-        // SAFETY: distinct k_flat values write to disjoint positions in f.
+        // Step 2: symbol solve — independent mode tuples in parallel, with a
+        // per-thread scratch: the mode tuple's values `v` (fully overwritten
+        // by `get_values`) and one per-direction product `x`. Hot path: keep
+        // it allocation-free (`ad_mul_to` / `mul_to`, not `ad_mul` / `*`); one
+        // temporary per product made the whole solve three times slower.
+        // SAFETY: distinct k_flat values write to disjoint positions in f, and
+        // each reads only positions it writes (tested in `tests`).
         let ptr = f.as_mut_ptr() as usize;
-        (0..self.n_freq_total).into_par_iter().for_each(|k_flat| {
-            let ks: [usize; N] =
-                std::array::from_fn(|d| (k_flat / self.n_freq_strides[d]) % self.n_freqs[d]);
+        let r_max = rs.iter().copied().max().unwrap_or(0);
+        let min_len = (FIBRE_BATCH / r_total).max(1);
+        (0..self.n_freq_total).into_par_iter().with_min_len(min_len).for_each_init(
+            || (DVector::<Complex<f64>>::zeros(r_total), DVector::<Complex<f64>>::zeros(r_max)),
+            |(v, x), k_flat| {
+                let ks: [usize; N] =
+                    std::array::from_fn(|d| (k_flat / self.n_freq_strides[d]) % self.n_freqs[d]);
 
-            let mut v = DVector::<Complex<f64>>::zeros(r_total);
-
-            {
-                let f_ro = unsafe {
-                    std::slice::from_raw_parts(ptr as *const Complex<f64>, self.fft.total)
-                };
-                self.fft.get_values(&ks, f_ro, v.as_mut_slice());
-            }
-
-            // Apply Q†_d for each direction (sum factorisation).
-            for d in 0..N {
-                let r_d = rs[d];
-                let step = r_strides[d] - 1;
-                for s in 0..r_total / r_d {
-                    let bj = nd_fiber_base(s, d, rs, r_strides);
-                    let x = self.solvers[d].eigenvectors[ks[d]]
-                        .ad_mul(&v.rows_with_step(bj, r_d, step));
-                    v.rows_with_step_mut(bj, r_d, step).set_column(0, &x);
+                {
+                    let f_ro = unsafe {
+                        std::slice::from_raw_parts(ptr as *const Complex<f64>, self.fft.total)
+                    };
+                    self.fft.get_values(&ks, f_ro, v.as_mut_slice());
                 }
-            }
 
-            // Pointwise application of g to the per-direction eigenvalues
-            // μ^{(d)}_{k_d, j_d} of the mode.
-            for j_flat in 0..r_total {
-                let mut mus = [0.0f64; N];
+                // Apply Q†_d for each direction (sum factorisation).
                 for d in 0..N {
-                    let j_d = (j_flat / r_strides[d]) % rs[d];
-                    mus[d] = self.solvers[d].eigenvalues[ks[d]][j_d];
+                    let r_d = rs[d];
+                    let step = r_strides[d] - 1;
+                    let mut x = x.rows_mut(0, r_d);
+                    for s in 0..r_total / r_d {
+                        let bj = nd_fiber_base(s, d, rs, r_strides);
+                        self.solvers[d].eigenvectors[ks[d]]
+                            .ad_mul_to(&v.rows_with_step(bj, r_d, step), &mut x);
+                        v.rows_with_step_mut(bj, r_d, step).copy_from(&x);
+                    }
                 }
-                v[j_flat] *= g(mus);
-            }
 
-            // Apply Q_d for each direction.
-            for d in 0..N {
-                let r_d = rs[d];
-                let step = r_strides[d] - 1;
-                for s in 0..r_total / r_d {
-                    let bj = nd_fiber_base(s, d, rs, r_strides);
-                    let x = &self.solvers[d].eigenvectors[ks[d]] * v.rows_with_step(bj, r_d, step);
-                    v.rows_with_step_mut(bj, r_d, step).set_column(0, &x);
+                // Pointwise application of g to the per-direction eigenvalues
+                // μ^{(d)}_{k_d, j_d} of the mode.
+                for j_flat in 0..r_total {
+                    let mut mus = [0.0f64; N];
+                    for d in 0..N {
+                        let j_d = (j_flat / r_strides[d]) % rs[d];
+                        mus[d] = self.solvers[d].eigenvalues[ks[d]][j_d];
+                    }
+                    v[j_flat] *= g(mus);
                 }
-            }
 
-            {
-                let f_rw = unsafe {
-                    std::slice::from_raw_parts_mut(ptr as *mut Complex<f64>, self.fft.total)
-                };
-                self.fft.set_values(&ks, f_rw, v.as_slice());
-            }
-        });
+                // Apply Q_d for each direction.
+                for d in 0..N {
+                    let r_d = rs[d];
+                    let step = r_strides[d] - 1;
+                    let mut x = x.rows_mut(0, r_d);
+                    for s in 0..r_total / r_d {
+                        let bj = nd_fiber_base(s, d, rs, r_strides);
+                        self.solvers[d].eigenvectors[ks[d]]
+                            .mul_to(&v.rows_with_step(bj, r_d, step), &mut x);
+                        v.rows_with_step_mut(bj, r_d, step).copy_from(&x);
+                    }
+                }
+
+                {
+                    let f_rw = unsafe {
+                        std::slice::from_raw_parts_mut(ptr as *mut Complex<f64>, self.fft.total)
+                    };
+                    self.fft.set_values(&ks, f_rw, v.as_slice());
+                }
+            },
+        );
 
         // Step 3: inverse FFT.
         self.fft.inverse(f);
@@ -1039,15 +1050,17 @@ impl<const N: usize> PoissonND<N> {
         let (ndofs, strides) = (&self.fft.ndofs, &self.fft.strides);
         let (m, stride) = (ndofs[d], strides[d]);
         let solver = &self.solvers[d];
+        let min_len = (FIBRE_BATCH / m).max(1);
         if stride == 1 {
             f.par_chunks_mut(m)
+                .with_min_len(min_len)
                 .for_each_init(|| solver.work(), |w, fibre| solver.apply_mu_with(fibre, &g, w));
             return;
         }
         // SAFETY: nd_fiber_base yields disjoint index sets for distinct `s`,
         // so concurrent reads and writes through the raw pointer never alias.
         let ptr = f.as_mut_ptr() as usize;
-        (0..total / m).into_par_iter().for_each_init(
+        (0..total / m).into_par_iter().with_min_len(min_len).for_each_init(
             || (vec![Complex::<f64>::default(); m], solver.work()),
             |(fibre, w), s| {
                 let base = nd_fiber_base(s, d, ndofs, strides);
@@ -1472,5 +1485,71 @@ mod tests {
         let s = solver_3d();
         let mut f = vec![Complex::new(0.0, 0.0); s.fft.total];
         s.solve_in_place_dir(3, &mut f, 1.0, 1.0);
+    }
+
+    /// The fibres of every direction partition the DOF array: the `unsafe`
+    /// fibre loops (transforms, directional solves) write disjoint entries.
+    fn assert_fibres_partition<const N: usize>(s: &PoissonND<N>) {
+        let (ndofs, strides, total) = (s.fft.ndofs, s.fft.strides, s.fft.total);
+        for d in 0..N {
+            let mut seen = vec![false; total];
+            for k in 0..total / ndofs[d] {
+                let base = nd_fiber_base(k, d, &ndofs, &strides);
+                for j in 0..ndofs[d] {
+                    let p = base + j * strides[d];
+                    assert!(!seen[p], "d={d}: index {p} in two fibres");
+                    seen[p] = true;
+                }
+            }
+            assert!(seen.iter().all(|&b| b), "d={d}: fibres do not cover the array");
+        }
+    }
+
+    /// The mode tuples of the per-mode step write disjoint entries that
+    /// cover the compact array (`set_values`), and each tuple reads only
+    /// entries it writes itself (`get_values`): the `unsafe` mode loop never
+    /// touches an entry from two threads.
+    fn assert_mode_tuples_own_their_entries<const N: usize>(s: &PoissonND<N>) {
+        let (total, r_total) = (s.fft.total, s.fft.r_total);
+        let zero = Complex::new(0.0, 0.0);
+        // Entry p holds p + 1: a read returns a unit-modulus (or zero)
+        // multiple of it, so its modulus identifies the entry read.
+        let labels: Vec<Complex<f64>> = (0..total).map(|p| Complex::new(p as f64 + 1.0, 0.0)).collect();
+        let mut owner = vec![usize::MAX; total];
+        for k_flat in 0..s.n_freq_total {
+            let ks: [usize; N] = std::array::from_fn(|d| (k_flat / s.n_freq_strides[d]) % s.n_freqs[d]);
+            let mut g = vec![zero; total];
+            s.fft.set_values(&ks, &mut g, &vec![Complex::new(1.0, 0.0); r_total]);
+            for (p, x) in g.iter().enumerate() {
+                if *x != zero {
+                    assert_eq!(owner[p], usize::MAX, "entry {p} written by tuples {} and {k_flat}", owner[p]);
+                    owner[p] = k_flat;
+                }
+            }
+        }
+        assert!(owner.iter().all(|&o| o != usize::MAX), "some entries are written by no tuple");
+        for k_flat in 0..s.n_freq_total {
+            let ks: [usize; N] = std::array::from_fn(|d| (k_flat / s.n_freq_strides[d]) % s.n_freqs[d]);
+            let mut read = vec![zero; r_total];
+            s.fft.get_values(&ks, &labels, &mut read);
+            for x in read.iter().filter(|x| x.norm() > 0.5) {
+                let p = x.norm().round() as usize - 1;
+                assert_eq!(owner[p], k_flat, "tuple {k_flat} reads entry {p} owned by tuple {}", owner[p]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_unsafe_loops_touch_disjoint_entries() {
+        let bc = [BoundaryCondition::Periodic, BoundaryCondition::Dirichlet, BoundaryCondition::Neumann];
+        let s1 = PoissonND::<1>::new([1.0], [0.0], [3], [4], [BoundaryCondition::Dirichlet]);
+        let s3 = solver_3d();
+        let s5 = PoissonND::<5>::new([1.0; 5], [0.0; 5], [2, 1, 3, 1, 2], [2, 3, 2, 2, 3], [bc[0], bc[1], bc[2], bc[2], bc[0]]);
+        assert_fibres_partition(&s1);
+        assert_fibres_partition(&s3);
+        assert_fibres_partition(&s5);
+        assert_mode_tuples_own_their_entries(&s1);
+        assert_mode_tuples_own_their_entries(&s3);
+        assert_mode_tuples_own_their_entries(&s5);
     }
 }
