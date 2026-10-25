@@ -32,9 +32,9 @@
 //! with Rayon over independent fibres.
 //!
 //! Setup costs `O(Σ_d (n_d r_d)³)`, one solve `O(Σ_d n_d r_d · N_dof)`.
-//! This is the right tool for small `n·r` (up to about a hundred per
-//! direction); beyond that, `lobatto-fft` diagonalises the same operator
-//! through the FFT at `O(log n)` per DOF per direction.
+//! This is the right tool for small problems; for larger ones,
+//! `lobatto-fft` diagonalises the same operator through the FFT at
+//! `O(log n)` per DOF per direction.
 //!
 //! ## Boundary conditions and data layout
 //!

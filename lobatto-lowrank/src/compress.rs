@@ -6,8 +6,9 @@
 //! 1. Scale the factor matrices by the square-root weights,
 //!    $\tilde A = W_L^{1/2} [\rho_1 \dots \rho_M]$ and
 //!    $\tilde B = W_R^{1/2} [\mu_1 \dots \mu_M]$.
-//! 2. Thin Householder QR of both (nalgebra), $\tilde A = Q_A R_A$,
-//!    $\tilde B = Q_B R_B$.
+//! 2. Thin Householder QR of both, in place (faer's blocked QR),
+//!    $\tilde A = Q_A R_A$, $\tilde B = Q_B R_B$; `Q` is kept as its
+//!    Householder reflectors.
 //! 3. Core matrix $C = R_A \operatorname{diag}(a) R_B^T$, at most `M × M`.
 //! 4. SVD $C = U \Sigma V^T$, singular values sorted decreasing, by faer
 //!    (nalgebra's SVD returns wrong singular values on some cores; see
@@ -22,9 +23,11 @@
 //! singular values. Cost `O((N_left + N_right)·M² + M³)`.
 
 use faer::dyn_stack::{MemBuffer, MemStack};
+use faer::linalg::householder;
+use faer::linalg::qr::no_pivoting::factor as qr;
 use faer::linalg::svd::{self, ComputeSvdVectors};
-use faer::{diag::DiagMut, MatMut, MatRef, Par};
-use nalgebra::{DMatrix, DVector};
+use faer::{diag::DiagMut, Conj, MatMut, MatRef, Par};
+use nalgebra::{DMatrix, DMatrixView, DVector};
 
 use crate::lowrank::LowRankSum;
 
@@ -76,23 +79,27 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
         // column with the stored square-root weights or their reciprocals.
 
         // 1–2. Thin QR of the weight-scaled factor matrices W^{1/2} ρ, W^{1/2} μ.
-        // The factors are replaced at the end, so they are scaled in place and
-        // moved into the QR, which consumes them: no copy. The two sides are
-        // independent and run as two Rayon tasks.
-        let ((q_a, mut r_a), (q_b, r_b)) = rayon::join(
+        // The factors are replaced at the end, so they are scaled and
+        // factorised in place: afterwards they hold the Householder vectors
+        // (below the diagonal) and R (on and above), which is copied out (at
+        // most M × M). Q is never formed. The two sides are independent and
+        // run as two Rayon tasks.
+        let ((coeff_a, mut r_a), (coeff_b, r_b)) = rayon::join(
             || {
                 for mut col in self.rho.column_iter_mut() {
                     col.component_mul_assign(&self.sqrt_w_left);
                 }
-                let qr = std::mem::take(&mut self.rho).qr();
-                (qr.q(), qr.r())
+                let coeff = qr_in_place(&mut self.rho);
+                let k = self.rho.nrows().min(self.rho.ncols());
+                (coeff, self.rho.rows(0, k).upper_triangle())
             },
             || {
                 for mut col in self.mu.column_iter_mut() {
                     col.component_mul_assign(&self.sqrt_w_right);
                 }
-                let qr = std::mem::take(&mut self.mu).qr();
-                (qr.q(), qr.r())
+                let coeff = qr_in_place(&mut self.mu);
+                let k = self.mu.nrows().min(self.mu.ncols());
+                (coeff, self.mu.rows(0, k).upper_triangle())
             },
         );
 
@@ -123,18 +130,20 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
             Truncation::RankOrTol(r_max, tol) => smallest_rank(tol * tol * energy).min(r_max),
         };
 
-        // 5. New factors W^{-1/2} Q U_r and W^{-1/2} Q V_r, coefficients σ_r.
-        // The two sides again as two Rayon tasks.
+        // 5. New factors W^{-1/2} Q U_r and W^{-1/2} Q V_r, coefficients σ_r:
+        // the Householder reflectors applied to [U_r; 0] and [V_r; 0], written
+        // directly into the new factor matrices. The two sides again as two
+        // Rayon tasks.
         let (rho, mu) = rayon::join(
             || {
-                let mut rho = q_a * u.columns(0, r);
+                let mut rho = apply_q(&self.rho, &coeff_a, u.columns(0, r));
                 for mut col in rho.column_iter_mut() {
                     col.component_mul_assign(&self.inv_sqrt_w_left);
                 }
                 rho
             },
             || {
-                let mut mu = q_b * v.columns(0, r);
+                let mut mu = apply_q(&self.mu, &coeff_b, v.columns(0, r));
                 for mut col in mu.column_iter_mut() {
                     col.component_mul_assign(&self.inv_sqrt_w_right);
                 }
@@ -159,6 +168,51 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     }
 }
 
+/// Thin QR of `a` (`N × M`) in place, by faer's blocked Householder QR on a
+/// view of the nalgebra storage: on return `a` holds `R` on and above its
+/// diagonal and the Householder vectors below it. Returns the block
+/// Householder factors (`block × min(N, M)`), needed by [`apply_q`].
+pub(crate) fn qr_in_place(a: &mut DMatrix<f64>) -> DMatrix<f64> {
+    let (n, m) = a.shape();
+    let block = qr::recommended_block_size::<f64>(n, m);
+    let mut coeff = DMatrix::zeros(block, n.min(m));
+    let par = Par::rayon(0);
+    let mut mem = MemBuffer::new(qr::qr_in_place_scratch::<f64>(n, m, block, par, Default::default()));
+    qr::qr_in_place(
+        MatMut::from_column_major_slice_mut(a.as_mut_slice(), n, m),
+        MatMut::from_column_major_slice_mut(coeff.as_mut_slice(), block, n.min(m)),
+        par,
+        MemStack::new(&mut mem),
+        Default::default(),
+    );
+    coeff
+}
+
+/// `Q [top; 0]`, `N × c`, for the `Q` of a [`qr_in_place`] factorisation
+/// (`basis` the factorised matrix, `coeff` its block Householder factors)
+/// and `top` with `min(N, M)` rows: the reflectors applied in place to the
+/// result, `Q` is never formed.
+fn apply_q(basis: &DMatrix<f64>, coeff: &DMatrix<f64>, top: DMatrixView<f64>) -> DMatrix<f64> {
+    let (n, k, c) = (basis.nrows(), coeff.ncols(), top.ncols());
+    let mut out = DMatrix::zeros(n, c);
+    out.rows_mut(0, k).copy_from(&top);
+    let par = Par::rayon(0);
+    let mut mem = MemBuffer::new(householder::apply_block_householder_sequence_on_the_left_in_place_scratch::<f64>(
+        n,
+        coeff.nrows(),
+        c,
+    ));
+    householder::apply_block_householder_sequence_on_the_left_in_place_with_conj(
+        MatRef::from_column_major_slice(&basis.as_slice()[..n * k], n, k),
+        MatRef::from_column_major_slice(coeff.as_slice(), coeff.nrows(), k),
+        Conj::No,
+        MatMut::from_column_major_slice_mut(out.as_mut_slice(), n, c),
+        par,
+        MemStack::new(&mut mem),
+    );
+    out
+}
+
 /// Thin SVD `core = U diag(σ) Vᵀ` with `σ` decreasing; returns `V`, not `Vᵀ`.
 ///
 /// Computed by faer, which reads `core` and writes `U`, `σ` and `V` through
@@ -166,9 +220,6 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
 /// nalgebra's own SVD (0.34 and 0.35) is not used: on some rank-deficient
 /// cores with clustered small singular values it returns orthonormal `U` and
 /// `V` but wrong singular values, which breaks the guarantee of [`LowRankSum::compress`].
-///
-/// In debug builds the result is checked on one probe vector `x`,
-/// `‖C x − U Σ Vᵀ x‖ ≤ 1e-12 ‖C‖_F ‖x‖`, at cost `O(m·n)`.
 fn core_svd(core: &DMatrix<f64>) -> (DMatrix<f64>, DVector<f64>, DMatrix<f64>) {
     let (m, n) = core.shape();
     let k = m.min(n);
@@ -187,19 +238,6 @@ fn core_svd(core: &DMatrix<f64>) -> (DMatrix<f64>, DVector<f64>, DMatrix<f64>) {
         Default::default(),
     )
     .expect("SVD of the core did not converge");
-
-    #[cfg(debug_assertions)]
-    {
-        // A probe with no special structure: x_j = 1 + frac(j·φ⁻¹).
-        let x = DVector::from_fn(n, |j, _| 1.0 + (j as f64 * 0.618_033_988_749_895).fract());
-        let mut y = v.tr_mul(&x);
-        y.component_mul_assign(&sigma);
-        let err = (core * &x - &u * y).norm();
-        debug_assert!(
-            err <= 1e-12 * core.norm() * x.norm(),
-            "inaccurate SVD of the core: residual {err:e}"
-        );
-    }
     (u, sigma, v)
 }
 
@@ -408,5 +446,46 @@ mod tests {
         let c = s.orthonormalize();
         assert_eq!(c.kept + c.discarded.len(), s.n_right().min(20));
         assert!(field_diff(&s, &orig) < 1e-12);
+    }
+
+    /// `core_svd` on cores built as `compress` builds them, `R_A diag(a) R_Bᵀ`
+    /// from the QR of rank-deficient factor matrices (rank 20 of 60, with
+    /// round-off-sized perturbations, so many small clustered singular
+    /// values): the kind of core on which nalgebra's SVD returned wrong
+    /// singular values. Square (both sides with more nodes than terms) and
+    /// rectangular (40 right nodes for 60 terms).
+    #[test]
+    fn core_svd_reconstructs_rank_deficient_cores() {
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1u64 << 53) as f64 - 0.5
+        };
+        let (m, rank) = (60, 20);
+        for n_right in [200, 40] {
+            let mut factors = [200, n_right].map(|n| {
+                let g = DMatrix::from_fn(n, rank, |_, _| next());
+                let h = DMatrix::from_fn(rank, m, |_, _| next());
+                &g * h + DMatrix::from_fn(n, m, |_, _| 1e-14 * next())
+            });
+            let [r_a, r_b] = factors.each_mut().map(|f| {
+                qr_in_place(f);
+                f.rows(0, f.nrows().min(m)).upper_triangle()
+            });
+            let a = DVector::from_fn(m, |_, _| 1.0 + next());
+            let core = r_a * DMatrix::from_diagonal(&a) * r_b.transpose();
+
+            let (u, sigma, v) = core_svd(&core);
+            let k = core.nrows().min(core.ncols());
+            let rec = (&core - &u * DMatrix::from_diagonal(&sigma) * v.transpose()).norm() / core.norm();
+            let orth_u = (u.transpose() * &u - DMatrix::<f64>::identity(k, k)).amax();
+            let orth_v = (v.transpose() * &v - DMatrix::<f64>::identity(k, k)).amax();
+            assert!(rec < 1e-13, "{n_right} right nodes: reconstruction {rec:e}");
+            assert!(orth_u < 1e-13 && orth_v < 1e-13, "{n_right} right nodes: UᵀU {orth_u:e}, VᵀV {orth_v:e}");
+            assert!(sigma.iter().all(|&s| s >= 0.0));
+            assert!(sigma.as_slice().windows(2).all(|w| w[0] >= w[1]), "σ not decreasing");
+        }
     }
 }

@@ -11,6 +11,7 @@
 
 use nalgebra::{DMatrix, DVector};
 
+use crate::compress::qr_in_place;
 use crate::lowrank::LowRankSum;
 
 impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
@@ -190,17 +191,20 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
         let (ma, m) = (self.len(), self.len() + other.len());
         // Column-major: the factor storages chained are the concatenated
         // columns, and the weights cycle once per column.
-        let a = DMatrix::from_iterator(
+        let mut a = DMatrix::from_iterator(
             self.n_left(),
             m,
             self.rho.iter().chain(other.rho.iter()).zip(self.sqrt_w_left.iter().cycle()).map(|(x, s)| x * s),
         );
-        let b = DMatrix::from_iterator(
+        let mut b = DMatrix::from_iterator(
             self.n_right(),
             m,
             self.mu.iter().chain(other.mu.iter()).zip(self.sqrt_w_right.iter().cycle()).map(|(x, s)| x * s),
         );
-        let (mut r_a, r_b) = (a.qr().r(), b.qr().r());
+        // QR in place; only R (on and above the diagonal) is needed.
+        qr_in_place(&mut a);
+        qr_in_place(&mut b);
+        let (mut r_a, r_b) = (a.rows(0, a.nrows().min(m)).upper_triangle(), b.rows(0, b.nrows().min(m)).upper_triangle());
         for (k, mut col) in r_a.column_iter_mut().enumerate() {
             col *= if k < ma { self.a[k] } else { -other.a[k - ma] };
         }

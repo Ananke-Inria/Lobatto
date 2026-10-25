@@ -13,8 +13,8 @@
 //!
 //! | Crate | Per-direction diagonalisation | Sweet spot |
 //! |-------|-------------------------------|------------|
-//! | `lobatto-spectral` | dense eigendecomposition of the `n·r × n·r` operator, `O(n·r)` per DOF per direction | small `n·r` (up to about a hundred) |
-//! | `lobatto-fft` | FFT across elements, `r × r` symbols per Fourier mode, `O(log n)` per DOF per direction | many elements per direction |
+//! | `lobatto-spectral` | dense eigendecomposition of the `n·r × n·r` operator, `O(n·r)` per DOF per direction | small problems |
+//! | `lobatto-fft` | FFT across elements, `r × r` symbols per Fourier mode, `O(log n)` per DOF per direction | larger problems |
 //!
 //! ## Modules
 //!
