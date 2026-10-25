@@ -12,7 +12,7 @@
 use nalgebra::{DMatrix, DVector};
 use rayon::prelude::*;
 
-use crate::compress::qr_in_place;
+use crate::compress::tsqr_in_place;
 use crate::lowrank::LowRankSum;
 
 impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
@@ -202,10 +202,8 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
             m,
             self.mu.iter().chain(other.mu.iter()).zip(self.sqrt_w_right.iter().cycle()).map(|(x, s)| x * s),
         );
-        // QR in place; only R (on and above the diagonal) is needed.
-        qr_in_place(&mut a);
-        qr_in_place(&mut b);
-        let (mut r_a, r_b) = (a.rows(0, a.nrows().min(m)).upper_triangle(), b.rows(0, b.nrows().min(m)).upper_triangle());
+        // TSQR in place; only R is needed.
+        let (mut r_a, r_b) = (tsqr_in_place(&mut a).r(&a), tsqr_in_place(&mut b).r(&b));
         for (k, mut col) in r_a.column_iter_mut().enumerate() {
             col *= if k < ma { self.a[k] } else { -other.a[k - ma] };
         }

@@ -64,7 +64,7 @@ Doc-comment math (KaTeX renders on docs.rs via each crate's `katex.html`; hover/
 
 ### 5. Allocation-free hot paths — done (2026-10-23)
 
-Per-task scratch (`for_each_init`) in `EngineND` sweeps (via `Engine::forward_with`/`inverse_with`, `process_with_scratch`), the lobatto-fft per-mode step (`ad_mul_to`/`mul_to`), and the lobatto-spectral `sweep`; contiguous `d == 0` path; `with_min_len` batching (`FIBRE_BATCH`); fibre-disjointness `debug_assert!` at construction; strategy documented in the module docs. Bit-exact against `tests/reference.rs` (stored pre-optimisation solutions) in both crates; no new `unsafe`.
+Per-task scratch (`for_each_init`) in `EngineND` sweeps (via `Engine::forward_with`/`inverse_with`, `process_with_scratch`), the lobatto-fft per-mode step (`ad_mul_to`/`mul_to`), and the lobatto-spectral `sweep`; contiguous `d == 0` path; fibre/mode-tuple disjointness checked by unit tests. No internal grain-size thresholds (`with_min_len` batching was removed on purpose: hardware dependent, and the caller controls threads through the Rayon pool). Bit-exact against `tests/reference.rs` (stored pre-optimisation solutions) in both crates; no new `unsafe`.
 
 Measured on a 5D, 1.1M-DOF mixed-BC solve (14 threads, counting allocator / wall time, outside Criterion because of concurrent sessions):
 - lobatto-fft `apply_in_place_dirs`: 6.5M → 4.7k allocations, ~39–49 ms → 14 ms (sweeps 16.5 → 3.3 ms; per-mode step ~32 → 11 ms). Item 3's read-through was 2 buffers per fibre, not 3: rustfft allocates no scratch at these FFT lengths.

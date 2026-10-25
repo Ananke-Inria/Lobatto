@@ -99,11 +99,6 @@ fn pinv(lam: f64, tol: f64) -> f64 {
     }
 }
 
-/// Minimum number of values per Rayon task in the fibre loops: short fibres
-/// are batched so that a task amortises its dispatch and its per-task work
-/// buffers.
-const FIBRE_BATCH: usize = 4096;
-
 /// `out = Vᵀ x` for a square column-major matrix `v`.
 fn tr_mul(v: &DMatrix<f64>, x: &[f64], out: &mut [f64]) {
     let n = v.nrows();
@@ -524,10 +519,9 @@ impl<const N: usize> PoissonND<N> {
                 mul(v, fiber, out);
             }
         };
-        let min_len = (FIBRE_BATCH / n_d).max(1);
         if stride == 1 {
             // Contiguous fibres: no gather; the product goes through `out`.
-            f.par_chunks_mut(n_d).with_min_len(min_len).for_each_init(
+            f.par_chunks_mut(n_d).for_each_init(
                 || vec![0.0; n_d],
                 |out, fiber| {
                     product(fiber, out);
@@ -540,7 +534,7 @@ impl<const N: usize> PoissonND<N> {
         // (tested in `tests`), so concurrent reads and writes through the raw
         // pointer never alias.
         let ptr = f.as_mut_ptr() as usize;
-        (0..f.len() / n_d).into_par_iter().with_min_len(min_len).for_each_init(
+        (0..f.len() / n_d).into_par_iter().for_each_init(
             || (vec![0.0; n_d], vec![0.0; n_d]),
             |(fiber, out), s| {
                 let base = nd_fiber_base(s, d, &ndofs, &strides);
@@ -622,17 +616,15 @@ impl<const N: usize> PoissonND<N> {
         let (ndofs, strides) = (self.grid.ndofs(), self.grid.strides());
         let (m, stride) = (ndofs[d], strides[d]);
         let solver = &self.solvers[d];
-        let min_len = (FIBRE_BATCH / m).max(1);
         if stride == 1 {
             f.par_chunks_mut(m)
-                .with_min_len(min_len)
                 .for_each_init(|| vec![0.0; m], |hat, fibre| solver.apply_mu_with(fibre, &g, hat));
             return;
         }
         // SAFETY: nd_fiber_base yields disjoint index sets for distinct `s`,
         // so concurrent reads and writes through the raw pointer never alias.
         let ptr = f.as_mut_ptr() as usize;
-        (0..total / m).into_par_iter().with_min_len(min_len).for_each_init(
+        (0..total / m).into_par_iter().for_each_init(
             || (vec![0.0; m], vec![0.0; m]),
             |(fibre, hat), s| {
                 let base = nd_fiber_base(s, d, &ndofs, &strides);

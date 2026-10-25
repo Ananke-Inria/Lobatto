@@ -47,7 +47,7 @@
 //! | `Dirichlet` | `k·r + j - 1` (left boundary excluded) |
 //! | `Neumann`   | `k·r + j`, plus the right endpoint at `n·r` |
 
-use crate::hofft::{Engine, EngineND, Extension, FIBRE_BATCH};
+use crate::hofft::{Engine, EngineND, Extension};
 use lobatto_grid::grid::{nd_col_major_strides, nd_fiber_base};
 use lobatto::collocation::{CollocationBasis, Gauss};
 use nalgebra::*;
@@ -909,8 +909,7 @@ impl<const N: usize> PoissonND<N> {
         // each reads only positions it writes (tested in `tests`).
         let ptr = f.as_mut_ptr() as usize;
         let r_max = rs.iter().copied().max().unwrap_or(0);
-        let min_len = (FIBRE_BATCH / r_total).max(1);
-        (0..self.n_freq_total).into_par_iter().with_min_len(min_len).for_each_init(
+        (0..self.n_freq_total).into_par_iter().for_each_init(
             || (DVector::<Complex<f64>>::zeros(r_total), DVector::<Complex<f64>>::zeros(r_max)),
             |(v, x), k_flat| {
                 let ks: [usize; N] =
@@ -1050,17 +1049,15 @@ impl<const N: usize> PoissonND<N> {
         let (ndofs, strides) = (&self.fft.ndofs, &self.fft.strides);
         let (m, stride) = (ndofs[d], strides[d]);
         let solver = &self.solvers[d];
-        let min_len = (FIBRE_BATCH / m).max(1);
         if stride == 1 {
             f.par_chunks_mut(m)
-                .with_min_len(min_len)
                 .for_each_init(|| solver.work(), |w, fibre| solver.apply_mu_with(fibre, &g, w));
             return;
         }
         // SAFETY: nd_fiber_base yields disjoint index sets for distinct `s`,
         // so concurrent reads and writes through the raw pointer never alias.
         let ptr = f.as_mut_ptr() as usize;
-        (0..total / m).into_par_iter().with_min_len(min_len).for_each_init(
+        (0..total / m).into_par_iter().for_each_init(
             || (vec![Complex::<f64>::default(); m], solver.work()),
             |(fibre, w), s| {
                 let base = nd_fiber_base(s, d, ndofs, strides);

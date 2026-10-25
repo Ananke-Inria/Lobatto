@@ -447,16 +447,13 @@ impl<const N: usize> GridND<N> {
                 .for_each(|(o, f)| g.derivative(f, o));
             return;
         }
-        // At least 4096 values per Rayon task: short fibres are batched, so
-        // that a task amortises its buffers.
-        let min_len = (4096 / m).max(1);
         // Hot path: per-task buffers only (the gathered fibre and its
         // derivative), no allocation per fibre and no full-size temporary.
         // SAFETY: nd_fiber_base yields disjoint index sets for distinct `f`
         // (tested in `tests/helper.rs`), so the writes into `out` through the
         // raw pointer never alias; `u` is only read.
         let ptr = out.as_mut_ptr() as usize;
-        (0..self.total / m).into_par_iter().with_min_len(min_len).for_each_init(
+        (0..self.total / m).into_par_iter().for_each_init(
             || (vec![0.0; m], vec![0.0; m]),
             |(fibre, du), f| {
                 let base = nd_fiber_base(f, d, &self.ndofs, &self.strides);

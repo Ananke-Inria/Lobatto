@@ -6,7 +6,8 @@
 //! 1. Scale the factor matrices by the square-root weights,
 //!    $\tilde A = W_L^{1/2} [\rho_1 \dots \rho_M]$ and
 //!    $\tilde B = W_R^{1/2} [\mu_1 \dots \mu_M]$.
-//! 2. Thin Householder QR of both, in place (faer's blocked QR),
+//! 2. Thin QR of both, in place, by TSQR (row blocks factorised in
+//!    parallel, then the stack of their `R` factors),
 //!    $\tilde A = Q_A R_A$, $\tilde B = Q_B R_B$; `Q` is kept as its
 //!    Householder reflectors.
 //! 3. Core matrix $C = R_A \operatorname{diag}(a) R_B^T$, at most `M × M`.
@@ -26,8 +27,10 @@ use faer::dyn_stack::{MemBuffer, MemStack};
 use faer::linalg::householder;
 use faer::linalg::qr::no_pivoting::factor as qr;
 use faer::linalg::svd::{self, ComputeSvdVectors};
+use faer::prelude::{Reborrow, ReborrowMut};
 use faer::{diag::DiagMut, Conj, MatMut, MatRef, Par};
 use nalgebra::{DMatrix, DMatrixView, DVector};
+use rayon::prelude::*;
 
 use crate::lowrank::LowRankSum;
 
@@ -67,6 +70,9 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     /// its squared distance to the field before compression is
     /// `Σ discarded²`. Always runs the QR/SVD, even when nothing is
     /// discarded. An empty sum stays empty.
+    ///
+    /// Parallel on the current Rayon pool. The result is the same up to
+    /// round-off for any number of threads, and bit for bit for a given one.
     pub fn compress(&mut self, t: Truncation) -> Compressed {
         if self.is_empty() {
             return Compressed {
@@ -78,28 +84,27 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
         // The row scalings below are entry-wise products of each (contiguous)
         // column with the stored square-root weights or their reciprocals.
 
-        // 1–2. Thin QR of the weight-scaled factor matrices W^{1/2} ρ, W^{1/2} μ.
-        // The factors are replaced at the end, so they are scaled and
-        // factorised in place: afterwards they hold the Householder vectors
-        // (below the diagonal) and R (on and above), which is copied out (at
-        // most M × M). Q is never formed. The two sides are independent and
-        // run as two Rayon tasks.
-        let ((coeff_a, mut r_a), (coeff_b, r_b)) = rayon::join(
+        // 1–2. Thin QR of the weight-scaled factor matrices W^{1/2} ρ, W^{1/2} μ,
+        // by TSQR. The factors are replaced at the end, so they are scaled and
+        // factorised in place: afterwards they hold Householder vectors, and
+        // R is copied out (at most M × M). Q is never formed. The two sides
+        // are independent and run as two Rayon tasks.
+        let ((qr_a, mut r_a), (qr_b, r_b)) = rayon::join(
             || {
                 for mut col in self.rho.column_iter_mut() {
                     col.component_mul_assign(&self.sqrt_w_left);
                 }
-                let coeff = qr_in_place(&mut self.rho);
-                let k = self.rho.nrows().min(self.rho.ncols());
-                (coeff, self.rho.rows(0, k).upper_triangle())
+                let qr = tsqr_in_place(&mut self.rho);
+                let r = qr.r(&self.rho);
+                (qr, r)
             },
             || {
                 for mut col in self.mu.column_iter_mut() {
                     col.component_mul_assign(&self.sqrt_w_right);
                 }
-                let coeff = qr_in_place(&mut self.mu);
-                let k = self.mu.nrows().min(self.mu.ncols());
-                (coeff, self.mu.rows(0, k).upper_triangle())
+                let qr = tsqr_in_place(&mut self.mu);
+                let r = qr.r(&self.mu);
+                (qr, r)
             },
         );
 
@@ -136,14 +141,14 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
         // Rayon tasks.
         let (rho, mu) = rayon::join(
             || {
-                let mut rho = apply_q(&self.rho, &coeff_a, u.columns(0, r));
+                let mut rho = qr_a.apply_q(&self.rho, u.columns(0, r));
                 for mut col in rho.column_iter_mut() {
                     col.component_mul_assign(&self.inv_sqrt_w_left);
                 }
                 rho
             },
             || {
-                let mut mu = apply_q(&self.mu, &coeff_b, v.columns(0, r));
+                let mut mu = qr_b.apply_q(&self.mu, v.columns(0, r));
                 for mut col in mu.column_iter_mut() {
                     col.component_mul_assign(&self.inv_sqrt_w_right);
                 }
@@ -168,17 +173,16 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     }
 }
 
-/// Thin QR of `a` (`N × M`) in place, by faer's blocked Householder QR on a
-/// view of the nalgebra storage: on return `a` holds `R` on and above its
-/// diagonal and the Householder vectors below it. Returns the block
-/// Householder factors (`block × min(N, M)`), needed by [`apply_q`].
-pub(crate) fn qr_in_place(a: &mut DMatrix<f64>) -> DMatrix<f64> {
-    let (n, m) = a.shape();
+/// Householder QR of the view `a` in place (faer's blocked QR, sequential):
+/// `R` on and above the diagonal, the Householder vectors below it. Returns
+/// the block Householder factors (`block × min(rows, cols)`).
+fn householder_qr(a: MatMut<'_, f64>) -> DMatrix<f64> {
+    let (n, m) = (a.nrows(), a.ncols());
     let block = qr::recommended_block_size::<f64>(n, m);
     let mut coeff = DMatrix::zeros(block, n.min(m));
     let mut mem = MemBuffer::new(qr::qr_in_place_scratch::<f64>(n, m, block, Par::Seq, Default::default()));
     qr::qr_in_place(
-        MatMut::from_column_major_slice_mut(a.as_mut_slice(), n, m),
+        a,
         MatMut::from_column_major_slice_mut(coeff.as_mut_slice(), block, n.min(m)),
         Par::Seq,
         MemStack::new(&mut mem),
@@ -187,28 +191,122 @@ pub(crate) fn qr_in_place(a: &mut DMatrix<f64>) -> DMatrix<f64> {
     coeff
 }
 
-/// `Q [top; 0]`, `N × c`, for the `Q` of a [`qr_in_place`] factorisation
-/// (`basis` the factorised matrix, `coeff` its block Householder factors)
-/// and `top` with `min(N, M)` rows: the reflectors applied in place to the
-/// result, `Q` is never formed.
-fn apply_q(basis: &DMatrix<f64>, coeff: &DMatrix<f64>, top: DMatrixView<f64>) -> DMatrix<f64> {
-    let (n, k, c) = (basis.nrows(), coeff.ncols(), top.ncols());
-    let mut out = DMatrix::zeros(n, c);
-    out.rows_mut(0, k).copy_from(&top);
+/// The `Q` of a [`householder_qr`] (`basis` the factorised view, `coeff` its
+/// block factors) applied on the left of `x` in place; `Q` is never formed.
+fn householder_apply(basis: MatRef<'_, f64>, coeff: &DMatrix<f64>, x: MatMut<'_, f64>) {
+    let k = coeff.ncols();
     let mut mem = MemBuffer::new(householder::apply_block_householder_sequence_on_the_left_in_place_scratch::<f64>(
-        n,
+        basis.nrows(),
         coeff.nrows(),
-        c,
+        x.ncols(),
     ));
     householder::apply_block_householder_sequence_on_the_left_in_place_with_conj(
-        MatRef::from_column_major_slice(&basis.as_slice()[..n * k], n, k),
+        basis.subcols(0, k),
         MatRef::from_column_major_slice(coeff.as_slice(), coeff.nrows(), k),
         Conj::No,
-        MatMut::from_column_major_slice_mut(out.as_mut_slice(), n, c),
+        x,
         Par::Seq,
         MemStack::new(&mut mem),
     );
-    out
+}
+
+/// Disjoint mutable views of the row blocks `ranges` of `a` (no copy).
+fn row_blocks<'a>(mut a: MatMut<'a, f64>, ranges: &[(usize, usize)]) -> Vec<MatMut<'a, f64>> {
+    let mut blocks = Vec::with_capacity(ranges.len());
+    for &(start, end) in &ranges[..ranges.len() - 1] {
+        let (top, rest) = a.split_at_row_mut(end - start);
+        blocks.push(top);
+        a = rest;
+    }
+    blocks.push(a);
+    blocks
+}
+
+/// A thin QR `A = Q R` computed by [`tsqr_in_place`]: `Q` is kept as the
+/// Householder reflectors of the row blocks (stored in the factorised `A`)
+/// and of the stack of their `R` factors.
+pub(crate) struct TallSkinnyQr {
+    /// Row ranges of the blocks.
+    ranges: Vec<(usize, usize)>,
+    /// Block Householder factors of each row block.
+    coeffs: Vec<DMatrix<f64>>,
+    /// With more than one block: the factorised stack of the blocks' `R`
+    /// factors (`p·M × M`) and its block Householder factors.
+    stack: Option<(DMatrix<f64>, DMatrix<f64>)>,
+}
+
+/// Thin QR of the tall-skinny `a` (`N × M`) in place by TSQR: the rows are
+/// split into `p` blocks factorised in parallel (faer's sequential blocked
+/// QR on disjoint views of the nalgebra storage, no copy), then the stack of
+/// their `R` factors is factorised; its `R` is the `R` of `a`.
+///
+/// `p` is the size of the current Rayon pool, capped so that every block has
+/// at least `M` rows; with one block this is a plain Householder QR. The
+/// result depends on `p` only at round-off level.
+pub(crate) fn tsqr_in_place(a: &mut DMatrix<f64>) -> TallSkinnyQr {
+    let (n, m) = a.shape();
+    let p = n.checked_div(m).map_or(1, |rows| rayon::current_num_threads().min(rows).max(1));
+    let ranges: Vec<(usize, usize)> = (0..p).map(|i| (i * n / p, (i + 1) * n / p)).collect();
+    let mut blocks = row_blocks(MatMut::from_column_major_slice_mut(a.as_mut_slice(), n, m), &ranges);
+    let coeffs: Vec<DMatrix<f64>> = blocks.par_iter_mut().map(|b| householder_qr(b.rb_mut())).collect();
+    let stack = (p > 1).then(|| {
+        let mut stack = DMatrix::zeros(p * m, m);
+        {
+            let mut s = MatMut::from_column_major_slice_mut(stack.as_mut_slice(), p * m, m);
+            for (i, b) in blocks.iter().enumerate() {
+                s.rb_mut().subrows_mut(i * m, m).copy_from_triangular_upper(b.rb().subrows(0, m));
+            }
+        }
+        let coeff = householder_qr(MatMut::from_column_major_slice_mut(stack.as_mut_slice(), p * m, m));
+        (stack, coeff)
+    });
+    TallSkinnyQr { ranges, coeffs, stack }
+}
+
+impl TallSkinnyQr {
+    /// The `R` factor, `min(N, M) × M` upper trapezoidal; `a` is the matrix
+    /// factorised by [`tsqr_in_place`].
+    pub(crate) fn r(&self, a: &DMatrix<f64>) -> DMatrix<f64> {
+        let k = a.nrows().min(a.ncols());
+        match &self.stack {
+            Some((stack, _)) => stack.rows(0, k).upper_triangle(),
+            None => a.rows(0, k).upper_triangle(),
+        }
+    }
+
+    /// `Q [top; 0]`, `N × c`, for `top` with `min(N, M)` rows; `a` is the
+    /// matrix factorised by [`tsqr_in_place`]. The reflectors of the stack,
+    /// then those of every row block (in parallel), are applied directly to
+    /// the result.
+    pub(crate) fn apply_q(&self, a: &DMatrix<f64>, top: DMatrixView<f64>) -> DMatrix<f64> {
+        let (n, m, c) = (a.nrows(), a.ncols(), top.ncols());
+        let basis = MatRef::from_column_major_slice(a.as_slice(), n, m);
+        let mut out = DMatrix::zeros(n, c);
+        match &self.stack {
+            None => {
+                out.rows_mut(0, n.min(m)).copy_from(&top);
+                householder_apply(basis, &self.coeffs[0], MatMut::from_column_major_slice_mut(out.as_mut_slice(), n, c));
+            }
+            Some((stack, coeff)) => {
+                let p = self.ranges.len();
+                let mut z = DMatrix::zeros(p * m, c);
+                z.rows_mut(0, m).copy_from(&top);
+                householder_apply(
+                    MatRef::from_column_major_slice(stack.as_slice(), p * m, m),
+                    coeff,
+                    MatMut::from_column_major_slice_mut(z.as_mut_slice(), p * m, c),
+                );
+                let z = MatRef::from_column_major_slice(z.as_slice(), p * m, c);
+                let blocks = row_blocks(MatMut::from_column_major_slice_mut(out.as_mut_slice(), n, c), &self.ranges);
+                blocks.into_par_iter().enumerate().for_each(|(i, mut block)| {
+                    let (start, end) = self.ranges[i];
+                    block.rb_mut().subrows_mut(0, m).copy_from(z.subrows(i * m, m));
+                    householder_apply(basis.subrows(start, end - start), &self.coeffs[i], block);
+                });
+            }
+        }
+        out
+    }
 }
 
 /// Thin SVD `core = U diag(σ) Vᵀ` with `σ` decreasing; returns `V`, not `Vᵀ`.
@@ -468,10 +566,7 @@ mod tests {
                 let h = DMatrix::from_fn(rank, m, |_, _| next());
                 &g * h + DMatrix::from_fn(n, m, |_, _| 1e-14 * next())
             });
-            let [r_a, r_b] = factors.each_mut().map(|f| {
-                qr_in_place(f);
-                f.rows(0, f.nrows().min(m)).upper_triangle()
-            });
+            let [r_a, r_b] = factors.each_mut().map(|f| tsqr_in_place(f).r(f));
             let a = DVector::from_fn(m, |_, _| 1.0 + next());
             let core = r_a * DMatrix::from_diagonal(&a) * r_b.transpose();
 
@@ -484,6 +579,41 @@ mod tests {
             assert!(orth_u < 1e-13 && orth_v < 1e-13, "{n_right} right nodes: UᵀU {orth_u:e}, VᵀV {orth_v:e}");
             assert!(sigma.iter().all(|&s| s >= 0.0));
             assert!(sigma.as_slice().windows(2).all(|w| w[0] >= w[1]), "σ not decreasing");
+        }
+    }
+
+    /// TSQR in pools of 1 (a plain QR), 2, 3 and 7 threads (that many row
+    /// blocks): `Q [R; 0] = A`, orthonormal `Q`, and `R` equal to nalgebra's
+    /// up to the signs of its rows. Tall (500 × 37) and wide (30 × 37).
+    #[test]
+    fn tsqr_is_a_qr_for_any_pool_size() {
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1u64 << 53) as f64 - 0.5
+        };
+        for (n, m) in [(500, 37), (30, 37)] {
+            let a = DMatrix::from_fn(n, m, |_, _| next());
+            let k = n.min(m);
+            let r_ref = a.clone().qr().r();
+            for threads in [1, 2, 3, 7] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                pool.install(|| {
+                    let mut f = a.clone();
+                    let qr = tsqr_in_place(&mut f);
+                    let r = qr.r(&f);
+                    let rec = (qr.apply_q(&f, r.as_view()) - &a).amax() / a.amax();
+                    let q = qr.apply_q(&f, DMatrix::<f64>::identity(k, k).as_view());
+                    let orth = (q.transpose() * &q - DMatrix::<f64>::identity(k, k)).amax();
+                    let r_diff = (r.abs() - r_ref.abs()).amax() / r_ref.amax();
+                    let case = format!("{n} × {m}, {threads} threads");
+                    assert!(rec < 1e-13, "{case}: ‖QR − A‖ {rec:e}");
+                    assert!(orth < 1e-13, "{case}: ‖QᵀQ − I‖ {orth:e}");
+                    assert!(r_diff < 1e-12, "{case}: |R| vs nalgebra {r_diff:e}");
+                });
+            }
         }
     }
 }

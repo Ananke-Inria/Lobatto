@@ -919,10 +919,9 @@ impl<const N: usize> EngineND<N> {
                     engine.inverse_with(fiber, buf, scratch);
                 }
             };
-            let min_len = (FIBRE_BATCH / dim_d).max(1);
             if stride_d == 1 {
                 // Contiguous fibres: transformed in place, no gather/scatter.
-                f.par_chunks_mut(dim_d).with_min_len(min_len).for_each_init(
+                f.par_chunks_mut(dim_d).for_each_init(
                     || (vec![zero; buf_len], vec![zero; scratch_len]),
                     |(buf, scratch), fiber| transform(fiber, buf, scratch),
                 );
@@ -932,7 +931,7 @@ impl<const N: usize> EngineND<N> {
             // SAFETY: fibers at distinct `s` access non-overlapping indices
             // (tested in `solver::tests`), so parallel mutable access is sound.
             let ptr = f.as_mut_ptr() as usize;
-            (0..self.total / dim_d).into_par_iter().with_min_len(min_len).for_each_init(
+            (0..self.total / dim_d).into_par_iter().for_each_init(
                 || (vec![zero; dim_d], vec![zero; buf_len], vec![zero; scratch_len]),
                 |(fiber, buf, scratch), s| {
                     let base = nd_fiber_base(s, d, &self.ndofs, &self.strides);
@@ -949,8 +948,3 @@ impl<const N: usize> EngineND<N> {
         }
     }
 }
-
-/// Minimum number of values per Rayon task in the fibre loops of
-/// [`EngineND`] and the solvers: short fibres are batched so that a task
-/// amortises its dispatch and its per-task work buffers.
-pub(crate) const FIBRE_BATCH: usize = 4096;
