@@ -1,6 +1,6 @@
 [package]
 name = "lobatto-lowrank"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2021"
 description = "Low-rank sums of products of fields on two Gauss-Lobatto grids, with weighted QR/SVD compression."
 license = "LGPL-3.0-only"

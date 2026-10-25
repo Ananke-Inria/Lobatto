@@ -10,6 +10,7 @@
 //! which avoids the cancellation of the Gram contractions.
 
 use nalgebra::{DMatrix, DVector};
+use rayon::prelude::*;
 
 use crate::compress::qr_in_place;
 use crate::lowrank::LowRankSum;
@@ -238,21 +239,45 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     /// Apply `f` to every left factor in place, `ρ_k ← f(ρ_k)`; the
     /// coefficients are unchanged. (A pointwise weight, a diffusion step.)
     ///
-    /// `f` is called once per term, in order `k = 0..M`, on the contiguous
-    /// column `ρ_k` (length `N_left`).
-    pub fn map_left_in_place(&mut self, mut f: impl FnMut(&mut [f64])) {
-        for mut col in self.rho.column_iter_mut() {
-            f(col.as_mut_slice());
-        }
+    /// `f` is called once per term on the contiguous column `ρ_k` (length
+    /// `N_left`), in parallel over the terms and in no particular order.
+    pub fn map_left_in_place(&mut self, f: impl Fn(&mut [f64]) + Sync) {
+        // Column-major: the columns are the chunks of length N_left (`max(1)`
+        // for an empty grid, whose storage is empty).
+        let n = self.n_left().max(1);
+        self.rho.as_mut_slice().par_chunks_mut(n).for_each(&f);
     }
 
     /// Apply `f` to every right factor in place, `μ_k ← f(μ_k)`.
     ///
     /// See [`map_left_in_place`](Self::map_left_in_place).
-    pub fn map_right_in_place(&mut self, mut f: impl FnMut(&mut [f64])) {
-        for mut col in self.mu.column_iter_mut() {
-            f(col.as_mut_slice());
-        }
+    pub fn map_right_in_place(&mut self, f: impl Fn(&mut [f64]) + Sync) {
+        let n = self.n_right().max(1);
+        self.mu.as_mut_slice().par_chunks_mut(n).for_each(&f);
+    }
+
+    /// Like [`map_left_in_place`](Self::map_left_in_place), with a scratch
+    /// value for `f`: `init` is called once per parallel task (not per
+    /// term), and `f(&mut scratch, ρ_k)` reuses that value for every term of
+    /// the task. For work buffers without an allocation per term.
+    pub fn map_left_in_place_with<T>(
+        &mut self,
+        init: impl Fn() -> T + Sync,
+        f: impl Fn(&mut T, &mut [f64]) + Sync,
+    ) {
+        let n = self.n_left().max(1);
+        self.rho.as_mut_slice().par_chunks_mut(n).for_each_init(&init, &f);
+    }
+
+    /// Like [`map_right_in_place`](Self::map_right_in_place), with a scratch
+    /// value for `f`; see [`map_left_in_place_with`](Self::map_left_in_place_with).
+    pub fn map_right_in_place_with<T>(
+        &mut self,
+        init: impl Fn() -> T + Sync,
+        f: impl Fn(&mut T, &mut [f64]) + Sync,
+    ) {
+        let n = self.n_right().max(1);
+        self.mu.as_mut_slice().par_chunks_mut(n).for_each_init(&init, &f);
     }
 
     /// The sum `Σ_k a_k · L(ρ_k) ⊗ R(μ_k)` for maps `L` of the left factors
@@ -260,23 +285,35 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     /// number of terms. Each map writes its result into the output slice,
     /// which has the length of its input.
     ///
-    /// The output slices are zero-filled before each call. `self` is left
-    /// untouched; for an in-place update use
-    /// [`map_left_in_place`](Self::map_left_in_place) and
+    /// The output slices are zero-filled before each call. The maps are
+    /// called in parallel over the terms (and the two sides concurrently), in
+    /// no particular order. `self` is left untouched; for an in-place update
+    /// use [`map_left_in_place`](Self::map_left_in_place) and
     /// [`map_right_in_place`](Self::map_right_in_place).
     pub fn map(
         &self,
-        left: impl Fn(&[f64], &mut [f64]),
-        right: impl Fn(&[f64], &mut [f64]),
+        left: impl Fn(&[f64], &mut [f64]) + Sync,
+        right: impl Fn(&[f64], &mut [f64]) + Sync,
     ) -> Self {
-        let mut rho = DMatrix::zeros(self.n_left(), self.len());
-        for (src, mut dst) in self.rho.column_iter().zip(rho.column_iter_mut()) {
-            left(src.as_slice(), dst.as_mut_slice());
-        }
-        let mut mu = DMatrix::zeros(self.n_right(), self.len());
-        for (src, mut dst) in self.mu.column_iter().zip(mu.column_iter_mut()) {
-            right(src.as_slice(), dst.as_mut_slice());
-        }
+        let (nl, nr, m) = (self.n_left(), self.n_right(), self.len());
+        let (rho, mu) = rayon::join(
+            || {
+                let mut rho = DMatrix::zeros(nl, m);
+                rho.as_mut_slice()
+                    .par_chunks_mut(nl.max(1))
+                    .zip(self.rho.as_slice().par_chunks(nl.max(1)))
+                    .for_each(|(dst, src)| left(src, dst));
+                rho
+            },
+            || {
+                let mut mu = DMatrix::zeros(nr, m);
+                mu.as_mut_slice()
+                    .par_chunks_mut(nr.max(1))
+                    .zip(self.mu.as_slice().par_chunks(nr.max(1)))
+                    .for_each(|(dst, src)| right(src, dst));
+                mu
+            },
+        );
         Self {
             left: self.left.clone(),
             right: self.right.clone(),
@@ -620,23 +657,74 @@ mod tests {
     }
 
     #[test]
-    fn map_in_place_applies_to_every_factor_in_order() {
+    fn map_in_place_applies_to_every_factor() {
         let s = three_terms();
         let mut t = s.clone();
-        let (mut kl, mut kr) = (0.0, 0.0);
-        t.map_left_in_place(|r| {
-            kl += 1.0;
-            r.iter_mut().for_each(|v| *v *= kl);
-        });
-        t.map_right_in_place(|m| {
-            kr += 1.0;
-            m.iter_mut().for_each(|v| *v += kr);
-        });
+        t.map_left_in_place(|r| r.iter_mut().for_each(|v| *v = 2.0 * *v + 1.0));
+        t.map_right_in_place(|m| m.reverse());
         assert_eq!(t.coefficients(), s.coefficients());
         for k in 0..s.len() {
-            let c = (k + 1) as f64;
-            assert!(t.rho_k(k).iter().zip(s.rho_k(k)).all(|(x, y)| *x == c * y));
-            assert!(t.mu_k(k).iter().zip(s.mu_k(k)).all(|(x, y)| *x == y + c));
+            assert!(t.rho_k(k).iter().zip(s.rho_k(k)).all(|(x, y)| *x == 2.0 * y + 1.0));
+            assert!(t.mu_k(k).iter().eq(s.mu_k(k).iter().rev()));
+        }
+    }
+
+    /// Enough terms for the parallel loops to split: every column is mapped
+    /// exactly once, as by a serial loop over the columns.
+    #[test]
+    fn maps_with_many_terms_match_column_by_column() {
+        let (l, r) = grids();
+        let mut s = LowRankSum::new(l, r);
+        for k in 0..200 {
+            let kf = k as f64;
+            let rho: Vec<f64> = (0..s.n_left()).map(|i| (0.3 * i as f64 + kf).sin()).collect();
+            let mu: Vec<f64> = (0..s.n_right()).map(|j| (0.7 * j as f64 - kf).cos()).collect();
+            s.push(1.0 + kf, &rho, &mu);
+        }
+        // A map that depends on the whole column: prefix sums.
+        let prefix = |c: &mut [f64]| {
+            for i in 1..c.len() {
+                c[i] += c[i - 1];
+            }
+        };
+        let mut t = s.clone();
+        t.map_left_in_place(prefix);
+        t.map_right_in_place(prefix);
+        let mapped = s.map(
+            |src, dst| {
+                dst.copy_from_slice(src);
+                prefix(dst);
+            },
+            |src, dst| {
+                dst.copy_from_slice(src);
+                prefix(dst);
+            },
+        );
+        // The scratch variants, with a reused buffer: copy, prefix-sum in the
+        // buffer, copy back. `init` runs once per task, at most once per term.
+        let inits = std::sync::atomic::AtomicUsize::new(0);
+        let init = || {
+            inits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Vec::<f64>::new()
+        };
+        let via_buffer = |buf: &mut Vec<f64>, c: &mut [f64]| {
+            buf.clear();
+            buf.extend_from_slice(c);
+            prefix(buf);
+            c.copy_from_slice(buf);
+        };
+        let mut w = s.clone();
+        w.map_left_in_place_with(init, via_buffer);
+        w.map_right_in_place_with(init, via_buffer);
+        let n_inits = inits.load(std::sync::atomic::Ordering::Relaxed);
+        assert!((1..=2 * s.len()).contains(&n_inits), "{n_inits} init calls");
+        for k in 0..s.len() {
+            let (mut rho, mut mu) = (s.rho_k(k).to_vec(), s.mu_k(k).to_vec());
+            prefix(&mut rho);
+            prefix(&mut mu);
+            assert_eq!((t.rho_k(k), t.mu_k(k)), (&rho[..], &mu[..]), "term {k}");
+            assert_eq!((mapped.rho_k(k), mapped.mu_k(k)), (&rho[..], &mu[..]), "term {k}");
+            assert_eq!((w.rho_k(k), w.mu_k(k)), (&rho[..], &mu[..]), "term {k}");
         }
     }
 

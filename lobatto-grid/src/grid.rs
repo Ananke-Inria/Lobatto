@@ -289,7 +289,15 @@ impl Grid1D {
         assert_eq!(out.len(), self.n_dof, "out length differs from N_dof");
         let (n, r) = (self.n, self.r);
         let inv_h = 1.0 / self.h();
-        let mut ul = vec![0.0; r + 1];
+        // The element's values, on the stack for r < 32 (no allocation; the
+        // ND derivative calls this once per fibre), on the heap beyond.
+        let (mut stack, mut heap) = ([0.0; 32], Vec::new());
+        let ul: &mut [f64] = if r < stack.len() {
+            &mut stack[..=r]
+        } else {
+            heap.resize(r + 1, 0.0);
+            &mut heap
+        };
         out.fill(0.0);
         for k in 0..n {
             for (j, v) in ul.iter_mut().enumerate() {
@@ -423,12 +431,7 @@ impl<const N: usize> GridND<N> {
     /// written into `out` (same length): `Grid1D::derivative` of direction
     /// `d` along every fibre of that direction.
     ///
-    /// Parallel over the fibres, without `unsafe`. Direction 0 has contiguous
-    /// fibres and is differentiated in place in `out`. For `d > 0` the fibres
-    /// are strided: each one is gathered and differentiated into a contiguous
-    /// row of a temporary (fibre-major, length `total`), which is then
-    /// transposed into `out` one contiguous run of direction-`d` index at a
-    /// time.
+    /// Parallel over the fibres.
     ///
     /// # Panics
     ///
@@ -444,26 +447,29 @@ impl<const N: usize> GridND<N> {
                 .for_each(|(o, f)| g.derivative(f, o));
             return;
         }
-        let mut tmp = vec![0.0; self.total];
-        tmp.par_chunks_mut(m)
-            .enumerate()
-            .for_each_init(
-                || vec![0.0; m],
-                |fibre, (f, o)| {
-                    let base = nd_fiber_base(f, d, &self.ndofs, &self.strides);
-                    for (j, v) in fibre.iter_mut().enumerate() {
-                        *v = u[base + s * j];
-                    }
-                    g.derivative(fibre, o);
-                },
-            );
-        // Run c = j + m·i_high of out is out[i_low + s·c], i_low = 0..s.
-        out.par_chunks_mut(s).enumerate().for_each(|(c, o)| {
-            let (j, i_high) = (c % m, c / m);
-            for (i_low, v) in o.iter_mut().enumerate() {
-                *v = tmp[(i_low + s * i_high) * m + j];
-            }
-        });
+        // At least 4096 values per Rayon task: short fibres are batched, so
+        // that a task amortises its buffers.
+        let min_len = (4096 / m).max(1);
+        // Hot path: per-task buffers only (the gathered fibre and its
+        // derivative), no allocation per fibre and no full-size temporary.
+        // SAFETY: nd_fiber_base yields disjoint index sets for distinct `f`
+        // (tested in `tests/helper.rs`), so the writes into `out` through the
+        // raw pointer never alias; `u` is only read.
+        let ptr = out.as_mut_ptr() as usize;
+        (0..self.total / m).into_par_iter().with_min_len(min_len).for_each_init(
+            || (vec![0.0; m], vec![0.0; m]),
+            |(fibre, du), f| {
+                let base = nd_fiber_base(f, d, &self.ndofs, &self.strides);
+                for (j, v) in fibre.iter_mut().enumerate() {
+                    *v = u[base + s * j];
+                }
+                g.derivative(fibre, du);
+                let p = ptr as *mut f64;
+                for (j, &v) in du.iter().enumerate() {
+                    unsafe { *p.add(base + s * j) = v };
+                }
+            },
+        );
     }
 }
 
