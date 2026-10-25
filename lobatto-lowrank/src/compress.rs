@@ -176,12 +176,11 @@ pub(crate) fn qr_in_place(a: &mut DMatrix<f64>) -> DMatrix<f64> {
     let (n, m) = a.shape();
     let block = qr::recommended_block_size::<f64>(n, m);
     let mut coeff = DMatrix::zeros(block, n.min(m));
-    let par = Par::rayon(0);
-    let mut mem = MemBuffer::new(qr::qr_in_place_scratch::<f64>(n, m, block, par, Default::default()));
+    let mut mem = MemBuffer::new(qr::qr_in_place_scratch::<f64>(n, m, block, Par::Seq, Default::default()));
     qr::qr_in_place(
         MatMut::from_column_major_slice_mut(a.as_mut_slice(), n, m),
         MatMut::from_column_major_slice_mut(coeff.as_mut_slice(), block, n.min(m)),
-        par,
+        Par::Seq,
         MemStack::new(&mut mem),
         Default::default(),
     );
@@ -196,7 +195,6 @@ fn apply_q(basis: &DMatrix<f64>, coeff: &DMatrix<f64>, top: DMatrixView<f64>) ->
     let (n, k, c) = (basis.nrows(), coeff.ncols(), top.ncols());
     let mut out = DMatrix::zeros(n, c);
     out.rows_mut(0, k).copy_from(&top);
-    let par = Par::rayon(0);
     let mut mem = MemBuffer::new(householder::apply_block_householder_sequence_on_the_left_in_place_scratch::<f64>(
         n,
         coeff.nrows(),
@@ -207,7 +205,7 @@ fn apply_q(basis: &DMatrix<f64>, coeff: &DMatrix<f64>, top: DMatrixView<f64>) ->
         MatRef::from_column_major_slice(coeff.as_slice(), coeff.nrows(), k),
         Conj::No,
         MatMut::from_column_major_slice_mut(out.as_mut_slice(), n, c),
-        par,
+        Par::Seq,
         MemStack::new(&mut mem),
     );
     out
