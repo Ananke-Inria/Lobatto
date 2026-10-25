@@ -326,6 +326,48 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
             mu,
         }
     }
+
+    /// Like [`map`](Self::map), but each parallel task gets its own state for
+    /// each side: `init_left` / `init_right` are called once per task, and the
+    /// state is passed to `left` / `right` for every factor the task handles.
+    pub fn map_with<T, U>(
+        &self,
+        init_left: impl Fn() -> T + Sync,
+        left: impl Fn(&mut T, &[f64], &mut [f64]) + Sync,
+        init_right: impl Fn() -> U + Sync,
+        right: impl Fn(&mut U, &[f64], &mut [f64]) + Sync,
+    ) -> Self {
+        let (nl, nr, m) = (self.n_left(), self.n_right(), self.len());
+        let (rho, mu) = rayon::join(
+            || {
+                let mut rho = DMatrix::zeros(nl, m);
+                rho.as_mut_slice()
+                    .par_chunks_mut(nl.max(1))
+                    .zip(self.rho.as_slice().par_chunks(nl.max(1)))
+                    .for_each_init(&init_left, |t, (dst, src)| left(t, src, dst));
+                rho
+            },
+            || {
+                let mut mu = DMatrix::zeros(nr, m);
+                mu.as_mut_slice()
+                    .par_chunks_mut(nr.max(1))
+                    .zip(self.mu.as_slice().par_chunks(nr.max(1)))
+                    .for_each_init(&init_right, |u, (dst, src)| right(u, src, dst));
+                mu
+            },
+        );
+        Self {
+            left: self.left.clone(),
+            right: self.right.clone(),
+            sqrt_w_left: self.sqrt_w_left.clone(),
+            sqrt_w_right: self.sqrt_w_right.clone(),
+            inv_sqrt_w_left: self.inv_sqrt_w_left.clone(),
+            inv_sqrt_w_right: self.inv_sqrt_w_right.clone(),
+            a: self.a.clone(),
+            rho,
+            mu,
+        }
+    }
 }
 
 /// `C = Fᵀ (W G)`, i.e. `C_kl = Σ_i w_i F(i, k) G(i, l)`: the weighted cross
@@ -718,6 +760,24 @@ mod tests {
         w.map_right_in_place_with(init, via_buffer);
         let n_inits = inits.load(std::sync::atomic::Ordering::Relaxed);
         assert!((1..=2 * s.len()).contains(&n_inits), "{n_inits} init calls");
+        // `map_with`, different state types per side: a reused buffer on the
+        // left, a running total of the terms handled on the right.
+        let mw = s.map_with(
+            Vec::<f64>::new,
+            |buf, src, dst| {
+                buf.clear();
+                buf.extend_from_slice(src);
+                prefix(buf);
+                dst.copy_from_slice(buf);
+            },
+            || 0usize,
+            |handled, src, dst| {
+                *handled += 1;
+                dst.copy_from_slice(src);
+                prefix(dst);
+            },
+        );
+        assert_eq!(mw.coefficients(), s.coefficients());
         for k in 0..s.len() {
             let (mut rho, mut mu) = (s.rho_k(k).to_vec(), s.mu_k(k).to_vec());
             prefix(&mut rho);
@@ -725,6 +785,7 @@ mod tests {
             assert_eq!((t.rho_k(k), t.mu_k(k)), (&rho[..], &mu[..]), "term {k}");
             assert_eq!((mapped.rho_k(k), mapped.mu_k(k)), (&rho[..], &mu[..]), "term {k}");
             assert_eq!((w.rho_k(k), w.mu_k(k)), (&rho[..], &mu[..]), "term {k}");
+            assert_eq!((mw.rho_k(k), mw.mu_k(k)), (&rho[..], &mu[..]), "term {k}");
         }
     }
 
