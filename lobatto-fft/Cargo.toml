@@ -1,6 +1,6 @@
 [package]
 name = "lobatto-fft"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2021"
 description = "High-order FFT on Gauss–Lobatto grids and corresponding high-order solver for Poisson problems."
 license = "LGPL-3.0-only"

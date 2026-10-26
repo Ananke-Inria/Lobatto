@@ -1,6 +1,6 @@
 [package]
 name = "lobatto-grid"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "Multi-element Gauss–Lobatto grids on tensor-product domains: geometry, boundary extensions, and high-order Lagrange interpolation (point evaluation, convection, precomputed evaluation plans)."
 license = "LGPL-3.0-only"
