@@ -1,19 +1,13 @@
-//! Vector-space operations on [`LowRankSum`]s: scaling, addition, weighted
-//! `L²` Gram matrices, norms and inner products.
-//!
-//! Scaling and addition only touch the coefficients and factor columns: an
-//! addition concatenates the terms and never compresses. The inner products
-//! are computed from the factor matrices, without assembling the field: the
-//! weighted Gram matrices are matrix products `Fᵀ (W G)` and the contractions
-//! `aᵀ (G^L ∘ G^R) b` (`∘` the entry-wise product). The distance between
-//! close fields goes through a thin QR of the concatenated factors instead,
-//! which avoids the cancellation of the Gram contractions.
+//! Operations on [`LowRankSum`]s: scaling, addition, weighted `L²` Gram
+//! matrices, norm, inner product, distance, marginals and maps of the
+//! factors. None of them assembles the field; additions concatenate the
+//! terms without compressing.
 
 use nalgebra::{DMatrix, DVector};
 use rayon::prelude::*;
 
 use crate::compress::tsqr_in_place;
-use crate::lowrank::LowRankSum;
+use crate::lowrank::{scale_rows, LowRankSum};
 
 impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     // ── Scaling and addition ────────────────────────────────────────────────
@@ -23,34 +17,36 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
         self.a *= c;
     }
 
-    /// The sum of two fields: the term lists concatenated, no compression.
+    /// The sum of two fields: the terms of `self`, then those of `other`.
     ///
     /// # Panics
     ///
     /// If the two sums are not on equal grids (see [`Self::same_grids`]).
     pub fn add(&self, other: &Self) -> Self {
         assert!(self.same_grids(other), "adding sums on different grids");
-        // Column-major: the concatenated storage is self's, then other's.
         let cat = |x: &[f64], y: &[f64]| [x, y].concat();
         let m = self.len() + other.len();
-        Self {
-            left: self.left.clone(),
-            right: self.right.clone(),
-            sqrt_w_left: self.sqrt_w_left.clone(),
-            sqrt_w_right: self.sqrt_w_right.clone(),
-            inv_sqrt_w_left: self.inv_sqrt_w_left.clone(),
-            inv_sqrt_w_right: self.inv_sqrt_w_right.clone(),
-            a: DVector::from_vec(cat(self.a.as_slice(), other.a.as_slice())),
-            rho: DMatrix::from_vec(self.n_left(), m, cat(self.rho.as_slice(), other.rho.as_slice())),
-            mu: DMatrix::from_vec(self.n_right(), m, cat(self.mu.as_slice(), other.mu.as_slice())),
-        }
+        self.with_terms(
+            DVector::from_vec(cat(self.a.as_slice(), other.a.as_slice())),
+            DMatrix::from_vec(self.n_left(), m, cat(self.rho.as_slice(), other.rho.as_slice())),
+            DMatrix::from_vec(self.n_right(), m, cat(self.mu.as_slice(), other.mu.as_slice())),
+        )
     }
 
-    /// Append the term `a · ρ ⊗ μ`, `rho` of length `N_left`, `mu` of length
-    /// `N_right` (nodal values in the order of `GridND::get_x`).
+    /// In-place version of [`LowRankSum::add`].
     ///
-    /// No compression; amortised `O(N_left + N_right)` like
-    /// [`add_assign`](Self::add_assign).
+    /// # Panics
+    ///
+    /// If the two sums are not on equal grids (see [`Self::same_grids`]).
+    pub fn add_assign(&mut self, other: &Self) {
+        assert!(self.same_grids(other), "adding sums on different grids");
+        self.a.extend(other.a.iter().copied());
+        self.rho.extend(other.rho.iter().copied());
+        self.mu.extend(other.mu.iter().copied());
+    }
+
+    /// Append the term `a · ρ ⊗ μ`, with `rho` of length `N_left` and `mu` of
+    /// length `N_right` (nodal values in the order of `GridND::get_x`).
     ///
     /// # Panics
     ///
@@ -63,75 +59,42 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
         self.mu.extend(mu.iter().copied());
     }
 
-    /// In-place version of [`LowRankSum::add`].
-    ///
-    /// # Panics
-    ///
-    /// If the two sums are not on equal grids (see [`Self::same_grids`]).
-    pub fn add_assign(&mut self, other: &Self) {
-        assert!(self.same_grids(other), "adding sums on different grids");
-        // Column-major: nalgebra's `extend` appends columns at the end of the
-        // storage (amortised Vec growth, no zero fill), so building a sum term
-        // by term stays linear.
-        self.a.extend(other.a.iter().copied());
-        self.rho.extend(other.rho.iter().copied());
-        self.mu.extend(other.mu.iter().copied());
-    }
-
     // ── Weighted inner products ─────────────────────────────────────────────
 
-    /// Weighted Gram matrix of the left factors, `M × M`.
+    /// Weighted Gram matrix of the left factors, `M × M`:
     ///
     /// $$
-    /// G^L_{kl} = \langle \rho_k, \rho_l \rangle_w = \sum_i w^L_i \, \rho_k(i) \, \rho_l(i),
+    /// G^L_{kl} = \sum_i w^L_i \, \rho_k(i) \, \rho_l(i),
     /// $$
     ///
-    /// with the left mass weights `w^L`: the discrete `L²` inner products of
-    /// the left factors, computed as the matrix product `(S ρ)ᵀ (S ρ)` with
-    /// `S` the square-root weights ([`sqrt_w_left`](Self::sqrt_w_left)).
-    /// Exactly symmetric; the identity when the sum is in canonical form.
-    /// Cost `N_left · M²`.
+    /// with the left mass weights `w^L`. Exactly symmetric; the identity for
+    /// a sum in canonical form. Cost `N_left · M²`.
     pub fn gram_left(&self) -> DMatrix<f64> {
-        weighted_gram(self.sqrt_w_left.as_slice(), &self.rho)
+        weighted_gram(&self.sqrt_w_left, &self.rho)
     }
 
-    /// Weighted Gram matrix of the right factors, `M × M`.
-    ///
-    /// $G^R_{kl} = \langle \mu_k, \mu_l \rangle_w$ with the right mass weights
-    /// ([`sqrt_w_right`](Self::sqrt_w_right) squared); see
+    /// Weighted Gram matrix of the right factors, `M × M`:
+    /// $G^R_{kl} = \sum_j w^R_j \, \mu_k(j) \, \mu_l(j)$; see
     /// [`gram_left`](Self::gram_left).
     pub fn gram_right(&self) -> DMatrix<f64> {
-        weighted_gram(self.sqrt_w_right.as_slice(), &self.mu)
+        weighted_gram(&self.sqrt_w_right, &self.mu)
     }
 
-    /// Squared weighted `L²` norm of the field, without assembling it.
+    /// Squared weighted `L²` norm of the field:
     ///
     /// $$
-    /// \|\rho\|^2 = \sum_{i,j} w^L_i w^R_j \, \rho(i, j)^2
-    /// = \sum_{k,l} a_k a_l \, G^L_{kl} \, G^R_{kl},
+    /// \|\rho\|^2 = \sum_{k,l} a_k a_l \, G^L_{kl} \, G^R_{kl}.
     /// $$
     ///
-    /// the weighted Frobenius norm of the unfolding, from the two Gram
-    /// matrices ([`gram_left`](Self::gram_left),
-    /// [`gram_right`](Self::gram_right)): `aᵀ (G^L ∘ G^R) a`. Cost
-    /// `(N_left + N_right) · M²`, against `M · N_left · N_right` for
-    /// assembling. Zero for an empty sum.
-    ///
-    /// Accuracy: the sum runs over terms that may cancel, so the absolute
-    /// error is about machine precision times
-    /// $\sum_{k,l} |a_k a_l G^L_{kl} G^R_{kl}|$. When the terms nearly cancel
-    /// (a field much smaller than its terms), the relative error grows
-    /// accordingly; compress first for an accurate small norm. A tiny
-    /// negative result from rounding is clamped to zero.
+    /// Cost `(N_left + N_right) · M²`. The relative accuracy drops when the
+    /// terms nearly cancel; [`distance`](Self::distance) to an empty sum is
+    /// accurate in that case. A negative rounding result is clamped to zero.
     pub fn norm_squared(&self) -> f64 {
         let h = self.gram_left().component_mul(&self.gram_right());
         self.a.dot(&(h * &self.a)).max(0.0)
     }
 
-    /// Weighted `L²` inner product with another sum on the same grids, without
-    /// assembling either field.
-    ///
-    /// With `self = Σ_k a_k ρ_k ⊗ μ_k` and `other = Σ_l b_l ρ'_l ⊗ μ'_l`,
+    /// Weighted `L²` inner product with another sum on the same grids:
     ///
     /// $$
     /// \langle \rho, \rho' \rangle = \sum_{k,l} a_k b_l \, C^L_{kl} \, C^R_{kl},
@@ -139,50 +102,33 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     /// C^R_{kl} = \langle \mu_k, \mu'_l \rangle_w,
     /// $$
     ///
-    /// the cross Gram matrices (`M × M'`) in the weighted inner products of
-    /// each grid, computed as matrix products, then `aᵀ (C^L ∘ C^R) b`. Cost
-    /// `(N_left + N_right) · M · M'`. Zero if either sum is empty.
-    /// `self.inner(self)` equals [`norm_squared`](Self::norm_squared) up to
-    /// rounding.
+    /// with `self = Σ_k a_k ρ_k ⊗ μ_k` and `other = Σ_l b_l ρ'_l ⊗ μ'_l`.
+    /// Cost `(N_left + N_right) · M · M'`.
     ///
     /// # Panics
     ///
     /// If the two sums are not on equal grids (see [`Self::same_grids`]).
     pub fn inner(&self, other: &Self) -> f64 {
         assert!(self.same_grids(other), "inner product of sums on different grids");
-        let cl = weighted_cross_gram(self.sqrt_w_left.as_slice(), &self.rho, &other.rho);
-        let cr = weighted_cross_gram(self.sqrt_w_right.as_slice(), &self.mu, &other.mu);
+        let cl = weighted_cross_gram(&self.sqrt_w_left, &self.rho, &other.rho);
+        let cr = weighted_cross_gram(&self.sqrt_w_right, &self.mu, &other.mu);
         self.a.dot(&(cl.component_mul(&cr) * &other.a))
     }
 
-    /// Weighted `L²` distance to another sum on the same grids, accurate
-    /// also for close fields, without assembling either field.
+    /// Weighted `L²` distance to another sum on the same grids.
     ///
-    /// With the factors of both sums side by side and scaled by the
-    /// square-root weights, $\tilde A = W_L^{1/2} [\rho^a \mid \rho^b]$ and
-    /// $\tilde B = W_R^{1/2} [\mu^a \mid \mu^b]$, and the coefficients
-    /// $c = (a, -b)$, the weighted unfolding of the difference is
+    /// The factors of both sums are put side by side and scaled by the
+    /// square-root weights, $\tilde A = W_L^{1/2} [\rho \mid \rho']$ and
+    /// $\tilde B = W_R^{1/2} [\mu \mid \mu']$. With the thin QR factorisations
+    /// $\tilde A = Q_A R_A$, $\tilde B = Q_B R_B$ and the coefficients
+    /// $c = (a, -b)$, the distance is
     ///
     /// $$
-    /// \tilde A \operatorname{diag}(c) \tilde B^T
-    /// = Q_A \, (R_A \operatorname{diag}(c) R_B^T) \, Q_B^T
+    /// \| R_A \operatorname{diag}(c) R_B^T \|_F .
     /// $$
     ///
-    /// for thin QR factorisations $\tilde A = Q_A R_A$, $\tilde B = Q_B R_B$.
-    /// The `Q` factors have orthonormal columns, so the distance is the
-    /// Frobenius norm of the core $R_A \operatorname{diag}(c) R_B^T$, at most
-    /// `(M_a + M_b) × (M_a + M_b)`. Only the `R` factors are formed; neither
-    /// sum is modified and no difference sum is built: the two QR inputs
-    /// (`N_left × (M_a + M_b)` and `N_right × (M_a + M_b)`) are the only
-    /// large allocations. Cost `(N_left + N_right) · (M_a + M_b)²`.
-    ///
-    /// Accuracy: the QR is backward stable and the norm is a sum of squares,
-    /// so the absolute error is about machine precision times `‖ρ‖ + ‖ρ'‖`
-    /// on the distance itself. The expansion
-    /// $\|\rho\|^2 - 2 \langle \rho, \rho' \rangle + \|\rho'\|^2$ from
-    /// [`norm_squared`](Self::norm_squared) and [`inner`](Self::inner) would
-    /// instead cancel for close fields and resolve no distance below about
-    /// `1e-8 · ‖ρ‖`. Zero if both sums are empty.
+    /// Cost `(N_left + N_right) · (M + M')²`. Accurate also for close fields:
+    /// the absolute error is about machine precision times `‖ρ‖ + ‖ρ'‖`.
     ///
     /// # Panics
     ///
@@ -190,20 +136,17 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     pub fn distance(&self, other: &Self) -> f64 {
         assert!(self.same_grids(other), "distance between sums on different grids");
         let (ma, m) = (self.len(), self.len() + other.len());
-        // Column-major: the factor storages chained are the concatenated
-        // columns, and the weights cycle once per column.
-        let mut a = DMatrix::from_iterator(
-            self.n_left(),
-            m,
-            self.rho.iter().chain(other.rho.iter()).zip(self.sqrt_w_left.iter().cycle()).map(|(x, s)| x * s),
+        // R of the scaled side-by-side factors [f | g]; both sides
+        // concurrently, each with half the pool's worth of row blocks.
+        let blocks = (rayon::current_num_threads() / 2).max(1);
+        let r_factor = |f: &DMatrix<f64>, g: &DMatrix<f64>, w: &DVector<f64>| {
+            let mut fg = DMatrix::from_iterator(f.nrows(), m, f.iter().chain(g.iter()).zip(w.iter().cycle()).map(|(x, w)| x * w));
+            tsqr_in_place(&mut fg, blocks).r()
+        };
+        let (mut r_a, r_b) = rayon::join(
+            || r_factor(&self.rho, &other.rho, &self.sqrt_w_left),
+            || r_factor(&self.mu, &other.mu, &self.sqrt_w_right),
         );
-        let mut b = DMatrix::from_iterator(
-            self.n_right(),
-            m,
-            self.mu.iter().chain(other.mu.iter()).zip(self.sqrt_w_right.iter().cycle()).map(|(x, s)| x * s),
-        );
-        // TSQR in place; only R is needed.
-        let (mut r_a, r_b) = (tsqr_in_place(&mut a).r(&a), tsqr_in_place(&mut b).r(&b));
         for (k, mut col) in r_a.column_iter_mut().enumerate() {
             col *= if k < ma { self.a[k] } else { -other.a[k - ma] };
         }
@@ -212,122 +155,62 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
 
     // ── Marginals ───────────────────────────────────────────────────────────
 
-    /// The field summed over the right directions with the right grid's mass
-    /// weights, `Σ_k a_k (Σ_j w_j μ_k[j]) ρ_k`: a nodal field on the left grid.
-    ///
-    /// The quadrature of the field in the right variables, computed as
-    /// `ρ (a ∘ μᵀ w)` without assembling the field. Cost
-    /// `(N_left + N_right) · M`. All zeros for an empty sum.
+    /// The field integrated over the right variables with the right mass
+    /// weights, `Σ_k a_k (Σ_j w_j μ_k[j]) ρ_k`: a nodal field on the left
+    /// grid. Cost `(N_left + N_right) · M`.
     pub fn marginal_left(&self) -> Vec<f64> {
         let mut c = self.mu.tr_mul(&self.sqrt_w_right.component_mul(&self.sqrt_w_right));
         c.component_mul_assign(&self.a);
         (&self.rho * c).data.into()
     }
 
-    /// The field summed over the left directions,
+    /// The field integrated over the left variables,
     /// `Σ_k a_k (Σ_i w_i ρ_k[i]) μ_k`: a nodal field on the right grid.
-    ///
-    /// `μ (a ∘ ρᵀ w)`; see [`marginal_left`](Self::marginal_left).
     pub fn marginal_right(&self) -> Vec<f64> {
         let mut c = self.rho.tr_mul(&self.sqrt_w_left.component_mul(&self.sqrt_w_left));
         c.component_mul_assign(&self.a);
         (&self.mu * c).data.into()
     }
 
-    /// Apply `f` to every left factor in place, `ρ_k ← f(ρ_k)`; the
-    /// coefficients are unchanged. (A pointwise weight, a diffusion step.)
-    ///
-    /// `f` is called once per term on the contiguous column `ρ_k` (length
-    /// `N_left`), in parallel over the terms and in no particular order.
+    // ── Maps of the factors ─────────────────────────────────────────────────
+    //
+    // The maps are called in parallel over the terms, in no particular order;
+    // the coefficients are unchanged.
+
+    /// Apply `f` to every left factor in place, `ρ_k ← f(ρ_k)`.
     pub fn map_left_in_place(&mut self, f: impl Fn(&mut [f64]) + Sync) {
-        // Column-major: the columns are the chunks of length N_left (`max(1)`
-        // for an empty grid, whose storage is empty).
-        let n = self.n_left().max(1);
-        self.rho.as_mut_slice().par_chunks_mut(n).for_each(&f);
+        self.map_left_in_place_with(|| (), |_, col| f(col));
     }
 
     /// Apply `f` to every right factor in place, `μ_k ← f(μ_k)`.
-    ///
-    /// See [`map_left_in_place`](Self::map_left_in_place).
     pub fn map_right_in_place(&mut self, f: impl Fn(&mut [f64]) + Sync) {
-        let n = self.n_right().max(1);
-        self.mu.as_mut_slice().par_chunks_mut(n).for_each(&f);
+        self.map_right_in_place_with(|| (), |_, col| f(col));
     }
 
-    /// Like [`map_left_in_place`](Self::map_left_in_place), with a scratch
-    /// value for `f`: `init` is called once per parallel task (not per
-    /// term), and `f(&mut scratch, ρ_k)` reuses that value for every term of
-    /// the task. For work buffers without an allocation per term.
-    pub fn map_left_in_place_with<T>(
-        &mut self,
-        init: impl Fn() -> T + Sync,
-        f: impl Fn(&mut T, &mut [f64]) + Sync,
-    ) {
-        let n = self.n_left().max(1);
-        self.rho.as_mut_slice().par_chunks_mut(n).for_each_init(&init, &f);
+    /// Like [`map_left_in_place`](Self::map_left_in_place), with a state for
+    /// `f`: `init` is called once per parallel task (not per term), and
+    /// `f(&mut state, ρ_k)` is called for every term of the task.
+    pub fn map_left_in_place_with<T>(&mut self, init: impl Fn() -> T + Sync, f: impl Fn(&mut T, &mut [f64]) + Sync) {
+        map_columns_in_place(&mut self.rho, init, f);
     }
 
-    /// Like [`map_right_in_place`](Self::map_right_in_place), with a scratch
-    /// value for `f`; see [`map_left_in_place_with`](Self::map_left_in_place_with).
-    pub fn map_right_in_place_with<T>(
-        &mut self,
-        init: impl Fn() -> T + Sync,
-        f: impl Fn(&mut T, &mut [f64]) + Sync,
-    ) {
-        let n = self.n_right().max(1);
-        self.mu.as_mut_slice().par_chunks_mut(n).for_each_init(&init, &f);
+    /// Like [`map_right_in_place`](Self::map_right_in_place), with a state
+    /// for `f`; see [`map_left_in_place_with`](Self::map_left_in_place_with).
+    pub fn map_right_in_place_with<T>(&mut self, init: impl Fn() -> T + Sync, f: impl Fn(&mut T, &mut [f64]) + Sync) {
+        map_columns_in_place(&mut self.mu, init, f);
     }
 
-    /// The sum `Σ_k a_k · L(ρ_k) ⊗ R(μ_k)` for maps `L` of the left factors
-    /// and `R` of the right factors, on the same grids and with the same
-    /// number of terms. Each map writes its result into the output slice,
-    /// which has the length of its input.
-    ///
-    /// The output slices are zero-filled before each call. The maps are
-    /// called in parallel over the terms (and the two sides concurrently), in
-    /// no particular order. `self` is left untouched; for an in-place update
-    /// use [`map_left_in_place`](Self::map_left_in_place) and
-    /// [`map_right_in_place`](Self::map_right_in_place).
-    pub fn map(
-        &self,
-        left: impl Fn(&[f64], &mut [f64]) + Sync,
-        right: impl Fn(&[f64], &mut [f64]) + Sync,
-    ) -> Self {
-        let (nl, nr, m) = (self.n_left(), self.n_right(), self.len());
-        let (rho, mu) = rayon::join(
-            || {
-                let mut rho = DMatrix::zeros(nl, m);
-                rho.as_mut_slice()
-                    .par_chunks_mut(nl.max(1))
-                    .zip(self.rho.as_slice().par_chunks(nl.max(1)))
-                    .for_each(|(dst, src)| left(src, dst));
-                rho
-            },
-            || {
-                let mut mu = DMatrix::zeros(nr, m);
-                mu.as_mut_slice()
-                    .par_chunks_mut(nr.max(1))
-                    .zip(self.mu.as_slice().par_chunks(nr.max(1)))
-                    .for_each(|(dst, src)| right(src, dst));
-                mu
-            },
-        );
-        Self {
-            left: self.left.clone(),
-            right: self.right.clone(),
-            sqrt_w_left: self.sqrt_w_left.clone(),
-            sqrt_w_right: self.sqrt_w_right.clone(),
-            inv_sqrt_w_left: self.inv_sqrt_w_left.clone(),
-            inv_sqrt_w_right: self.inv_sqrt_w_right.clone(),
-            a: self.a.clone(),
-            rho,
-            mu,
-        }
+    /// The sum `Σ_k a_k · L(ρ_k) ⊗ R(μ_k)`, on the same grids, for maps `L`
+    /// of the left factors and `R` of the right factors. Each map writes its
+    /// result into a zeroed output slice of the length of its input. The two
+    /// sides run concurrently; `self` is unchanged.
+    pub fn map(&self, left: impl Fn(&[f64], &mut [f64]) + Sync, right: impl Fn(&[f64], &mut [f64]) + Sync) -> Self {
+        self.map_with(|| (), |_, src, dst| left(src, dst), || (), |_, src, dst| right(src, dst))
     }
 
-    /// Like [`map`](Self::map), but each parallel task gets its own state for
-    /// each side: `init_left` / `init_right` are called once per task, and the
-    /// state is passed to `left` / `right` for every factor the task handles.
+    /// Like [`map`](Self::map), with a state for each side: `init_left` /
+    /// `init_right` are called once per parallel task, and the state is
+    /// passed to `left` / `right` for every factor the task handles.
     pub fn map_with<T, U>(
         &self,
         init_left: impl Fn() -> T + Sync,
@@ -335,68 +218,52 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
         init_right: impl Fn() -> U + Sync,
         right: impl Fn(&mut U, &[f64], &mut [f64]) + Sync,
     ) -> Self {
-        let (nl, nr, m) = (self.n_left(), self.n_right(), self.len());
         let (rho, mu) = rayon::join(
-            || {
-                let mut rho = DMatrix::zeros(nl, m);
-                rho.as_mut_slice()
-                    .par_chunks_mut(nl.max(1))
-                    .zip(self.rho.as_slice().par_chunks(nl.max(1)))
-                    .for_each_init(&init_left, |t, (dst, src)| left(t, src, dst));
-                rho
-            },
-            || {
-                let mut mu = DMatrix::zeros(nr, m);
-                mu.as_mut_slice()
-                    .par_chunks_mut(nr.max(1))
-                    .zip(self.mu.as_slice().par_chunks(nr.max(1)))
-                    .for_each_init(&init_right, |u, (dst, src)| right(u, src, dst));
-                mu
-            },
+            || map_columns(&self.rho, &init_left, &left),
+            || map_columns(&self.mu, &init_right, &right),
         );
-        Self {
-            left: self.left.clone(),
-            right: self.right.clone(),
-            sqrt_w_left: self.sqrt_w_left.clone(),
-            sqrt_w_right: self.sqrt_w_right.clone(),
-            inv_sqrt_w_left: self.inv_sqrt_w_left.clone(),
-            inv_sqrt_w_right: self.inv_sqrt_w_right.clone(),
-            a: self.a.clone(),
-            rho,
-            mu,
-        }
+        self.with_terms(self.a.clone(), rho, mu)
     }
 }
 
-/// `C = Fᵀ (W G)`, i.e. `C_kl = Σ_i w_i F(i, k) G(i, l)`: the weighted cross
-/// Gram matrix of the columns of `f` (`N × M`) and `g` (`N × M'`), `M × M'`,
-/// from the square-root weights `s`: `(S F)ᵀ (S G) = Fᵀ (S² G)`.
-///
-/// One row scaling of `g` by `s²`, then one matrix product (nalgebra's
-/// `gemm`, which uses `matrixmultiply` for all dimensions above 5).
-fn weighted_cross_gram(s: &[f64], f: &DMatrix<f64>, g: &DMatrix<f64>) -> DMatrix<f64> {
+/// `f(state, column)` on every column of `m`, in parallel; `init` makes one
+/// state per task.
+fn map_columns_in_place<T>(m: &mut DMatrix<f64>, init: impl Fn() -> T + Sync, f: impl Fn(&mut T, &mut [f64]) + Sync) {
+    let n = m.nrows().max(1);
+    m.as_mut_slice().par_chunks_mut(n).for_each_init(&init, &f);
+}
+
+/// A new matrix whose column `k` is written by `f(state, column k of src,
+/// zeroed output column)`, the columns in parallel; `init` makes one state
+/// per task.
+fn map_columns<T>(
+    src: &DMatrix<f64>,
+    init: impl Fn() -> T + Sync,
+    f: impl Fn(&mut T, &[f64], &mut [f64]) + Sync,
+) -> DMatrix<f64> {
+    let n = src.nrows().max(1);
+    let mut out = DMatrix::zeros(src.nrows(), src.ncols());
+    out.as_mut_slice()
+        .par_chunks_mut(n)
+        .zip(src.as_slice().par_chunks(n))
+        .for_each_init(&init, |state, (dst, col)| f(state, col, dst));
+    out
+}
+
+/// The weighted cross Gram matrix `C_kl = Σ_i s_i² F(i, k) G(i, l)` of the
+/// columns of `f` (`N × M`) and `g` (`N × M'`), `M × M'`, for the square-root
+/// weights `s`.
+fn weighted_cross_gram(s: &DVector<f64>, f: &DMatrix<f64>, g: &DMatrix<f64>) -> DMatrix<f64> {
     let mut wg = g.clone();
-    for mut col in wg.column_iter_mut() {
-        for (x, &si) in col.iter_mut().zip(s) {
-            *x *= si * si;
-        }
-    }
+    scale_rows(&mut wg, &s.component_mul(s));
     f.transpose() * wg
 }
 
-/// `G = (S F)ᵀ (S F)`, the weighted Gram matrix of the columns of `f`, `M × M`,
-/// from the square-root weights `s`.
-///
-/// The product is symmetric only up to rounding; the upper triangle is
-/// mirrored into the lower one, so `G` is exactly symmetric.
-fn weighted_gram(s: &[f64], f: &DMatrix<f64>) -> DMatrix<f64> {
+/// The weighted Gram matrix of the columns of `f`, `M × M`, made exactly
+/// symmetric by copying its upper triangle into the lower one.
+fn weighted_gram(s: &DVector<f64>, f: &DMatrix<f64>) -> DMatrix<f64> {
     let mut g = weighted_cross_gram(s, f, f);
-    let m = g.nrows();
-    for k in 0..m {
-        for l in k + 1..m {
-            g[(l, k)] = g[(k, l)];
-        }
-    }
+    g.fill_lower_triangle_with_upper_triangle();
     g
 }
 

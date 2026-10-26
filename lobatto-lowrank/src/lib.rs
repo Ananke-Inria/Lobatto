@@ -12,13 +12,11 @@
 //!
 //! with scalars $a_k$, each $\rho_k$ a nodal field on the left grid and each
 //! $\mu_k$ a nodal field on the right grid. Grids come from
-//! [`lobatto-grid`](https://crates.io/crates/lobatto-grid); a sum owns its two
-//! grids and their mass weights, and two sums can be added when their grids
-//! are equal.
+//! [`lobatto-grid`](https://crates.io/crates/lobatto-grid); two sums can be
+//! combined when their grids are equal.
 //!
-//! All norms, Gram matrices and compressions use the discrete `L²` inner
-//! product of the box, given by the mass weights of each grid
-//! (`GridND::mass_weights`), never the plain Euclidean one.
+//! Norms, Gram matrices and compressions use the discrete `L²` inner product
+//! given by the mass weights of each grid (`GridND::mass_weights`).
 //!
 //! ## Quick start
 //!
@@ -59,8 +57,8 @@
 //!
 //! | Module | Contents |
 //! |--------|----------|
-//! | [`lowrank`] | [`LowRankSum`]: factor-matrix storage, construction, accessors, value, point evaluation, full grid and assembled field. |
-//! | [`algebra`] | Scaling, addition, term-by-term building ([`push`](LowRankSum::push)), weighted Gram matrices, norm, inner product and distance, marginals, and maps of the factors, all without assembling. |
+//! | [`lowrank`] | [`LowRankSum`]: storage, construction, accessors, point evaluation, full grid and assembled field. |
+//! | [`algebra`] | Scaling, addition, [`push`](LowRankSum::push), weighted Gram matrices, norm, inner product, distance, marginals and maps of the factors. |
 //! | [`compress`] | [`Truncation`] criteria and the weighted QR → SVD compression to canonical form. |
 
 pub mod algebra;

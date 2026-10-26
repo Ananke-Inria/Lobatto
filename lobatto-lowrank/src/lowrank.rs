@@ -1,5 +1,5 @@
-//! The [`LowRankSum`] structure, its construction, its accessors and its
-//! conversion to the full grid.
+//! The [`LowRankSum`] structure: construction, accessors, evaluation, full
+//! grid and assembled field.
 //!
 //! A [`LowRankSum<P, Q>`] holds a field on a `P + Q` dimensional grid as a
 //! sum of `M` products `a_k · ρ_k ⊗ μ_k`, with `ρ_k` a nodal field on the
@@ -8,47 +8,31 @@
 //!
 //! # Storage
 //!
-//! The factors are stored as two column-major matrices, one factor per
-//! column: [`rho`](LowRankSum::rho) is `N_left × M` and
-//! [`mu`](LowRankSum::mu) is `N_right × M`, next to the coefficient vector
-//! [`coefficients`](LowRankSum::coefficients) of length `M`. A column is
-//! contiguous, so a single factor is available as a slice
-//! ([`rho_k`](LowRankSum::rho_k), [`mu_k`](LowRankSum::mu_k)), and Gram
-//! matrices, assembly and compression are matrix products and factorisations
-//! on the whole factor matrices.
-//!
-//! A sum owns its two grids, taken by value, and their mass weights, computed
-//! once at construction. Two sums can be added when their grids are equal.
+//! The factors are two column-major matrices, one factor per column:
+//! [`rho`](LowRankSum::rho) is `N_left × M` and [`mu`](LowRankSum::mu) is
+//! `N_right × M`. The coefficients ([`coefficients`](LowRankSum::coefficients))
+//! have length `M`. A sum owns its two grids and the square roots of their
+//! mass weights.
 //!
 //! # Full grid and assembled field
 //!
 //! [`LowRankSum::full_grid`] is the `P + Q` dimensional grid, left directions
 //! first. [`LowRankSum::assemble`] returns the field on it, column-major with
-//! the left directions fastest: node pair `(i, j)`, with `i` a left node index
-//! and `j` a right node index, sits at flat index `i + j · N_left`, where
-//! `N_left = left.total()`. Equivalently, the assembled field is the
-//! column-major `N_left × N_right` unfolding matrix. Assembling forms the
-//! dense field: tests and small sizes only.
-//!
-//! Scaling, addition and the weighted inner products live in
-//! [`crate::algebra`], the compression in [`crate::compress`].
+//! the left directions fastest: the node pair `(i, j)` (left index `i`, right
+//! index `j`) is at `i + j · N_left`. This is the column-major
+//! `N_left × N_right` unfolding matrix.
 
 use lobatto_grid::GridND;
 use nalgebra::{DMatrix, DVector};
+use rayon::prelude::*;
 
 /// A field on a `P + Q` dimensional grid stored as a sum of `M` products of a
-/// left field on a `P`-dimensional grid and a right field on a
-/// `Q`-dimensional grid.
+/// field on a `P`-dimensional left grid and a field on a `Q`-dimensional
+/// right grid.
 ///
-/// The mass weights of each grid ([`GridND::mass_weights`]) define the
-/// discrete `L²` inner product used by every norm, Gram matrix and
-/// compression. The sum stores their square roots, computed once at
-/// construction: scaling the factor rows by them maps the weighted inner
-/// product to the plain Euclidean one, which is the form every operation
-/// uses.
-///
-/// The sum is not kept canonical between operations: an addition simply
-/// concatenates the terms, and only [`LowRankSum::compress`] returns the
+/// Norms, Gram matrices and compressions use the discrete `L²` inner product
+/// given by the mass weights of each grid ([`GridND::mass_weights`]).
+/// Additions concatenate the terms; [`LowRankSum::compress`] returns the
 /// canonical form (orthonormal factors, `a_k = σ_k ≥ 0` decreasing).
 #[derive(Debug, Clone)]
 pub struct LowRankSum<const P: usize, const Q: usize> {
@@ -58,15 +42,11 @@ pub struct LowRankSum<const P: usize, const Q: usize> {
     pub(crate) sqrt_w_left: DVector<f64>,
     /// Square roots of the mass weights of the right grid.
     pub(crate) sqrt_w_right: DVector<f64>,
-    /// Reciprocals of `sqrt_w_left`.
-    pub(crate) inv_sqrt_w_left: DVector<f64>,
-    /// Reciprocals of `sqrt_w_right`.
-    pub(crate) inv_sqrt_w_right: DVector<f64>,
     /// Coefficients `a_k`, length `M`.
     pub(crate) a: DVector<f64>,
-    /// Left factors, `N_left × M`, column `k` is `ρ_k`.
+    /// Left factors, `N_left × M`; column `k` is `ρ_k`.
     pub(crate) rho: DMatrix<f64>,
-    /// Right factors, `N_right × M`, column `k` is `μ_k`.
+    /// Right factors, `N_right × M`; column `k` is `μ_k`.
     pub(crate) mu: DMatrix<f64>,
 }
 
@@ -75,25 +55,34 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
 
     /// The empty sum, i.e. the zero field, on the grids `left` and `right`.
     pub fn new(left: GridND<P>, right: GridND<Q>) -> Self {
-        let sqrt_w_left = DVector::from_vec(left.mass_weights()).map(f64::sqrt);
-        let sqrt_w_right = DVector::from_vec(right.mass_weights()).map(f64::sqrt);
         let (nl, nr) = (left.total(), right.total());
         Self {
+            sqrt_w_left: DVector::from_vec(left.mass_weights()).map(f64::sqrt),
+            sqrt_w_right: DVector::from_vec(right.mass_weights()).map(f64::sqrt),
             left,
             right,
-            inv_sqrt_w_left: sqrt_w_left.map(|x| 1.0 / x),
-            inv_sqrt_w_right: sqrt_w_right.map(|x| 1.0 / x),
-            sqrt_w_left,
-            sqrt_w_right,
             a: DVector::zeros(0),
             rho: DMatrix::zeros(nl, 0),
             mu: DMatrix::zeros(nr, 0),
         }
     }
 
+    /// A sum on the grids of `self` with the given terms.
+    pub(crate) fn with_terms(&self, a: DVector<f64>, rho: DMatrix<f64>, mu: DMatrix<f64>) -> Self {
+        Self {
+            left: self.left.clone(),
+            right: self.right.clone(),
+            sqrt_w_left: self.sqrt_w_left.clone(),
+            sqrt_w_right: self.sqrt_w_right.clone(),
+            a,
+            rho,
+            mu,
+        }
+    }
+
     /// The empty sum on the same grids as `self`.
     pub fn zeros_like(&self) -> Self {
-        Self::new(self.left.clone(), self.right.clone())
+        self.with_terms(DVector::zeros(0), DMatrix::zeros(self.n_left(), 0), DMatrix::zeros(self.n_right(), 0))
     }
 
     /// The rank-one field `f(x_1, …, x_P) · g(x_{P+1}, …, x_{P+Q})`.
@@ -177,8 +166,6 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
 
     /// The left factor `ρ_k`, one value per stored node of the left grid.
     pub fn rho_k(&self, k: usize) -> &[f64] {
-        // Column k of the column-major storage; a column view would be a
-        // temporary whose slice cannot be returned.
         let n = self.rho.nrows();
         &self.rho.as_slice()[k * n..(k + 1) * n]
     }
@@ -213,19 +200,15 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
             .sum()
     }
 
-    /// The field at a batch of points `xs` of `R^N`, `N = P + Q`, by
-    /// interpolation, written to `out`: `out[i]` is
+    /// The field at the points `xs` of `R^N`, `N = P + Q`, by interpolation,
+    /// written to `out`: `out[i]` is
     /// `Σ_k a_k ρ_k(x_1, …, x_P) μ_k(x_{P+1}, …, x_N)` at `xs[i]`.
     ///
-    /// Each factor is interpolated on its own grid with the extended
-    /// evaluation of `lobatto-grid` ([`GridND::eval_extended_plan`]): inside
-    /// the domain this is the nodal interpolant, outside each direction is
-    /// folded back by its extension (periodic wrap, even reflection, or odd
-    /// reflection with a sign flip). One plan per side is built for all the
-    /// points and reused for every term, so the points are located once. The
-    /// field is never assembled. For a single point, pass a batch of one.
-    ///
-    /// `N` is checked at compile time, as for [`full_grid`](Self::full_grid):
+    /// Each factor is interpolated on its grid by the extended evaluation of
+    /// `lobatto-grid` ([`GridND::eval_extended_plan`]): the nodal interpolant
+    /// inside the domain; outside, each direction is folded back by its
+    /// extension (periodic wrap, even reflection, odd reflection with a sign
+    /// flip). `N` must equal `P + Q` (checked at compile time):
     ///
     /// ```
     /// use lobatto_grid::{Extension, GridND};
@@ -281,11 +264,7 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     // ── Full grid ───────────────────────────────────────────────────────────
 
     /// The full `N = P + Q` dimensional grid: the left directions, then the
-    /// right ones.
-    ///
-    /// `N` is a separate parameter because stable Rust cannot write
-    /// `GridND<{P + Q}>`; it is checked at compile time, so the caller names
-    /// it:
+    /// right ones. `N` must equal `P + Q` (checked at compile time):
     ///
     /// ```
     /// use lobatto_grid::{Extension, GridND};
@@ -320,21 +299,25 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
         }))
     }
 
-    /// The full field `Σ_k a_k ρ_k(i) μ_k(j)` in the layout of the module docs,
-    /// i.e. a field on [`full_grid`](Self::full_grid).
-    ///
-    /// One matrix product, `(ρ · diag(a)) · μᵀ`, whose column-major
-    /// `N_left × N_right` result is exactly that layout. Length
-    /// `N_left · N_right`; cost `M · N_left · N_right`. The zero field for an
+    /// The full field `Σ_k a_k ρ_k(i) μ_k(j)` on [`full_grid`](Self::full_grid),
+    /// in the layout of the module docs: `(ρ diag(a)) μᵀ`, length
+    /// `N_left · N_right`, cost `M · N_left · N_right`. All zeros for an
     /// empty sum.
     pub fn assemble(&self) -> Vec<f64> {
         let mut rho_a = self.rho.clone();
         for (mut col, &a) in rho_a.column_iter_mut().zip(self.a.iter()) {
             col *= a;
         }
-        let p = rho_a * self.mu.transpose();
-        p.data.into()
+        (rho_a * self.mu.transpose()).data.into()
     }
+}
+
+/// `m[i, k] *= w[i]` for every column `k`, the columns in parallel.
+pub(crate) fn scale_rows(m: &mut DMatrix<f64>, w: &DVector<f64>) {
+    let n = m.nrows().max(1);
+    m.as_mut_slice().par_chunks_mut(n).for_each(|col| {
+        col.iter_mut().zip(w.iter()).for_each(|(x, w)| *x *= w);
+    });
 }
 
 #[cfg(test)]
