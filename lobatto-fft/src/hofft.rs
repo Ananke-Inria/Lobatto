@@ -62,7 +62,7 @@
 //! independent coefficients by discarding modes determined by the spectral symmetry.
 
 use lobatto::collocation::{CollocationBasis, Gauss};
-use lobatto_grid::grid::{nd_col_major_strides, nd_fiber_base, nd_multi_indices};
+use lobatto_grid::grid::{nd_col_major_strides, nd_fiber_base, nd_multi_index, nd_multi_indices};
 use lobatto_grid::{Grid1D, GridND};
 use rayon::prelude::*;
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
@@ -892,10 +892,8 @@ impl<const N: usize> EngineND<N> {
     /// `c_d` is extracted, the 1D `k_packing` maps it to the
     /// full 1D index `f_d`, and the result is assembled using full-buffer strides.
     pub fn k_packing(&self, i: usize) -> usize {
-        (0..N).fold(0, |acc, d| {
-            let c_d = (i / self.strides[d]) % self.ndofs[d];
-            acc + self.planners[d].k_packing(c_d) * self.full_strides[d]
-        })
+        let c = nd_multi_index(i, &self.ndofs);
+        (0..N).map(|d| self.planners[d].k_packing(c[d]) * self.full_strides[d]).sum()
     }
 
     /// Maps a full-buffer ND flat index `i ∈ [0, ∏_d (r_d × n_fft_d))` to
@@ -906,10 +904,10 @@ impl<const N: usize> EngineND<N> {
     pub fn k_unpacking(&self, i: usize) -> (usize, Complex<f64>) {
         let mut compact_idx = 0usize;
         let mut coeff = Complex::new(1.0_f64, 0.0);
-        for d in 0..N {
-            let f_d = (i / self.full_strides[d]) % self.full_sizes[d];
-            let (c_d, coeff_d) = self.planners[d].unpack_table[f_d];
-            compact_idx += c_d * self.strides[d];
+        let f = nd_multi_index(i, &self.full_sizes);
+        for ((planner, &f_d), &stride) in self.planners.iter().zip(&f).zip(&self.strides) {
+            let (c_d, coeff_d) = planner.unpack_table[f_d];
+            compact_idx += c_d * stride;
             coeff *= coeff_d;
         }
         (compact_idx, coeff)

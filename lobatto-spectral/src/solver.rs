@@ -49,7 +49,7 @@
 //! [`lobatto_grid::GridND::get_x`].
 
 use lobatto::collocation::{CollocationBasis, Gauss};
-use lobatto_grid::grid::nd_fiber_base;
+use lobatto_grid::grid::{nd_fiber_base, nd_multi_index};
 use lobatto_grid::{Extension, Grid1D, GridND};
 use nalgebra::{DMatrix, DVector, SymmetricEigen};
 use rayon::prelude::*;
@@ -473,15 +473,18 @@ impl<const N: usize> PoissonND<N> {
     /// ```
     pub fn apply_in_place_dirs<G: Fn([f64; N]) -> f64 + Sync>(&self, f: &mut [f64], g: G) {
         let ndofs = self.grid.ndofs();
-        let strides = self.grid.strides();
         let total = self.grid.total();
         assert_eq!(f.len(), total, "expected {total} DOFs, got {}", f.len());
 
-        // 1. Mass scaling by the diagonal of M_0 ⊗ … ⊗ M_{N-1}.
-        f.par_iter_mut().enumerate().for_each(|(p, fp)| {
-            *fp *= (0..N)
-                .map(|d| self.solvers[d].mass_diag[(p / strides[d]) % ndofs[d]])
-                .product::<f64>();
+        // 1. Mass scaling by the diagonal of M_0 ⊗ … ⊗ M_{N-1}, one fibre
+        // along direction 0 at a time: the multi-index of its first DOF, then
+        // only i_0 changes along the fibre.
+        f.par_chunks_mut(ndofs[0]).enumerate().for_each(|(q, fibre)| {
+            let mut i = nd_multi_index(q * ndofs[0], &ndofs);
+            for (j, fp) in fibre.iter_mut().enumerate() {
+                i[0] = j;
+                *fp *= i.iter().zip(&self.solvers).map(|(&i_d, s)| s.mass_diag[i_d]).product::<f64>();
+            }
         });
 
         // 2. Forward transforms Vᵀ_d along the fibres of each direction.
@@ -489,11 +492,14 @@ impl<const N: usize> PoissonND<N> {
             self.sweep(f, d, true);
         }
 
-        // 3. Pointwise g of the per-direction eigenvalues of the mode.
-        f.par_iter_mut().enumerate().for_each(|(p, fp)| {
-            let mus: [f64; N] =
-                std::array::from_fn(|d| self.solvers[d].eigenvalues[(p / strides[d]) % ndofs[d]]);
-            *fp *= g(mus);
+        // 3. Pointwise g of the per-direction eigenvalues of the mode, fibre
+        // by fibre as in step 1.
+        f.par_chunks_mut(ndofs[0]).enumerate().for_each(|(q, fibre)| {
+            let mut i = nd_multi_index(q * ndofs[0], &ndofs);
+            for (j, fp) in fibre.iter_mut().enumerate() {
+                i[0] = j;
+                *fp *= g(std::array::from_fn(|d| self.solvers[d].eigenvalues[i[d]]));
+            }
         });
 
         // 4. Inverse transforms V_d.

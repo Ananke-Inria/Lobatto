@@ -48,7 +48,7 @@
 //! | `Neumann`   | `k·r + j`, plus the right endpoint at `n·r` |
 
 use crate::hofft::{Engine, EngineND, Extension};
-use lobatto_grid::grid::{nd_col_major_strides, nd_fiber_base, nd_multi_indices};
+use lobatto_grid::grid::{nd_fiber_base, nd_multi_index, nd_multi_indices};
 use lobatto::collocation::{CollocationBasis, Gauss};
 use nalgebra::*;
 use rayon::prelude::*;
@@ -705,8 +705,6 @@ pub struct PoissonND<const N: usize> {
     n_freqs: [usize; N],
     /// Total number of independent mode tuples: the product of `n_freqs`.
     n_freq_total: usize,
-    /// Column-major strides for the mode-tuple tensor.
-    n_freq_strides: [usize; N],
     /// Per direction, for each DOF `dof_d`, its contribution `j_d · r_strides[d]`
     /// to the index of its weight in `periodic_mass_matrix`: local node
     /// `j_d = (dof_d + 1) % r_d` for Dirichlet (the first DOF is node `j = 1`),
@@ -755,7 +753,6 @@ impl<const N: usize> PoissonND<N> {
         // Number of independent Fourier modes per direction.
         let n_freqs: [usize; N] = std::array::from_fn(|d| solvers[d].eigenvalues.len());
         let n_freq_total = n_freqs.iter().product();
-        let n_freq_strides = nd_col_major_strides(&n_freqs);
 
         // Mass weight index per DOF and direction: Dirichlet DOFs start at j=1.
         let mass_index: [Vec<usize>; N] = std::array::from_fn(|d| {
@@ -772,7 +769,6 @@ impl<const N: usize> PoissonND<N> {
             periodic_mass_matrix,
             n_freqs,
             n_freq_total,
-            n_freq_strides,
             mass_index,
             mu_max,
         }
@@ -893,9 +889,8 @@ impl<const N: usize> PoissonND<N> {
         let n0 = self.fft.ndofs[0];
 
         f.par_chunks_mut(n0).enumerate().for_each(|(q, fibre)| {
-            let outer: usize = (1..N)
-                .map(|d| self.mass_index[d][(q * n0 / self.fft.strides[d]) % self.fft.ndofs[d]])
-                .sum();
+            let i = nd_multi_index(q * n0, &self.fft.ndofs);
+            let outer: usize = (1..N).map(|d| self.mass_index[d][i[d]]).sum();
             for (fp, &j0) in fibre.iter_mut().zip(&self.mass_index[0]) {
                 *fp *= self.periodic_mass_matrix[outer + j0];
             }
@@ -924,8 +919,7 @@ impl<const N: usize> PoissonND<N> {
                 )
             },
             |(m, v, x), k_flat| {
-                let ks: [usize; N] =
-                    std::array::from_fn(|d| (k_flat / self.n_freq_strides[d]) % self.n_freqs[d]);
+                let ks = nd_multi_index(k_flat, &self.n_freqs);
                 self.fft.mode_indices(&ks, m);
 
                 {
