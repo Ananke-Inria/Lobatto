@@ -58,12 +58,17 @@
 //! | Module | Contents |
 //! |--------|----------|
 //! | [`lowrank`] | [`LowRankSum`]: storage, construction, accessors, point evaluation, full grid and assembled field. |
+//! | [`leaf`] | [`Leaf`]: `r` functions on a grid (one side of a sum): weighted Gram matrices, orthonormalisation, evaluation, maps. |
 //! | [`algebra`] | Scaling, addition, [`push`](LowRankSum::push), weighted Gram matrices, norm, inner product, distance, marginals and maps of the factors. |
 //! | [`compress`] | [`Truncation`] criteria and the weighted QR → SVD compression to canonical form. |
+//! | [`linalg`] | Dense building blocks on nalgebra matrices: TSQR thin QR, thin SVD, row scaling. |
 
 pub mod algebra;
 pub mod compress;
+pub mod leaf;
+pub mod linalg;
 pub mod lowrank;
 
 pub use compress::{Compressed, Truncation};
+pub use leaf::Leaf;
 pub use lowrank::LowRankSum;

@@ -4,10 +4,9 @@
 //! terms without compressing.
 
 use nalgebra::{DMatrix, DVector};
-use rayon::prelude::*;
 
-use crate::compress::tsqr_in_place;
-use crate::lowrank::{scale_rows, LowRankSum};
+use crate::linalg::tsqr_in_place;
+use crate::lowrank::LowRankSum;
 
 impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     // ── Scaling and addition ────────────────────────────────────────────────
@@ -24,13 +23,11 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     /// If the two sums are not on equal grids (see [`Self::same_grids`]).
     pub fn add(&self, other: &Self) -> Self {
         assert!(self.same_grids(other), "adding sums on different grids");
-        let cat = |x: &[f64], y: &[f64]| [x, y].concat();
-        let m = self.len() + other.len();
-        self.with_terms(
-            DVector::from_vec(cat(self.a.as_slice(), other.a.as_slice())),
-            DMatrix::from_vec(self.n_left(), m, cat(self.rho.as_slice(), other.rho.as_slice())),
-            DMatrix::from_vec(self.n_right(), m, cat(self.mu.as_slice(), other.mu.as_slice())),
-        )
+        Self {
+            left: self.left.concat(&other.left),
+            right: self.right.concat(&other.right),
+            a: DVector::from_vec([self.a.as_slice(), other.a.as_slice()].concat()),
+        }
     }
 
     /// In-place version of [`LowRankSum::add`].
@@ -41,8 +38,8 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     pub fn add_assign(&mut self, other: &Self) {
         assert!(self.same_grids(other), "adding sums on different grids");
         self.a.extend(other.a.iter().copied());
-        self.rho.extend(other.rho.iter().copied());
-        self.mu.extend(other.mu.iter().copied());
+        self.left.extend(&other.left);
+        self.right.extend(&other.right);
     }
 
     /// Append the term `a · ρ ⊗ μ`, with `rho` of length `N_left` and `mu` of
@@ -55,8 +52,8 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
         assert_eq!(rho.len(), self.n_left(), "rho length differs from the left grid");
         assert_eq!(mu.len(), self.n_right(), "mu length differs from the right grid");
         self.a.extend([a]);
-        self.rho.extend(rho.iter().copied());
-        self.mu.extend(mu.iter().copied());
+        self.left.push(rho);
+        self.right.push(mu);
     }
 
     // ── Weighted inner products ─────────────────────────────────────────────
@@ -70,14 +67,14 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     /// with the left mass weights `w^L`. Exactly symmetric; the identity for
     /// a sum in canonical form. Cost `N_left · M²`.
     pub fn gram_left(&self) -> DMatrix<f64> {
-        weighted_gram(&self.sqrt_w_left, &self.rho)
+        self.left.gram()
     }
 
     /// Weighted Gram matrix of the right factors, `M × M`:
     /// $G^R_{kl} = \sum_j w^R_j \, \mu_k(j) \, \mu_l(j)$; see
     /// [`gram_left`](Self::gram_left).
     pub fn gram_right(&self) -> DMatrix<f64> {
-        weighted_gram(&self.sqrt_w_right, &self.mu)
+        self.right.gram()
     }
 
     /// Squared weighted `L²` norm of the field:
@@ -110,8 +107,8 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     /// If the two sums are not on equal grids (see [`Self::same_grids`]).
     pub fn inner(&self, other: &Self) -> f64 {
         assert!(self.same_grids(other), "inner product of sums on different grids");
-        let cl = weighted_cross_gram(&self.sqrt_w_left, &self.rho, &other.rho);
-        let cr = weighted_cross_gram(&self.sqrt_w_right, &self.mu, &other.mu);
+        let cl = self.left.cross_gram(&other.left);
+        let cr = self.right.cross_gram(&other.right);
         self.a.dot(&(cl.component_mul(&cr) * &other.a))
     }
 
@@ -144,8 +141,8 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
             tsqr_in_place(&mut fg, blocks).r()
         };
         let (mut r_a, r_b) = rayon::join(
-            || r_factor(&self.rho, &other.rho, &self.sqrt_w_left),
-            || r_factor(&self.mu, &other.mu, &self.sqrt_w_right),
+            || r_factor(&self.left.u, &other.left.u, &self.left.sqrt_w),
+            || r_factor(&self.right.u, &other.right.u, &self.right.sqrt_w),
         );
         for (k, mut col) in r_a.column_iter_mut().enumerate() {
             col *= if k < ma { self.a[k] } else { -other.a[k - ma] };
@@ -159,17 +156,15 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     /// weights, `Σ_k a_k (Σ_j w_j μ_k[j]) ρ_k`: a nodal field on the left
     /// grid. Cost `(N_left + N_right) · M`.
     pub fn marginal_left(&self) -> Vec<f64> {
-        let mut c = self.mu.tr_mul(&self.sqrt_w_right.component_mul(&self.sqrt_w_right));
-        c.component_mul_assign(&self.a);
-        (&self.rho * c).data.into()
+        let c = self.right.integrals().component_mul(&self.a);
+        (&self.left.u * c).data.into()
     }
 
     /// The field integrated over the left variables,
     /// `Σ_k a_k (Σ_i w_i ρ_k[i]) μ_k`: a nodal field on the right grid.
     pub fn marginal_right(&self) -> Vec<f64> {
-        let mut c = self.rho.tr_mul(&self.sqrt_w_left.component_mul(&self.sqrt_w_left));
-        c.component_mul_assign(&self.a);
-        (&self.mu * c).data.into()
+        let c = self.left.integrals().component_mul(&self.a);
+        (&self.right.u * c).data.into()
     }
 
     // ── Maps of the factors ─────────────────────────────────────────────────
@@ -191,13 +186,13 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     /// `f`: `init` is called once per parallel task (not per term), and
     /// `f(&mut state, ρ_k)` is called for every term of the task.
     pub fn map_left_in_place_with<T>(&mut self, init: impl Fn() -> T + Sync, f: impl Fn(&mut T, &mut [f64]) + Sync) {
-        map_columns_in_place(&mut self.rho, init, f);
+        self.left.map_in_place_with(init, f);
     }
 
     /// Like [`map_right_in_place`](Self::map_right_in_place), with a state
     /// for `f`; see [`map_left_in_place_with`](Self::map_left_in_place_with).
     pub fn map_right_in_place_with<T>(&mut self, init: impl Fn() -> T + Sync, f: impl Fn(&mut T, &mut [f64]) + Sync) {
-        map_columns_in_place(&mut self.mu, init, f);
+        self.right.map_in_place_with(init, f);
     }
 
     /// The sum `Σ_k a_k · L(ρ_k) ⊗ R(μ_k)`, on the same grids, for maps `L`
@@ -218,53 +213,12 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
         init_right: impl Fn() -> U + Sync,
         right: impl Fn(&mut U, &[f64], &mut [f64]) + Sync,
     ) -> Self {
-        let (rho, mu) = rayon::join(
-            || map_columns(&self.rho, &init_left, &left),
-            || map_columns(&self.mu, &init_right, &right),
+        let (left, right) = rayon::join(
+            || self.left.map_with(&init_left, &left),
+            || self.right.map_with(&init_right, &right),
         );
-        self.with_terms(self.a.clone(), rho, mu)
+        Self { left, right, a: self.a.clone() }
     }
-}
-
-/// `f(state, column)` on every column of `m`, in parallel; `init` makes one
-/// state per task.
-fn map_columns_in_place<T>(m: &mut DMatrix<f64>, init: impl Fn() -> T + Sync, f: impl Fn(&mut T, &mut [f64]) + Sync) {
-    let n = m.nrows().max(1);
-    m.as_mut_slice().par_chunks_mut(n).for_each_init(&init, &f);
-}
-
-/// A new matrix whose column `k` is written by `f(state, column k of src,
-/// zeroed output column)`, the columns in parallel; `init` makes one state
-/// per task.
-fn map_columns<T>(
-    src: &DMatrix<f64>,
-    init: impl Fn() -> T + Sync,
-    f: impl Fn(&mut T, &[f64], &mut [f64]) + Sync,
-) -> DMatrix<f64> {
-    let n = src.nrows().max(1);
-    let mut out = DMatrix::zeros(src.nrows(), src.ncols());
-    out.as_mut_slice()
-        .par_chunks_mut(n)
-        .zip(src.as_slice().par_chunks(n))
-        .for_each_init(&init, |state, (dst, col)| f(state, col, dst));
-    out
-}
-
-/// The weighted cross Gram matrix `C_kl = Σ_i s_i² F(i, k) G(i, l)` of the
-/// columns of `f` (`N × M`) and `g` (`N × M'`), `M × M'`, for the square-root
-/// weights `s`.
-fn weighted_cross_gram(s: &DVector<f64>, f: &DMatrix<f64>, g: &DMatrix<f64>) -> DMatrix<f64> {
-    let mut wg = g.clone();
-    scale_rows(&mut wg, &s.component_mul(s));
-    f.transpose() * wg
-}
-
-/// The weighted Gram matrix of the columns of `f`, `M × M`, made exactly
-/// symmetric by copying its upper triangle into the lower one.
-fn weighted_gram(s: &DVector<f64>, f: &DMatrix<f64>) -> DMatrix<f64> {
-    let mut g = weighted_cross_gram(s, f, f);
-    g.fill_lower_triangle_with_upper_triangle();
-    g
 }
 
 #[cfg(test)]

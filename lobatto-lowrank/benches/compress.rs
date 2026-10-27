@@ -13,12 +13,10 @@
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
-use faer::dyn_stack::{MemBuffer, MemStack};
-use faer::linalg::svd::{self, ComputeSvdVectors};
-use faer::{diag::DiagMut, MatMut, MatRef, Par};
 use lobatto_grid::{Extension, GridND};
+use lobatto_lowrank::linalg::{scale_rows, thin_svd, tsqr_in_place};
 use lobatto_lowrank::{LowRankSum, Truncation};
-use nalgebra::{DMatrix, DVector};
+use nalgebra::DVector;
 
 /// `(n, M, r)`: `n × n` elements of order 4 per side, `M` terms, kept rank `r`.
 const CASES: &[(usize, usize, usize)] = &[(20, 32, 8), (40, 32, 8), (40, 158, 94)];
@@ -67,78 +65,60 @@ fn bench_compress(c: &mut Criterion) {
     group.finish();
 }
 
-/// The steps of `compress`, replicated on the public factor matrices (left
-/// side for the QR steps; the right side costs the same).
+/// The steps of `compress`, replicated with the `linalg` functions on the
+/// public factor matrices. The per-side steps run on the left side alone with
+/// the row blocks `compress` gives each side (half the pool); `compress` runs
+/// both sides at once.
 fn bench_compress_steps(c: &mut Criterion) {
     let mut group = c.benchmark_group("lowrank_compress_steps");
     group.sample_size(10);
+    let blocks = (rayon::current_num_threads() / 2).max(1);
     for &(n, m, r) in CASES {
         let s = random_sum(n, m);
         let p = id(n, m, r);
-        let sw = DVector::from_column_slice(s.sqrt_w_left());
+        let sw_left = DVector::from_column_slice(s.sqrt_w_left());
+        let sw_right = DVector::from_column_slice(s.sqrt_w_right());
         let mut scaled = s.rho().clone();
-        for mut col in scaled.column_iter_mut() {
-            col.component_mul_assign(&sw);
+        scale_rows(&mut scaled, &sw_left);
+        let mut factored = scaled.clone();
+        let qr_a = tsqr_in_place(&mut factored, blocks);
+        let mut mu = s.mu().clone();
+        scale_rows(&mut mu, &sw_right);
+        let r_b = tsqr_in_place(&mut mu, blocks).r();
+        let mut core = qr_a.r();
+        for (mut col, &a) in core.column_iter_mut().zip(s.coefficients()) {
+            col *= a;
         }
-        let qr = scaled.clone().qr();
-        let q = qr.q();
-        let a = DVector::from_column_slice(s.coefficients());
-        let mut core: DMatrix<f64> = qr.r();
-        for (mut col, &ak) in core.column_iter_mut().zip(a.iter()) {
-            col *= ak;
-        }
-        let core = &core * qr.r().transpose();
-        let u = core.clone().svd(true, false).u.unwrap();
+        let core = core * r_b.transpose();
+        let (u, _, _) = thin_svd(&core);
 
-        group.bench_function(BenchmarkId::new("scale", &p), |b| {
+        group.bench_function(BenchmarkId::new("scale_rows", &p), |b| {
             b.iter_batched(
                 || s.rho().clone(),
                 |mut x| {
-                    for mut col in x.column_iter_mut() {
-                        col.component_mul_assign(&sw);
-                    }
+                    scale_rows(&mut x, &sw_left);
                     x
                 },
                 BatchSize::LargeInput,
             )
         });
-        group.bench_function(BenchmarkId::new("qr", &p), |b| {
-            b.iter_batched(|| scaled.clone(), |x| x.qr(), BatchSize::LargeInput)
+        group.bench_function(BenchmarkId::new("tsqr", &p), |b| {
+            b.iter_batched(
+                || scaled.clone(),
+                |mut x| {
+                    let qr = tsqr_in_place(&mut x, blocks);
+                    (qr, x)
+                },
+                BatchSize::LargeInput,
+            )
         });
-        group.bench_function(BenchmarkId::new("form_q", &p), |b| b.iter(|| qr.q()));
         // nalgebra's SVD, kept for comparison; `compress` uses faer's (below).
         group.bench_function(BenchmarkId::new("svd_core", &p), |b| {
             b.iter_batched(|| core.clone(), |x| x.svd(true, true), BatchSize::SmallInput)
         });
-        group.bench_function(BenchmarkId::new("svd_core_faer", &p), |b| {
-            let k = core.nrows().min(core.ncols());
-            let thin = ComputeSvdVectors::Thin;
-            b.iter(|| {
-                let (mut u, mut v) = (DMatrix::zeros(core.nrows(), k), DMatrix::zeros(core.ncols(), k));
-                let mut sigma = DVector::zeros(k);
-                let mut mem = MemBuffer::new(svd::svd_scratch::<f64>(
-                    core.nrows(),
-                    core.ncols(),
-                    thin,
-                    thin,
-                    Par::Seq,
-                    Default::default(),
-                ));
-                svd::svd(
-                    MatRef::from_column_major_slice(core.as_slice(), core.nrows(), core.ncols()),
-                    DiagMut::from_slice_mut(sigma.as_mut_slice()),
-                    Some(MatMut::from_column_major_slice_mut(u.as_mut_slice(), core.nrows(), k)),
-                    Some(MatMut::from_column_major_slice_mut(v.as_mut_slice(), core.ncols(), k)),
-                    Par::Seq,
-                    MemStack::new(&mut mem),
-                    Default::default(),
-                )
-                .unwrap();
-                (u, sigma, v)
-            })
-        });
-        group.bench_function(BenchmarkId::new("q_times_u", &p), |b| {
-            b.iter(|| &q * u.columns(0, r))
+        group.bench_function(BenchmarkId::new("svd_core_faer", &p), |b| b.iter(|| thin_svd(&core)));
+        group.bench_function(BenchmarkId::new("apply_q", &p), |b| {
+            b.iter(|| qr_a.apply_q(&factored, u.columns(0, r)))
         });
     }
     group.finish();

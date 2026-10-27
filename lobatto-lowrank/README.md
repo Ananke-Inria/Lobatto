@@ -20,9 +20,14 @@ Grids come from [`lobatto-grid`](https://crates.io/crates/lobatto-grid): multi-e
 - **algebra without assembling**: scaling, addition (`add`, `add_assign`; terms concatenated, no compression), weighted Gram matrices, norm, inner product and distance between sums;
 - **compression**: best approximation in the weighted norm by a thin QR of each factor matrix and an SVD of the small core matrix, with `Truncation` by rank, relative or absolute tolerance, or both; `orthonormalize` brings a sum to canonical form without discarding anything;
 - **evaluation**: interpolation at arbitrary points of the full box (`get_values`; points located once, plans reused for every term), node values, and, for small sizes and tests, the full grid and the assembled field;
-- **marginals and factor maps**: the field integrated over the right or left variables (`marginal_left`, `marginal_right`), and maps applied to every left or right factor (`map_left_in_place`, `map_right_in_place`, `map`).
+- **marginals and factor maps**: the field integrated over the right or left variables (`marginal_left`, `marginal_right`), and maps applied to every left or right factor (`map_left_in_place`, `map_right_in_place`, `map`), with `_with` variants that give each parallel task its own state (a scratch buffer, a solver workspace).
 
-Factors and Gram matrices are [`nalgebra`](https://crates.io/crates/nalgebra) `DMatrix<f64>` values.
+The building blocks are public too:
+
+- **`Leaf<P>`**, one side of a sum: `r` functions on a grid stored by their nodal values, with weighted Gram and cross Gram matrices, integrals, orthonormalisation in the weighted inner product, evaluation at points and parallel maps. `left_leaf` and `right_leaf` give the two sides of a `LowRankSum`.
+- **`linalg`**, dense linear algebra on nalgebra matrices: thin QR of tall-skinny matrices by TSQR (`tsqr_in_place`, with `Q` kept as Householder reflectors and applied without being formed), thin SVD (`thin_svd`) and row scaling (`scale_rows`). The factorisations are computed by [`faer`](https://crates.io/crates/faer) on views of the nalgebra storage, without copies.
+
+Factors and Gram matrices are [`nalgebra`](https://crates.io/crates/nalgebra) `DMatrix<f64>` values. Compression, distance and the maps run in parallel on the current [Rayon](https://crates.io/crates/rayon) pool.
 
 ## Quick start
 
@@ -70,11 +75,11 @@ assert!((out[0] - 2.0 * 0.3f64.cos() * 0.5f64.cos()).abs() < 1e-5);
 The squared weighted norm of a sum is the Frobenius norm of its unfolding scaled by the square-root mass weights, `W_L^{1/2} P W_R^{1/2}`. `compress` computes the SVD of that matrix without forming it:
 
 1. scale the factor matrices by the square-root weights, `Ã = W_L^{1/2} [ρ_1 … ρ_M]`, `B̃ = W_R^{1/2} [μ_1 … μ_M]`;
-2. thin QR of both, `Ã = Q_A R_A`, `B̃ = Q_B R_B`;
+2. thin QR of both in place by TSQR, `Ã = Q_A R_A`, `B̃ = Q_B R_B`: the rows are split into blocks factorised in parallel, whose `R` factors are merged pairwise up a binary tree; the two sides run concurrently;
 3. core matrix `C = R_A diag(a) R_Bᵀ`, at most `M × M`, and its SVD `C = U Σ Vᵀ`;
-4. keep `r` triplets: `ρ_k = W_L^{-1/2} Q_A U_k`, `μ_k = W_R^{-1/2} Q_B V_k`, `a_k = σ_k`.
+4. keep `r` triplets: `ρ_k = W_L^{-1/2} Q_A U_k`, `μ_k = W_R^{-1/2} Q_B V_k`, `a_k = σ_k`. The Householder reflectors of `Q_A` and `Q_B` are applied directly to the kept columns `U_r` and `V_r`; `Q` is never formed.
 
-The result is in canonical form (orthonormal factors in the weighted norms, `a_k` decreasing) and is the best rank-`r` approximation in the weighted norm. The discarded singular values are returned, so the error is known exactly. Cost `O((N_left + N_right)·M² + M³)`, linear in the grid sizes.
+The result is in canonical form (orthonormal factors in the weighted norms, `a_k` decreasing) and is the best rank-`r` approximation in the weighted norm. The discarded singular values are returned, so the error is known exactly. Cost `O((N_left + N_right)·M² + M³)`, linear in the grid sizes. The result is the same up to round-off for any number of threads, and bit for bit for a given one.
 
 ## Example
 

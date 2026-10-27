@@ -8,11 +8,11 @@
 //!
 //! # Storage
 //!
-//! The factors are two column-major matrices, one factor per column:
-//! [`rho`](LowRankSum::rho) is `N_left × M` and [`mu`](LowRankSum::mu) is
-//! `N_right × M`. The coefficients ([`coefficients`](LowRankSum::coefficients))
-//! have length `M`. A sum owns its two grids and the square roots of their
-//! mass weights.
+//! The two sides are [`Leaf`]s: a grid, the square roots of its mass weights,
+//! and the factors as the columns of a column-major matrix,
+//! [`rho`](LowRankSum::rho) (`N_left × M`) and [`mu`](LowRankSum::mu)
+//! (`N_right × M`). The coefficients
+//! ([`coefficients`](LowRankSum::coefficients)) have length `M`.
 //!
 //! # Full grid and assembled field
 //!
@@ -24,7 +24,8 @@
 
 use lobatto_grid::GridND;
 use nalgebra::{DMatrix, DVector};
-use rayon::prelude::*;
+
+use crate::leaf::Leaf;
 
 /// A field on a `P + Q` dimensional grid stored as a sum of `M` products of a
 /// field on a `P`-dimensional left grid and a field on a `Q`-dimensional
@@ -36,18 +37,12 @@ use rayon::prelude::*;
 /// canonical form (orthonormal factors, `a_k = σ_k ≥ 0` decreasing).
 #[derive(Debug, Clone)]
 pub struct LowRankSum<const P: usize, const Q: usize> {
-    pub(crate) left: GridND<P>,
-    pub(crate) right: GridND<Q>,
-    /// Square roots of the mass weights of the left grid.
-    pub(crate) sqrt_w_left: DVector<f64>,
-    /// Square roots of the mass weights of the right grid.
-    pub(crate) sqrt_w_right: DVector<f64>,
+    /// Left grid and factors `ρ_k` (`N_left × M`).
+    pub(crate) left: Leaf<P>,
+    /// Right grid and factors `μ_k` (`N_right × M`).
+    pub(crate) right: Leaf<Q>,
     /// Coefficients `a_k`, length `M`.
     pub(crate) a: DVector<f64>,
-    /// Left factors, `N_left × M`; column `k` is `ρ_k`.
-    pub(crate) rho: DMatrix<f64>,
-    /// Right factors, `N_right × M`; column `k` is `μ_k`.
-    pub(crate) mu: DMatrix<f64>,
 }
 
 impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
@@ -55,34 +50,16 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
 
     /// The empty sum, i.e. the zero field, on the grids `left` and `right`.
     pub fn new(left: GridND<P>, right: GridND<Q>) -> Self {
-        let (nl, nr) = (left.total(), right.total());
-        Self {
-            sqrt_w_left: DVector::from_vec(left.mass_weights()).map(f64::sqrt),
-            sqrt_w_right: DVector::from_vec(right.mass_weights()).map(f64::sqrt),
-            left,
-            right,
-            a: DVector::zeros(0),
-            rho: DMatrix::zeros(nl, 0),
-            mu: DMatrix::zeros(nr, 0),
-        }
-    }
-
-    /// A sum on the grids of `self` with the given terms.
-    pub(crate) fn with_terms(&self, a: DVector<f64>, rho: DMatrix<f64>, mu: DMatrix<f64>) -> Self {
-        Self {
-            left: self.left.clone(),
-            right: self.right.clone(),
-            sqrt_w_left: self.sqrt_w_left.clone(),
-            sqrt_w_right: self.sqrt_w_right.clone(),
-            a,
-            rho,
-            mu,
-        }
+        Self { left: Leaf::new(left), right: Leaf::new(right), a: DVector::zeros(0) }
     }
 
     /// The empty sum on the same grids as `self`.
     pub fn zeros_like(&self) -> Self {
-        self.with_terms(DVector::zeros(0), DMatrix::zeros(self.n_left(), 0), DMatrix::zeros(self.n_right(), 0))
+        Self {
+            left: self.left.with_same_grid(DMatrix::zeros(self.n_left(), 0)),
+            right: self.right.with_same_grid(DMatrix::zeros(self.n_right(), 0)),
+            a: DVector::zeros(0),
+        }
     }
 
     /// The rank-one field `f(x_1, …, x_P) · g(x_{P+1}, …, x_{P+Q})`.
@@ -99,54 +76,64 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     ) -> Self {
         let rho: Vec<f64> = left.get_x().into_iter().map(f).collect();
         let mu: Vec<f64> = right.get_x().into_iter().map(g).collect();
-        let mut s = Self::new(left, right);
-        s.a = DVector::from_element(1, 1.0);
-        s.rho = DMatrix::from_vec(rho.len(), 1, rho);
-        s.mu = DMatrix::from_vec(mu.len(), 1, mu);
-        s
+        Self {
+            left: Leaf::with_basis(left, DMatrix::from_vec(rho.len(), 1, rho)),
+            right: Leaf::with_basis(right, DMatrix::from_vec(mu.len(), 1, mu)),
+            a: DVector::from_element(1, 1.0),
+        }
     }
 
     /// Remove every term: the zero field on the same grids.
     pub fn clear(&mut self) {
         self.a = DVector::zeros(0);
-        self.rho = DMatrix::zeros(self.n_left(), 0);
-        self.mu = DMatrix::zeros(self.n_right(), 0);
+        self.left.u = DMatrix::zeros(self.n_left(), 0);
+        self.right.u = DMatrix::zeros(self.n_right(), 0);
     }
 
     // ── Accessors ───────────────────────────────────────────────────────────
 
     /// The left grid.
     pub fn left(&self) -> &GridND<P> {
-        &self.left
+        &self.left.grid
     }
 
     /// The right grid.
     pub fn right(&self) -> &GridND<Q> {
+        &self.right.grid
+    }
+
+    /// The left side: grid, square-root weights and factors.
+    pub fn left_leaf(&self) -> &Leaf<P> {
+        &self.left
+    }
+
+    /// The right side: grid, square-root weights and factors.
+    pub fn right_leaf(&self) -> &Leaf<Q> {
         &self.right
     }
 
     /// Number of stored nodes of the left grid, `N_left`.
     pub fn n_left(&self) -> usize {
-        self.left.total()
+        self.left.n_nodes()
     }
 
     /// Number of stored nodes of the right grid, `N_right`.
     pub fn n_right(&self) -> usize {
-        self.right.total()
+        self.right.n_nodes()
     }
 
     /// Square roots of the mass weights of the left grid, in its node order.
     ///
     /// The weights themselves are [`GridND::mass_weights`] of [`left`](Self::left).
     pub fn sqrt_w_left(&self) -> &[f64] {
-        self.sqrt_w_left.as_slice()
+        self.left.sqrt_w()
     }
 
     /// Square roots of the mass weights of the right grid, in its node order.
     ///
     /// The weights themselves are [`GridND::mass_weights`] of [`right`](Self::right).
     pub fn sqrt_w_right(&self) -> &[f64] {
-        self.sqrt_w_right.as_slice()
+        self.right.sqrt_w()
     }
 
     /// The coefficients `a_k`, length `M`.
@@ -156,24 +143,22 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
 
     /// The left factors, `N_left × M`: column `k` is `ρ_k`.
     pub fn rho(&self) -> &DMatrix<f64> {
-        &self.rho
+        &self.left.u
     }
 
     /// The right factors, `N_right × M`: column `k` is `μ_k`.
     pub fn mu(&self) -> &DMatrix<f64> {
-        &self.mu
+        &self.right.u
     }
 
     /// The left factor `ρ_k`, one value per stored node of the left grid.
     pub fn rho_k(&self, k: usize) -> &[f64] {
-        let n = self.rho.nrows();
-        &self.rho.as_slice()[k * n..(k + 1) * n]
+        self.left.column(k)
     }
 
     /// The right factor `μ_k`, one value per stored node of the right grid.
     pub fn mu_k(&self, k: usize) -> &[f64] {
-        let n = self.mu.nrows();
-        &self.mu.as_slice()[k * n..(k + 1) * n]
+        self.right.column(k)
     }
 
     /// Number of terms `M`.
@@ -188,7 +173,7 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
 
     /// Whether `other` lives on equal grids.
     pub fn same_grids(&self, other: &Self) -> bool {
-        self.left == other.left && self.right == other.right
+        self.left.grid == other.left.grid && self.right.grid == other.right.grid
     }
 
     /// The field at the node pair `(i, j)`, `Σ_k a_k ρ_k(i) μ_k(j)`.
@@ -196,7 +181,7 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     /// `i` is a flat left node index, `j` a flat right node index.
     pub fn value(&self, i: usize, j: usize) -> f64 {
         (0..self.len())
-            .map(|k| self.a[k] * self.rho[(i, k)] * self.mu[(j, k)])
+            .map(|k| self.a[k] * self.left.u[(i, k)] * self.right.u[(j, k)])
             .sum()
     }
 
@@ -248,12 +233,12 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
                 )
             })
             .unzip();
-        let plan_l = self.left.eval_extended_plan(&xl);
-        let plan_r = self.right.eval_extended_plan(&xr);
+        let plan_l = self.left.grid.eval_extended_plan(&xl);
+        let plan_r = self.right.grid.eval_extended_plan(&xr);
         let (mut rho_x, mut mu_x) = (vec![0.0; xs.len()], vec![0.0; xs.len()]);
         for k in 0..self.len() {
-            self.left.eval_with_plan(&plan_l, self.rho_k(k), &mut rho_x);
-            self.right.eval_with_plan(&plan_r, self.mu_k(k), &mut mu_x);
+            self.left.grid.eval_with_plan(&plan_l, self.rho_k(k), &mut rho_x);
+            self.right.grid.eval_with_plan(&plan_r, self.mu_k(k), &mut mu_x);
             let a = self.a[k];
             for ((o, &r), &m) in out.iter_mut().zip(&rho_x).zip(&mu_x) {
                 *o += a * r * m;
@@ -292,9 +277,9 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
         const { assert!(N == P + Q, "the full grid has dimension P + Q") };
         GridND::from_grids(std::array::from_fn(|d| {
             if d < P {
-                self.left.axis(d).clone()
+                self.left.grid.axis(d).clone()
             } else {
-                self.right.axis(d - P).clone()
+                self.right.grid.axis(d - P).clone()
             }
         }))
     }
@@ -304,20 +289,12 @@ impl<const P: usize, const Q: usize> LowRankSum<P, Q> {
     /// `N_left · N_right`, cost `M · N_left · N_right`. All zeros for an
     /// empty sum.
     pub fn assemble(&self) -> Vec<f64> {
-        let mut rho_a = self.rho.clone();
+        let mut rho_a = self.left.u.clone();
         for (mut col, &a) in rho_a.column_iter_mut().zip(self.a.iter()) {
             col *= a;
         }
-        (rho_a * self.mu.transpose()).data.into()
+        (rho_a * self.right.u.transpose()).data.into()
     }
-}
-
-/// `m[i, k] *= w[i]` for every column `k`, the columns in parallel.
-pub(crate) fn scale_rows(m: &mut DMatrix<f64>, w: &DVector<f64>) {
-    let n = m.nrows().max(1);
-    m.as_mut_slice().par_chunks_mut(n).for_each(|col| {
-        col.iter_mut().zip(w.iter()).for_each(|(x, w)| *x *= w);
-    });
 }
 
 #[cfg(test)]
