@@ -33,7 +33,7 @@
 //! | Routine | Description |
 //! |---------|-------------|
 //! | [`Grid1D::derivative`], [`GridND::derivative`] | Nodal derivative, element by element (no assembled matrix), averaged at shared nodes; ND along every fibre of one direction, Rayon-parallel. |
-//! | [`grid::nd_col_major_strides`], [`grid::nd_fiber_base`], [`grid::nd_multi_indices`] | Column-major strides of a DOF tensor, the start index of its `s`-th fibre along a direction, and its multi-indices in column-major order. |
+//! | [`grid::nd_col_major_strides`], [`grid::nd_fiber_base`], [`grid::nd_multi_indices`], [`grid::nd_multi_index`] | Column-major strides of a DOF tensor, the start index of its `s`-th fibre along a direction, its multi-indices in column-major order, and the multi-index of one flat index. |
 //!
 //! ## Quick start
 //!

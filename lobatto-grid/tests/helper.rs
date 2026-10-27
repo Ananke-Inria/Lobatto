@@ -1,7 +1,7 @@
 //! Tests for the ND indexing helpers `grid::nd_col_major_strides`,
-//! `grid::nd_fiber_base` and `grid::nd_multi_indices`.
+//! `grid::nd_fiber_base`, `grid::nd_multi_indices` and `grid::nd_multi_index`.
 
-use lobatto_grid::grid::{nd_col_major_strides, nd_fiber_base, nd_multi_indices};
+use lobatto_grid::grid::{nd_col_major_strides, nd_fiber_base, nd_multi_index, nd_multi_indices};
 use lobatto_grid::{Extension, GridND};
 
 fn grid_4d() -> GridND<4> {
@@ -83,4 +83,18 @@ fn multi_indices_are_the_column_major_digits_of_each_flat_index() {
     assert!(nd_multi_indices([2, 1, 2]).eq([[0, 0, 0], [1, 0, 0], [0, 0, 1], [1, 0, 1]]));
     assert_eq!(nd_multi_indices([3, 0, 2]).count(), 0);
     assert!(nd_multi_indices([]).eq([[]]));
+}
+
+#[test]
+fn multi_index_inverts_the_strides() {
+    let g = grid_4d();
+    let (sizes, strides) = (g.ndofs(), g.strides());
+    for (p, i) in nd_multi_indices(sizes).enumerate() {
+        assert_eq!(nd_multi_index(p, &sizes), i, "flat index {p}");
+        let expected: [usize; 4] = std::array::from_fn(|d| (p / strides[d]) % sizes[d]);
+        assert_eq!(nd_multi_index(p, &sizes), expected, "flat index {p}");
+    }
+    assert_eq!(nd_multi_index(0, &[3, 1, 2]), [0, 0, 0]);
+    assert_eq!(nd_multi_index(5, &[3, 1, 2]), [2, 0, 1]);
+    assert_eq!(nd_multi_index(7, &[]), []);
 }

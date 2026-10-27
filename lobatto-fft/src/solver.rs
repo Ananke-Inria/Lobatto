@@ -48,7 +48,7 @@
 //! | `Neumann`   | `k·r + j`, plus the right endpoint at `n·r` |
 
 use crate::hofft::{Engine, EngineND, Extension};
-use lobatto_grid::grid::{nd_col_major_strides, nd_fiber_base};
+use lobatto_grid::grid::{nd_col_major_strides, nd_fiber_base, nd_multi_indices};
 use lobatto::collocation::{CollocationBasis, Gauss};
 use nalgebra::*;
 use rayon::prelude::*;
@@ -707,9 +707,11 @@ pub struct PoissonND<const N: usize> {
     n_freq_total: usize,
     /// Column-major strides for the mode-tuple tensor.
     n_freq_strides: [usize; N],
-    /// Per-direction DOF index offset for mass scaling: 1 for Dirichlet (first DOF
-    /// is local node `j = 1`), 0 otherwise.
-    j_offsets: [usize; N],
+    /// Per direction, for each DOF `dof_d`, its contribution `j_d · r_strides[d]`
+    /// to the index of its weight in `periodic_mass_matrix`: local node
+    /// `j_d = (dof_d + 1) % r_d` for Dirichlet (the first DOF is node `j = 1`),
+    /// `dof_d % r_d` otherwise.
+    mass_index: [Vec<usize>; N],
     /// Bound `Σ_d max |μ^(d)|` on the tensor stiffness eigenvalue magnitude.
     mu_max: f64,
 }
@@ -755,13 +757,10 @@ impl<const N: usize> PoissonND<N> {
         let n_freq_total = n_freqs.iter().product();
         let n_freq_strides = nd_col_major_strides(&n_freqs);
 
-        // DOF index offset for mass scaling: Dirichlet DOFs start at j=1.
-        let j_offsets: [usize; N] = std::array::from_fn(|d| {
-            if bc[d] == BoundaryCondition::Dirichlet {
-                1
-            } else {
-                0
-            }
+        // Mass weight index per DOF and direction: Dirichlet DOFs start at j=1.
+        let mass_index: [Vec<usize>; N] = std::array::from_fn(|d| {
+            let offset = usize::from(bc[d] == BoundaryCondition::Dirichlet);
+            (0..fft.ndofs[d]).map(|dof| ((dof + offset) % fft.rs[d]) * fft.r_strides[d]).collect()
         });
 
         // `Σ_d max |μ^(d)|` bounds the combined eigenvalue magnitude `|Σ_d μ^(d)|`.
@@ -774,7 +773,7 @@ impl<const N: usize> PoissonND<N> {
             n_freqs,
             n_freq_total,
             n_freq_strides,
-            j_offsets,
+            mass_index,
             mu_max,
         }
     }
@@ -884,42 +883,58 @@ impl<const N: usize> PoissonND<N> {
         f: &mut [Complex<f64>],
         g: G,
     ) {
-        // Step 1: mass-scale in place, then forward FFT.
-        // Mass weight for DOF p in direction d: j_d = (dof_d + j_offset_d) % r_d.
+        // Step 1: mass-scale in place, then forward FFT. The weight of DOF
+        // (dof_0, …, dof_{N-1}) is entry Σ_d mass_index[d][dof_d] of the
+        // Kronecker mass diagonal; one fibre along direction 0 at a time, so
+        // the other directions' part is computed once per fibre.
         let rs = &self.fft.rs;
         let r_strides = &self.fft.r_strides;
         let r_total = self.fft.r_total;
+        let n0 = self.fft.ndofs[0];
 
-        f.par_iter_mut().enumerate().for_each(|(p, fp)| {
-            let lj = (0..N).fold(0, |acc, d| {
-                let dof_d = (p / self.fft.strides[d]) % self.fft.ndofs[d];
-                acc + ((dof_d + self.j_offsets[d]) % rs[d]) * r_strides[d]
-            });
-            *fp *= self.periodic_mass_matrix[lj];
+        f.par_chunks_mut(n0).enumerate().for_each(|(q, fibre)| {
+            let outer: usize = (1..N)
+                .map(|d| self.mass_index[d][(q * n0 / self.fft.strides[d]) % self.fft.ndofs[d]])
+                .sum();
+            for (fp, &j0) in fibre.iter_mut().zip(&self.mass_index[0]) {
+                *fp *= self.periodic_mass_matrix[outer + j0];
+            }
         });
 
         self.fft.forward(f);
 
         // Step 2: symbol solve — independent mode tuples in parallel, with a
-        // per-thread scratch: the mode tuple's values `v` (fully overwritten
-        // by `get_values`) and one per-direction product `x`. Hot path: keep
-        // it allocation-free (`ad_mul_to` / `mul_to`, not `ad_mul` / `*`); one
-        // temporary per product made the whole solve three times slower.
+        // per-thread scratch: the mode tuple's compact-buffer addresses `m`
+        // (built once, used by the gather and the scatter; same entries as
+        // `get_values` / `set_values` without their per-value index
+        // arithmetic), its values `v` (fully overwritten by the gather) and
+        // one per-direction product `x`. Hot path: keep it allocation-free
+        // (`ad_mul_to` / `mul_to`, not `ad_mul` / `*`); one temporary per
+        // product made the whole solve three times slower.
         // SAFETY: distinct k_flat values write to disjoint positions in f, and
         // each reads only positions it writes (tested in `tests`).
         let ptr = f.as_mut_ptr() as usize;
         let r_max = rs.iter().copied().max().unwrap_or(0);
         (0..self.n_freq_total).into_par_iter().for_each_init(
-            || (DVector::<Complex<f64>>::zeros(r_total), DVector::<Complex<f64>>::zeros(r_max)),
-            |(v, x), k_flat| {
+            || {
+                (
+                    self.fft.mode_indices_buffer(),
+                    DVector::<Complex<f64>>::zeros(r_total),
+                    DVector::<Complex<f64>>::zeros(r_max),
+                )
+            },
+            |(m, v, x), k_flat| {
                 let ks: [usize; N] =
                     std::array::from_fn(|d| (k_flat / self.n_freq_strides[d]) % self.n_freqs[d]);
+                self.fft.mode_indices(&ks, m);
 
                 {
                     let f_ro = unsafe {
                         std::slice::from_raw_parts(ptr as *const Complex<f64>, self.fft.total)
                     };
-                    self.fft.get_values(&ks, f_ro, v.as_mut_slice());
+                    for ((vj, &o), &c) in v.iter_mut().zip(&m.offsets).zip(&m.coeffs) {
+                        *vj = c * f_ro[o];
+                    }
                 }
 
                 // Apply Q†_d for each direction (sum factorisation).
@@ -937,13 +952,9 @@ impl<const N: usize> PoissonND<N> {
 
                 // Pointwise application of g to the per-direction eigenvalues
                 // μ^{(d)}_{k_d, j_d} of the mode.
-                for j_flat in 0..r_total {
-                    let mut mus = [0.0f64; N];
-                    for d in 0..N {
-                        let j_d = (j_flat / r_strides[d]) % rs[d];
-                        mus[d] = self.solvers[d].eigenvalues[ks[d]][j_d];
-                    }
-                    v[j_flat] *= g(mus);
+                let eigs: [&[f64]; N] = std::array::from_fn(|d| self.solvers[d].eigenvalues[ks[d]].as_slice());
+                for (vj, js) in v.iter_mut().zip(nd_multi_indices(*rs)) {
+                    *vj *= g(std::array::from_fn(|d| eigs[d][js[d]]));
                 }
 
                 // Apply Q_d for each direction.
@@ -963,7 +974,9 @@ impl<const N: usize> PoissonND<N> {
                     let f_rw = unsafe {
                         std::slice::from_raw_parts_mut(ptr as *mut Complex<f64>, self.fft.total)
                     };
-                    self.fft.set_values(&ks, f_rw, v.as_slice());
+                    for &(j_flat, o) in &m.canonical {
+                        f_rw[o] = v[j_flat];
+                    }
                 }
             },
         );
@@ -1503,36 +1516,50 @@ mod tests {
     }
 
     /// The mode tuples of the per-mode step write disjoint entries that
-    /// cover the compact array (`set_values`), and each tuple reads only
-    /// entries it writes itself (`get_values`): the `unsafe` mode loop never
-    /// touches an entry from two threads.
+    /// cover the compact array (the canonical entries of `mode_indices`), and
+    /// each tuple reads only entries it writes itself (the offsets with a
+    /// nonzero coefficient): the `unsafe` mode loop never touches an entry
+    /// from two threads.
     fn assert_mode_tuples_own_their_entries<const N: usize>(s: &PoissonND<N>) {
-        let (total, r_total) = (s.fft.total, s.fft.r_total);
-        let zero = Complex::new(0.0, 0.0);
-        // Entry p holds p + 1: a read returns a unit-modulus (or zero)
-        // multiple of it, so its modulus identifies the entry read.
-        let labels: Vec<Complex<f64>> = (0..total).map(|p| Complex::new(p as f64 + 1.0, 0.0)).collect();
-        let mut owner = vec![usize::MAX; total];
-        for k_flat in 0..s.n_freq_total {
-            let ks: [usize; N] = std::array::from_fn(|d| (k_flat / s.n_freq_strides[d]) % s.n_freqs[d]);
-            let mut g = vec![zero; total];
-            s.fft.set_values(&ks, &mut g, &vec![Complex::new(1.0, 0.0); r_total]);
-            for (p, x) in g.iter().enumerate() {
-                if *x != zero {
-                    assert_eq!(owner[p], usize::MAX, "entry {p} written by tuples {} and {k_flat}", owner[p]);
-                    owner[p] = k_flat;
-                }
+        let mut m = s.fft.mode_indices_buffer();
+        let mut owner = vec![usize::MAX; s.fft.total];
+        for (k_flat, ks) in nd_multi_indices(s.n_freqs).enumerate() {
+            s.fft.mode_indices(&ks, &mut m);
+            for &(_, p) in &m.canonical {
+                assert_eq!(owner[p], usize::MAX, "entry {p} written by tuples {} and {k_flat}", owner[p]);
+                owner[p] = k_flat;
             }
         }
         assert!(owner.iter().all(|&o| o != usize::MAX), "some entries are written by no tuple");
-        for k_flat in 0..s.n_freq_total {
-            let ks: [usize; N] = std::array::from_fn(|d| (k_flat / s.n_freq_strides[d]) % s.n_freqs[d]);
-            let mut read = vec![zero; r_total];
-            s.fft.get_values(&ks, &labels, &mut read);
-            for x in read.iter().filter(|x| x.norm() > 0.5) {
-                let p = x.norm().round() as usize - 1;
-                assert_eq!(owner[p], k_flat, "tuple {k_flat} reads entry {p} owned by tuple {}", owner[p]);
+        for (k_flat, ks) in nd_multi_indices(s.n_freqs).enumerate() {
+            s.fft.mode_indices(&ks, &mut m);
+            for (&p, c) in m.offsets.iter().zip(&m.coeffs).filter(|(_, c)| c.norm() > 0.0) {
+                assert_eq!(owner[p], k_flat, "tuple {k_flat} reads entry {p} (coefficient {c}) owned by tuple {}", owner[p]);
             }
+        }
+    }
+
+    /// `mode_indices` gives, bit for bit, the values `get_values` gathers and
+    /// the entries `set_values` writes, on every independent mode tuple.
+    fn assert_mode_indices_match_get_set_values<const N: usize>(s: &PoissonND<N>) {
+        let (total, r_total) = (s.fft.total, s.fft.r_total);
+        let g: Vec<Complex<f64>> = (0..total).map(|p| Complex::new((1.7 * p as f64).sin(), -(0.3 * p as f64).cos())).collect();
+        let v_in: Vec<Complex<f64>> = (0..r_total).map(|j| Complex::new(j as f64 + 0.5, -(j as f64))).collect();
+        let mut m = s.fft.mode_indices_buffer();
+        let mut v = vec![Complex::new(0.0, 0.0); r_total];
+        for ks in nd_multi_indices(s.n_freqs) {
+            s.fft.mode_indices(&ks, &mut m);
+            s.fft.get_values(&ks, &g, &mut v);
+            for (j, ((&o, &c), x)) in m.offsets.iter().zip(&m.coeffs).zip(&v).enumerate() {
+                let y = c * g[o];
+                assert!(y.re.to_bits() == x.re.to_bits() && y.im.to_bits() == x.im.to_bits(), "{ks:?}, j = {j}: {y} vs {x}");
+            }
+            let (mut a, mut b) = (g.clone(), g.clone());
+            s.fft.set_values(&ks, &mut a, &v_in);
+            for &(j, o) in &m.canonical {
+                b[o] = v_in[j];
+            }
+            assert!(a == b, "{ks:?}: scatter differs from set_values");
         }
     }
 
@@ -1548,5 +1575,18 @@ mod tests {
         assert_mode_tuples_own_their_entries(&s1);
         assert_mode_tuples_own_their_entries(&s3);
         assert_mode_tuples_own_their_entries(&s5);
+    }
+
+    #[test]
+    fn test_mode_indices_match_get_set_values() {
+        use BoundaryCondition::*;
+        let s1 = PoissonND::<1>::new([1.0], [0.0], [3], [4], [Dirichlet]);
+        let s3 = solver_3d();
+        let s4 = PoissonND::<4>::new([1.0; 4], [0.0; 4], [3, 2, 4, 1], [4, 3, 5, 2], [Neumann, Dirichlet, Periodic, Neumann]);
+        let s5 = PoissonND::<5>::new([1.0; 5], [0.0; 5], [2, 1, 3, 1, 2], [2, 3, 2, 2, 3], [Periodic, Dirichlet, Neumann, Neumann, Periodic]);
+        assert_mode_indices_match_get_set_values(&s1);
+        assert_mode_indices_match_get_set_values(&s3);
+        assert_mode_indices_match_get_set_values(&s4);
+        assert_mode_indices_match_get_set_values(&s5);
     }
 }

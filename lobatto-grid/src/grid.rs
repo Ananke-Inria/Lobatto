@@ -406,12 +406,8 @@ impl<const N: usize> GridND<N> {
     /// approximates the integral of `u` over the box.
     pub fn mass_weights(&self) -> Vec<f64> {
         let w1d: [Vec<f64>; N] = std::array::from_fn(|d| self.grids[d].mass_weights());
-        (0..self.total)
-            .map(|p| {
-                (0..N)
-                    .map(|d| w1d[d][(p / self.strides[d]) % self.ndofs[d]])
-                    .product()
-            })
+        nd_multi_indices(self.ndofs)
+            .map(|i| i.iter().zip(&w1d).map(|(&i_d, w)| w[i_d]).product())
             .collect()
     }
 
@@ -422,8 +418,8 @@ impl<const N: usize> GridND<N> {
     /// Direction 0 varies fastest; within each direction nodes are x-increasing.
     pub fn get_x(&self) -> Vec<[f64; N]> {
         let x1d: [Vec<f64>; N] = std::array::from_fn(|d| self.grids[d].get_x());
-        (0..self.total)
-            .map(|p| std::array::from_fn(|d| x1d[d][(p / self.strides[d]) % self.ndofs[d]]))
+        nd_multi_indices(self.ndofs)
+            .map(|i| std::array::from_fn(|d| x1d[d][i[d]]))
             .collect()
     }
 
@@ -535,4 +531,26 @@ pub fn nd_multi_indices<const N: usize>(sizes: [usize; N]) -> impl Iterator<Item
         });
         (!wrapped).then_some(next)
     })
+}
+
+/// The multi-index `(i_0, …, i_{N-1})` of flat index `p` in a column-major
+/// tensor of shape `sizes` (direction 0 fastest): `i_d = (p / st[d]) % sizes[d]`
+/// for the strides `st` of [`nd_col_major_strides`].
+///
+/// For every index in order, [`nd_multi_indices`] avoids the divisions.
+///
+/// ```
+/// use lobatto_grid::grid::nd_multi_index;
+///
+/// // Shape 2 × 3: flat index 3 = 1 + 1·2.
+/// assert_eq!(nd_multi_index(3, &[2, 3]), [1, 1]);
+/// ```
+pub fn nd_multi_index<const N: usize>(p: usize, sizes: &[usize; N]) -> [usize; N] {
+    let mut index = [0; N];
+    let mut rest = p;
+    for (i, &size) in index.iter_mut().zip(sizes) {
+        *i = rest % size;
+        rest /= size;
+    }
+    index
 }

@@ -11,7 +11,7 @@ Provides:
 - `EvalPlan`: precomputed plans for repeated evaluation at fixed points with varying data — the apply is allocation-free gather + contraction,
 - generic scalar support (`f64` and `Complex<f64>` share code paths and plans),
 - `derivative`: element-wise nodal derivative in 1D and along any direction in ND (no assembled matrix, average at shared nodes),
-- `nd_col_major_strides` / `nd_fiber_base` / `nd_multi_indices`: column-major DOF-tensor indexing helpers (strides, fibre start offsets, multi-indices in order).
+- `nd_col_major_strides` / `nd_fiber_base` / `nd_multi_indices` / `nd_multi_index`: column-major DOF-tensor indexing helpers (strides, fibre start offsets, multi-indices in order, multi-index of a flat index).
 
 Used by [`lobatto-fft`](https://crates.io/crates/lobatto-fft) as the grid layer under its HoFFT transforms and screened Poisson solvers.
 

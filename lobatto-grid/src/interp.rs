@@ -7,7 +7,7 @@
 //! flow map `lambda` in [`GridND::convect`]) is used many times with varying
 //! DOF data `u`.
 
-use crate::grid::{nd_col_major_strides, Extension, Grid1D, GridND};
+use crate::grid::{nd_col_major_strides, nd_multi_index, nd_multi_indices, Extension, Grid1D, GridND};
 use lobatto::utilities::{lagrangian_interpolation, lagrangian_interpolation_into};
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -157,7 +157,6 @@ struct EvalGeometry<const N: usize> {
     xls: [f64; N],
     hs: [f64; N],
     counts: [usize; N],
-    count_strides: [usize; N],
     local_total: usize,
     n_strides: [usize; N],
     phi_off: [usize; N],
@@ -172,7 +171,6 @@ impl<const N: usize> EvalGeometry<N> {
         let xls: [f64; N] = std::array::from_fn(|d| grid.grids[d].xl);
         let hs: [f64; N] = std::array::from_fn(|d| ls[d] / ns[d] as f64);
         let counts: [usize; N] = std::array::from_fn(|d| rs[d] + 1);
-        let count_strides = nd_col_major_strides(&counts);
         let local_total: usize = counts.iter().product();
 
         // DOF strides in the "periodic-equivalent" layout (n_d * r_d per direction).
@@ -192,7 +190,6 @@ impl<const N: usize> EvalGeometry<N> {
             xls,
             hs,
             counts,
-            count_strides,
             local_total,
             n_strides,
             phi_off,
@@ -215,11 +212,6 @@ impl<const N: usize> EvalGeometry<N> {
         })
     }
 
-    /// Per-direction element indices of flat element index `k_flat`.
-    fn elem_multi_index(&self, k_flat: usize) -> [usize; N] {
-        std::array::from_fn(|d| (k_flat / self.n_strides[d]) % self.ns[d])
-    }
-
     /// Local coordinate of `x` in element `ks`, normalised to `[0, 1]` per direction.
     fn local_coords(&self, x: &[f64; N], ks: &[usize; N]) -> [f64; N] {
         std::array::from_fn(|d| (x[d] - self.xls[d] - (ks[d] as f64) * self.hs[d]) / self.hs[d])
@@ -237,12 +229,11 @@ impl<const N: usize> GridND<N> {
         ks: &[usize; N],
         u: &[T],
     ) -> Vec<T> {
-        (0..geo.local_total)
-            .map(|p| {
+        nd_multi_indices(geo.counts)
+            .map(|js| {
                 let mut global = 0usize;
                 let mut is_zero = false;
-                for (d, &k_d) in ks.iter().enumerate() {
-                    let j = (p / geo.count_strides[d]) % geo.counts[d];
+                for (d, (&k_d, &j)) in ks.iter().zip(&js).enumerate() {
                     let dof_d = self.grids[d].eval_dof_index(k_d, j);
                     if dof_d == self.grids[d].n_dof {
                         is_zero = true;
@@ -363,7 +354,7 @@ impl<const N: usize> GridND<N> {
         // writes to fu[i] never overlap.
         let fu_ptr = fu.as_mut_ptr() as usize;
         groups.into_par_iter().for_each(|(k_flat, indices)| {
-            let ks = geo.elem_multi_index(k_flat);
+            let ks = nd_multi_index(k_flat, &geo.ns);
             let u_local = self.gather_local(&geo, &ks, u);
 
             // Per-thread scratch: basis values (phi) and contraction buffer (v),
@@ -455,15 +446,14 @@ impl<const N: usize> GridND<N> {
         F: Fn([f64; N]) -> [f64; N] + Sync,
     {
         debug_assert_eq!(out.len(), u.len());
-        // Node coordinates are computed from the flat index (as in `get_x`), so
+        // Node coordinates are computed from the flat index, so
         // the grid, the flow map and the domain fold fuse into a single pass
         // without materialising the grid or the shifted positions.
         let x1d: [Vec<f64>; N] = std::array::from_fn(|d| self.grids[d].get_x());
         self.eval_extended_iter(
             (0..self.total).into_par_iter().map(|p| {
-                lambda(std::array::from_fn(|d| {
-                    x1d[d][(p / self.strides[d]) % self.ndofs[d]]
-                }))
+                let i = nd_multi_index(p, &self.ndofs);
+                lambda(std::array::from_fn(|d| x1d[d][i[d]]))
             }),
             u,
             out,
@@ -569,9 +559,8 @@ impl<const N: usize> GridND<N> {
         let pts: Vec<[f64; N]> = (0..self.total)
             .into_par_iter()
             .map(|p| {
-                lambda(std::array::from_fn(|d| {
-                    x1d[d][(p / self.strides[d]) % self.ndofs[d]]
-                }))
+                let i = nd_multi_index(p, &self.ndofs);
+                lambda(std::array::from_fn(|d| x1d[d][i[d]]))
             })
             .collect();
         self.eval_extended_plan(&pts)
@@ -597,14 +586,13 @@ impl<const N: usize> GridND<N> {
         let mut point_ids = Vec::with_capacity(m);
         let mut xi = Vec::with_capacity(m);
         for (k_flat, ids) in by_elem {
-            let ks = geo.elem_multi_index(k_flat);
+            let ks = nd_multi_index(k_flat, &geo.ns);
 
             // Precompute the DOF gather table for this element.
-            let gather: Vec<u32> = (0..geo.local_total)
-                .map(|p| {
+            let gather: Vec<u32> = nd_multi_indices(geo.counts)
+                .map(|js| {
                     let mut global = 0usize;
-                    for (d, &k_d) in ks.iter().enumerate() {
-                        let j = (p / geo.count_strides[d]) % geo.counts[d];
+                    for (d, (&k_d, &j)) in ks.iter().zip(&js).enumerate() {
                         let dof_d = self.grids[d].eval_dof_index(k_d, j);
                         if dof_d == self.grids[d].n_dof {
                             return ZERO_DOF;

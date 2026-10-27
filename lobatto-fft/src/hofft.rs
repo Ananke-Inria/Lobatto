@@ -62,7 +62,7 @@
 //! independent coefficients by discarding modes determined by the spectral symmetry.
 
 use lobatto::collocation::{CollocationBasis, Gauss};
-use lobatto_grid::grid::{nd_col_major_strides, nd_fiber_base};
+use lobatto_grid::grid::{nd_col_major_strides, nd_fiber_base, nd_multi_indices};
 use lobatto_grid::{Grid1D, GridND};
 use rayon::prelude::*;
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
@@ -734,6 +734,26 @@ pub struct EngineND<const N: usize> {
     full_sizes: [usize; N],
     /// Column-major strides for the full buffer (used in `k_packing`/`k_unpacking`).
     full_strides: [usize; N],
+    /// Per direction, the `get_values` entries of each independent mode `k`
+    /// (`0..n_d` for `Periodic`, `0..=n_d` otherwise), contiguous in `j`:
+    /// `mode_entries[d][k * r_d + j] = (c · strides[d], coeff)`.
+    mode_entries: [Vec<(usize, Complex<f64>)>; N],
+    /// Per direction and independent mode `k`, the independently stored rows
+    /// `(j, c · strides[d])`.
+    mode_canonical: [Vec<Vec<(usize, usize)>>; N],
+}
+
+/// Compact-buffer addresses of the `∏_d r_d` local-node values of one ND
+/// mode tuple, filled by [`EngineND::mode_indices`].
+pub(crate) struct ModeIndices {
+    /// Compact index of local node `j_flat`.
+    pub(crate) offsets: Vec<usize>,
+    /// Coefficient of local node `j_flat`: value `j_flat` is
+    /// `coeffs[j_flat] * g[offsets[j_flat]]`, as in [`EngineND::get_values`].
+    pub(crate) coeffs: Vec<Complex<f64>>,
+    /// The independently stored entries `(j_flat, compact index)`, the ones
+    /// [`EngineND::set_values`] writes.
+    pub(crate) canonical: Vec<(usize, usize)>,
 }
 
 impl<const N: usize> EngineND<N> {
@@ -762,6 +782,29 @@ impl<const N: usize> EngineND<N> {
         let r_total = rs_arr.iter().product();
         let full_sizes: [usize; N] = std::array::from_fn(|d| planners[d].r * planners[d].n_fft);
         let full_strides = nd_col_major_strides(&full_sizes);
+        let independent_modes = |p: &Engine| if p.extension == Extension::Periodic { p.n } else { p.n + 1 };
+        let mode_entries = std::array::from_fn(|d| {
+            let p = &planners[d];
+            (0..independent_modes(p))
+                .flat_map(|k| {
+                    (0..p.r).map(move |j| {
+                        let (c, coeff) = p.unpack_table[j * p.n_fft + k];
+                        (c * strides[d], coeff)
+                    })
+                })
+                .collect()
+        });
+        let mode_canonical = std::array::from_fn(|d| {
+            let p = &planners[d];
+            (0..independent_modes(p))
+                .map(|k| {
+                    (0..p.r)
+                        .filter(|&j| p.canonical_table[j * p.n_fft + k])
+                        .map(|j| (j, p.unpack_table[j * p.n_fft + k].0 * strides[d]))
+                        .collect()
+                })
+                .collect()
+        });
         Self {
             planners,
             grid,
@@ -773,6 +816,54 @@ impl<const N: usize> EngineND<N> {
             r_total,
             full_sizes,
             full_strides,
+            mode_entries,
+            mode_canonical,
+        }
+    }
+
+    /// An empty [`ModeIndices`] sized for this engine.
+    pub(crate) fn mode_indices_buffer(&self) -> ModeIndices {
+        ModeIndices {
+            offsets: vec![0; self.r_total],
+            coeffs: vec![Complex::new(0.0, 0.0); self.r_total],
+            canonical: Vec::with_capacity(2 * self.r_total),
+        }
+    }
+
+    /// Fill `m` with the compact-buffer addresses of the independent ND mode
+    /// tuple `ks`: the same entries and coefficients as
+    /// [`get_values`](Self::get_values) / [`set_values`](Self::set_values),
+    /// bit for bit.
+    pub(crate) fn mode_indices(&self, ks: &[usize; N], m: &mut ModeIndices) {
+        // Directions combined one after the other: after direction d, the
+        // first ∏_{e ≤ d} r_e entries hold the partial sums and products.
+        m.offsets[0] = 0;
+        m.coeffs[0] = Complex::new(1.0, 0.0);
+        let mut len = 1;
+        for ((&r, entries), &k) in self.rs.iter().zip(&self.mode_entries).zip(ks) {
+            let entries = &entries[k * r..(k + 1) * r];
+            // Block b is block 0 shifted by entry b; block 0 is rewritten in
+            // place last.
+            for (b, &(o, c)) in entries.iter().enumerate().rev() {
+                for a in 0..len {
+                    m.offsets[b * len + a] = m.offsets[a] + o;
+                    m.coeffs[b * len + a] = m.coeffs[a] * c;
+                }
+            }
+            len *= r;
+        }
+
+        m.canonical.clear();
+        m.canonical.push((0, 0));
+        for ((canonical, &k), &r_stride) in self.mode_canonical.iter().zip(ks).zip(&self.r_strides) {
+            let prev = m.canonical.len();
+            for i in 0..prev {
+                let (j_flat, o) = m.canonical[i];
+                for &(j, oj) in &canonical[k] {
+                    m.canonical.push((j_flat + j * r_stride, o + oj));
+                }
+            }
+            m.canonical.drain(..prev);
         }
     }
 
@@ -836,11 +927,10 @@ impl<const N: usize> EngineND<N> {
         debug_assert_eq!(g.len(), self.total);
         debug_assert_eq!(g_k.len(), self.r_total);
 
-        for (j_flat, v) in g_k.iter_mut().enumerate() {
+        for (v, js) in g_k.iter_mut().zip(nd_multi_indices(self.rs)) {
             let mut compact_idx = 0usize;
             let mut coeff = Complex::new(1.0_f64, 0.0);
-            for (d, &k_d) in ks.iter().enumerate() {
-                let j_d = (j_flat / self.r_strides[d]) % self.rs[d];
+            for (d, (&k_d, &j_d)) in ks.iter().zip(&js).enumerate() {
                 let (c_d, coeff_d) =
                     self.planners[d].unpack_table[j_d * self.planners[d].n_fft + k_d];
                 compact_idx += c_d * self.strides[d];
@@ -865,11 +955,10 @@ impl<const N: usize> EngineND<N> {
         debug_assert_eq!(g.len(), self.total);
         debug_assert_eq!(g_k.len(), self.r_total);
 
-        for (j_flat, &v) in g_k.iter().enumerate() {
+        for (&v, js) in g_k.iter().zip(nd_multi_indices(self.rs)) {
             let mut canonical = true;
             let mut compact_idx = 0usize;
-            for (d, &k_d) in ks.iter().enumerate() {
-                let j_d = (j_flat / self.r_strides[d]) % self.rs[d];
+            for (d, (&k_d, &j_d)) in ks.iter().zip(&js).enumerate() {
                 let full_1d = j_d * self.planners[d].n_fft + k_d;
                 let (c_d, _) = self.planners[d].unpack_table[full_1d];
                 if !self.planners[d].canonical_table[full_1d] {
