@@ -1,7 +1,7 @@
-//! Tests for the ND indexing helpers `grid::nd_col_major_strides` and
-//! `grid::nd_fiber_base`.
+//! Tests for the ND indexing helpers `grid::nd_col_major_strides`,
+//! `grid::nd_fiber_base` and `grid::nd_multi_indices`.
 
-use lobatto_grid::grid::{nd_col_major_strides, nd_fiber_base};
+use lobatto_grid::grid::{nd_col_major_strides, nd_fiber_base, nd_multi_indices};
 use lobatto_grid::{Extension, GridND};
 
 fn grid_4d() -> GridND<4> {
@@ -65,4 +65,22 @@ fn fiber_base_matches_digit_loop_and_covers_tensor_disjointly() {
         }
         assert!(seen.iter().all(|&b| b), "d={d}: tensor not covered");
     }
+}
+
+#[test]
+fn multi_indices_are_the_column_major_digits_of_each_flat_index() {
+    let g = grid_4d();
+    let (sizes, strides) = (g.ndofs(), g.strides());
+    let all: Vec<[usize; 4]> = nd_multi_indices(sizes).collect();
+    assert_eq!(all.len(), g.total());
+    for (p, i) in all.iter().enumerate() {
+        let expected: [usize; 4] = std::array::from_fn(|d| (p / strides[d]) % sizes[d]);
+        assert_eq!(*i, expected, "flat index {p}");
+        assert_eq!((0..4).map(|d| i[d] * strides[d]).sum::<usize>(), p);
+    }
+    // One direction, a size-1 direction, an empty shape, no direction.
+    assert!(nd_multi_indices([5]).eq((0..5).map(|j| [j])));
+    assert!(nd_multi_indices([2, 1, 2]).eq([[0, 0, 0], [1, 0, 0], [0, 0, 1], [1, 0, 1]]));
+    assert_eq!(nd_multi_indices([3, 0, 2]).count(), 0);
+    assert!(nd_multi_indices([]).eq([[]]));
 }

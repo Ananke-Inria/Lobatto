@@ -504,3 +504,35 @@ pub fn nd_fiber_base(s: usize, d: usize, sizes: &[usize], strides: &[usize]) -> 
     let sd = strides[d];
     s % sd + sd * sizes[d] * (s / sd)
 }
+
+/// The multi-indices `(i_0, …, i_{N-1})` with `i_d < sizes[d]`, in
+/// column-major order (direction 0 fastest): the `p`-th one is the
+/// multi-index of flat index `p` for the strides of
+/// [`nd_col_major_strides`].
+///
+/// Counted like an odometer, without division: each step increments `i_0`
+/// and carries into the next direction when an index reaches its size.
+/// Empty if a size is zero.
+///
+/// ```
+/// use lobatto_grid::grid::nd_multi_indices;
+///
+/// let all: Vec<[usize; 2]> = nd_multi_indices([2, 3]).collect();
+/// assert_eq!(all, [[0, 0], [1, 0], [0, 1], [1, 1], [0, 2], [1, 2]]);
+/// ```
+pub fn nd_multi_indices<const N: usize>(sizes: [usize; N]) -> impl Iterator<Item = [usize; N]> {
+    let first = sizes.iter().all(|&s| s > 0).then_some([0; N]);
+    std::iter::successors(first, move |&current| {
+        let mut next = current;
+        // `all` stops at the first index that does not carry.
+        let wrapped = next.iter_mut().zip(&sizes).all(|(i, &size)| {
+            *i += 1;
+            if *i < size {
+                return false;
+            }
+            *i = 0;
+            true
+        });
+        (!wrapped).then_some(next)
+    })
+}
