@@ -84,6 +84,11 @@ use std::sync::Arc;
 /// | `Even`     | Neumann     | `2n`             | `n·r + 1`        |
 pub use lobatto_grid::Extension;
 
+/// Node layout of one direction (re-exported from [`lobatto_grid`]):
+/// Gauss-Lobatto elements, or equidistant points read as a trigonometric
+/// polynomial ([`Engine::trigonometric`], [`EngineND::with_layouts`]).
+pub use lobatto_grid::NodeLayout;
+
 // ── 1D ──────────────────────────────────────────────────────────────────────
 
 /// Low-level 1D HoFFT engine (periodic, no extension).
@@ -269,6 +274,25 @@ impl Engine {
             s.packing_table = (0..n_dof).map(|i| s.k_packing(i)).collect();
         }
         s
+    }
+
+    /// Create a periodic engine on `n` equidistant points of `[x_l, x_l + L)`,
+    /// read as a trigonometric polynomial ([`Grid1D::trigonometric`]).
+    ///
+    /// The transform is the plain DFT of length `n`: the engine of `n`
+    /// elements of order `1`, whose nodes are the equidistant points, on the
+    /// trigonometric grid. [`grid`](Self::grid) reports that grid, so
+    /// interpolation is trigonometric.
+    ///
+    /// # Panics
+    ///
+    /// If `n < 2`.
+    pub fn trigonometric(n: usize, l: f64, xl: f64) -> Self {
+        let grid = Grid1D::trigonometric(n, l, xl);
+        Self {
+            grid,
+            ..Self::new(n, 1, l, xl, Extension::Periodic)
+        }
     }
 
     /// Extract the `r` values for Fourier mode `k` from the packed buffer `g` into `g_k`.
@@ -771,9 +795,37 @@ impl<const N: usize> EngineND<N> {
         xls: [f64; N],
         exts: [Extension; N],
     ) -> Self {
-        let planners: [Engine; N] =
-            std::array::from_fn(|d| Engine::new(ns[d], rs[d], ls[d], xls[d], exts[d]));
-        let grid = GridND::new(ns, rs, ls, xls, exts);
+        Self::with_layouts(ns, rs, ls, xls, exts, [NodeLayout::GaussLobatto; N])
+    }
+
+    /// Create an ND HoFFT engine with an explicit [`NodeLayout`] per direction.
+    ///
+    /// Arguments as in [`new`](Self::new). A `GaussLobatto` direction is the
+    /// engine of [`Engine::new`]; an `Equidistant` direction is
+    /// [`Engine::trigonometric`] on `ns[d]·rs[d]` points (the DOF count of the
+    /// periodic Gauss-Lobatto direction it replaces), a plain DFT along that
+    /// direction with order `1` in the per-mode layout.
+    ///
+    /// # Panics
+    ///
+    /// If an `Equidistant` direction is not `Periodic` or has fewer than 2
+    /// points.
+    pub fn with_layouts(
+        ns: [usize; N],
+        rs: [usize; N],
+        ls: [f64; N],
+        xls: [f64; N],
+        exts: [Extension; N],
+        layouts: [NodeLayout; N],
+    ) -> Self {
+        let planners: [Engine; N] = std::array::from_fn(|d| match layouts[d] {
+            NodeLayout::GaussLobatto => Engine::new(ns[d], rs[d], ls[d], xls[d], exts[d]),
+            NodeLayout::Equidistant => {
+                assert_eq!(exts[d], Extension::Periodic, "direction {d}: an Equidistant layout must be Periodic");
+                Engine::trigonometric(ns[d] * rs[d], ls[d], xls[d])
+            }
+        });
+        let grid = GridND::from_grids(std::array::from_fn(|d| planners[d].grid.clone()));
         let ndofs: [usize; N] = std::array::from_fn(|d| planners[d].n_dof);
         let total = ndofs.iter().product();
         let strides = nd_col_major_strides(&ndofs);

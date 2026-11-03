@@ -46,8 +46,28 @@
 //! | `Periodic`  | `k·r + j`                             |
 //! | `Dirichlet` | `k·r + j - 1` (left boundary excluded) |
 //! | `Neumann`   | `k·r + j`, plus the right endpoint at `n·r` |
+//!
+//! ## Trigonometric directions
+//!
+//! A `Periodic` direction may instead be discretised by `N = n·r`
+//! equidistant points read as a trigonometric polynomial
+//! ([`NodeLayout::Equidistant`], the grid of
+//! [`lobatto_grid::Grid1D::trigonometric`]), chosen per direction in
+//! [`Poisson::with_layout`] / [`PoissonND::with_layouts`]; [`Poisson::new`] /
+//! [`PoissonND::new`] keep the Gauss-Lobatto elements everywhere. Such a
+//! direction has the uniform mass `L/N`, a plain DFT of length `N` as its
+//! transform, and the true Fourier symbol of `−∂²` as its eigenvalues,
+//! $$\mu_m = \Big(\frac{2\pi m}{L}\Big)^2, \qquad m = -\lfloor (N-1)/2 \rfloor, \dots, \lfloor N/2 \rfloor,$$
+//! the Nyquist mode of an even `N` included (`(πN/L)²`). Every solve and
+//! operator function works unchanged through these eigenvalues, mixed with
+//! Gauss-Lobatto directions; in particular
+//! [`PoissonND::apply_mu_in_place_dir`] along such a direction applies the
+//! Fourier multiplier `g(μ_m)` to every fibre. [`Poisson::shift_in_place`] /
+//! [`PoissonND::shift_in_place_dir`] translate the trigonometric interpolant
+//! exactly, by a constant per fibre.
 
 use crate::hofft::{Engine, EngineND, Extension};
+pub use crate::hofft::NodeLayout;
 use lobatto_grid::grid::{nd_fiber_base, nd_multi_index, nd_multi_indices};
 use lobatto::collocation::{CollocationBasis, Gauss};
 use nalgebra::*;
@@ -382,6 +402,47 @@ impl Poisson {
     ///
     /// The operator coefficients `α`, `β` are passed to the solve methods.
     pub fn new(l: f64, xl: f64, n: usize, r: usize, bc: BoundaryCondition) -> Self {
+        Self::with_layout(l, xl, n, r, bc, NodeLayout::GaussLobatto)
+    }
+
+    /// Construct the 1D solver with an explicit [`NodeLayout`].
+    ///
+    /// Arguments as in [`new`](Self::new). With `GaussLobatto` this is
+    /// [`new`](Self::new). With `Equidistant` the grid is the `n·r`
+    /// equidistant points of [`lobatto_grid::Grid1D::trigonometric`] on
+    /// `[x_l, x_l + L)`, with the trigonometric interpolant, and the
+    /// eigenvalues are the Fourier symbol of the module documentation.
+    ///
+    /// ```
+    /// # use lobatto_fft::solver::*;
+    /// # use rustfft::num_complex::Complex;
+    /// use std::f64::consts::PI;
+    /// // 16 equidistant points on [0, 1): sin(2πx) is an eigenvector.
+    /// let s = Poisson::with_layout(1.0, 0.0, 16, 1, BoundaryCondition::Periodic,
+    ///     NodeLayout::Equidistant);
+    /// let mut u: Vec<Complex<f64>> = s.get_x().iter()
+    ///     .map(|&x| Complex::from((2.0 * PI * x).sin())).collect();
+    /// s.solve_in_place(&mut u, 1.0, 1.0); // u ← u / (1 + 4π²)
+    /// let exact = (2.0 * PI * s.get_x()[3]).sin() / (1.0 + 4.0 * PI * PI);
+    /// assert!((u[3].re - exact).abs() < 1e-14);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// If the layout is `Equidistant` and `bc` is not `Periodic`, or
+    /// `n·r < 2`.
+    pub fn with_layout(
+        l: f64,
+        xl: f64,
+        n: usize,
+        r: usize,
+        bc: BoundaryCondition,
+        layout: NodeLayout,
+    ) -> Self {
+        if layout == NodeLayout::Equidistant {
+            assert_eq!(bc, BoundaryCondition::Periodic, "an Equidistant layout must be Periodic");
+            return Self::trigonometric(l, xl, n * r);
+        }
         let lobatto_basis = CollocationBasis::new(vec![(r + 1, Gauss::Lobatto)]);
 
         let h = l / (n as f64);
@@ -456,6 +517,29 @@ impl Poisson {
             periodic_mass_matrix,
             mu_max,
             bc,
+        }
+    }
+
+    /// Equidistant trigonometric direction of `points` points: the DFT
+    /// engine of order `1`, mass `w = L/N`, per mode `k ∈ 0..N` the `1 × 1`
+    /// symbol with eigenvalue `(2π m/L)²`, `m = min(k, N − k)`, and
+    /// `M`-orthonormal eigenvector `1/√w`.
+    fn trigonometric(l: f64, xl: f64, points: usize) -> Self {
+        let planner = Engine::trigonometric(points, l, xl);
+        let w = l / points as f64;
+        let eigenvalues: Vec<DVector<f64>> = (0..points)
+            .map(|k| DVector::from_element(1, (2.0 * PI * k.min(points - k) as f64 / l).powi(2)))
+            .collect();
+        let eigenvectors = vec![DMatrix::from_element(1, 1, Complex::new(1.0 / w.sqrt(), 0.0)); points];
+        let mu_max = max_abs_eigenvalue(&eigenvalues);
+        Self {
+            r: 1,
+            planner,
+            eigenvalues,
+            eigenvectors,
+            periodic_mass_matrix: DVector::from_element(1, w),
+            mu_max,
+            bc: BoundaryCondition::Periodic,
         }
     }
 
@@ -592,6 +676,46 @@ impl Poisson {
         }
 
         // Step 3: recover symmetric modes, inverse FFT.
+        self.planner.inverse_with(f, &mut w.buf, &mut w.scratch);
+    }
+
+    /// Translate the nodal values `f` by `c` along an equidistant direction:
+    /// `u(x) ← u(x − c)` at the nodes, exact for the trigonometric
+    /// interpolant.
+    ///
+    /// Each Fourier coefficient is multiplied by
+    /// $$e^{-i k c}, \qquad k = \frac{2\pi m}{L},$$
+    /// and the Nyquist mode of an even `N` by the real part `cos(πNc/L)`
+    /// (the interpolant carries it as a cosine), so real data stay real and
+    /// the result equals [`lobatto_grid::GridND::convect`] with the flow map
+    /// `x ↦ x − c`. `c` is in units of `x` and may be any real number (the
+    /// shift is `L`-periodic). Costs two DFTs of length `N`.
+    ///
+    /// # Panics
+    ///
+    /// If the layout is not [`NodeLayout::Equidistant`] or `f` does not have
+    /// one value per DOF.
+    pub fn shift_in_place(&self, f: &mut [Complex<f64>], c: f64) {
+        assert_eq!(self.planner.grid().layout(), NodeLayout::Equidistant, "shift needs an Equidistant layout");
+        let n_dof = self.planner.grid().n_dof();
+        assert_eq!(f.len(), n_dof, "expected {n_dof} DOFs, got {}", f.len());
+        self.shift_with(f, c, &mut self.work());
+    }
+
+    /// [`shift_in_place`](Self::shift_in_place) with the work buffers
+    /// supplied by the caller (one per thread in
+    /// [`PoissonND::shift_in_place_dir`]).
+    fn shift_with(&self, f: &mut [Complex<f64>], c: f64, w: &mut Work1D) {
+        self.planner.forward_with(f, &mut w.buf, &mut w.scratch);
+        let n = f.len();
+        // The phase is L-periodic in c: reduce it so that the angle stays
+        // below 2π·n/2 whatever the size of c.
+        let t = (c / self.planner.grid().l()).rem_euclid(1.0);
+        for (k, v) in f.iter_mut().enumerate() {
+            let m = if 2 * k < n { k as f64 } else { k as f64 - n as f64 };
+            let angle = -2.0 * PI * m * t;
+            *v *= if 2 * k == n { Complex::from(angle.cos()) } else { Complex::from_polar(1.0, angle) };
+        }
         self.planner.inverse_with(f, &mut w.buf, &mut w.scratch);
     }
 
@@ -732,7 +856,42 @@ impl<const N: usize> PoissonND<N> {
         rs: [usize; N],
         bc: [BoundaryCondition; N],
     ) -> Self {
-        let solvers = std::array::from_fn(|d| Poisson::new(ls[d], xls[d], ns[d], rs[d], bc[d]));
+        Self::with_layouts(ls, xls, ns, rs, bc, [NodeLayout::GaussLobatto; N])
+    }
+
+    /// Construct the ND solver with an explicit [`NodeLayout`] per direction.
+    ///
+    /// Arguments as in [`new`](Self::new); direction `d` is built as
+    /// [`Poisson::with_layout`]`(…, layouts[d])`, an `Equidistant` one with
+    /// `ns[d]·rs[d]` points. Layouts mix freely; [`grid`](Self::grid)
+    /// reports the true nodes of each direction.
+    ///
+    /// ```
+    /// # use lobatto_fft::solver::*;
+    /// # use rustfft::num_complex::Complex;
+    /// // Trigonometric in x (32 points), Gauss-Lobatto Dirichlet in y.
+    /// let s = PoissonND::<2>::with_layouts([1.0; 2], [0.0; 2], [32, 4], [1, 4],
+    ///     [BoundaryCondition::Periodic, BoundaryCondition::Dirichlet],
+    ///     [NodeLayout::Equidistant, NodeLayout::GaussLobatto]);
+    /// let mut u = vec![Complex::new(1.0, 0.0); s.get_x().len()];
+    /// let (dt, beta) = (0.01, 0.5);
+    /// // implicit diffusion step along x only: the Fourier multiplier 1/(1 + dt β μ_m)
+    /// s.apply_mu_in_place_dir(0, &mut u, |mu| Complex::from(1.0 / (1.0 + dt * beta * mu)));
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// As [`Poisson::with_layout`], for every direction.
+    pub fn with_layouts(
+        ls: [f64; N],
+        xls: [f64; N],
+        ns: [usize; N],
+        rs: [usize; N],
+        bc: [BoundaryCondition; N],
+        layouts: [NodeLayout; N],
+    ) -> Self {
+        let solvers =
+            std::array::from_fn(|d| Poisson::with_layout(ls[d], xls[d], ns[d], rs[d], bc[d], layouts[d]));
 
         // Build the diagonal of M^{(0)} ⊗ … ⊗ M^{(N-1)} iteratively.
         // Each 1D mass matrix is diagonal (Gauss-Lobatto quadrature), so the Kronecker product
@@ -748,7 +907,7 @@ impl<const N: usize> PoissonND<N> {
 
         let extension = std::array::from_fn(|d| bc[d].extension());
 
-        let fft = EngineND::new(ns, rs, ls, xls, extension);
+        let fft = EngineND::with_layouts(ns, rs, ls, xls, extension, layouts);
 
         // Number of independent Fourier modes per direction.
         let n_freqs: [usize; N] = std::array::from_fn(|d| solvers[d].eigenvalues.len());
@@ -1053,12 +1212,57 @@ impl<const N: usize> PoissonND<N> {
         assert!(d < N, "direction {d} out of range for N = {N}");
         let total = self.fft.total;
         assert_eq!(f.len(), total, "expected {total} DOFs, got {}", f.len());
+        let solver = &self.solvers[d];
+        self.for_each_fibre(d, f, |_, fibre, w| solver.apply_mu_with(fibre, &g, w));
+    }
+
+    /// Translate `f` along an equidistant direction `d`, by `c[s]` on fibre
+    /// `s`: the 1D [`Poisson::shift_in_place`] on every fibre along `d`,
+    /// `u(x) ← u(x − c)`.
+    ///
+    /// `c` has one shift per fibre, `total / ndofs[d]` entries, in the fibre
+    /// order of [`lobatto_grid::grid::nd_fiber_base`] (the index combinations
+    /// of the other directions, column-major, `d` skipped). The result equals
+    /// [`lobatto_grid::GridND::convect`] with the flow map `x_d ↦ x_d − c`
+    /// (Nyquist mode by its real part, see [`Poisson::shift_in_place`]), the
+    /// exact translation at a speed constant along each fibre. Costs two DFTs
+    /// per fibre.
+    ///
+    /// # Panics
+    ///
+    /// If `d ≥ N`, direction `d` is not [`NodeLayout::Equidistant`], `f` does
+    /// not have one value per DOF or `c` one value per fibre.
+    pub fn shift_in_place_dir(&self, d: usize, f: &mut [Complex<f64>], c: &[f64]) {
+        assert!(d < N, "direction {d} out of range for N = {N}");
+        let total = self.fft.total;
+        assert_eq!(f.len(), total, "expected {total} DOFs, got {}", f.len());
+        let solver = &self.solvers[d];
+        assert_eq!(solver.planner.grid().layout(), NodeLayout::Equidistant, "direction {d}: shift needs an Equidistant layout");
+        let fibres = total / self.fft.ndofs[d];
+        assert_eq!(c.len(), fibres, "expected one shift per fibre ({fibres}), got {}", c.len());
+        self.for_each_fibre(d, f, |s, fibre, w| solver.shift_with(fibre, c[s], w));
+    }
+
+    /// Run `op(s, fibre, work)` on every fibre `s` along direction `d`, in
+    /// parallel, with per-thread work buffers of `solvers[d]`.
+    ///
+    /// Direction 0 has contiguous fibres, processed in place. For `d > 0`
+    /// each strided fibre is gathered into a per-thread buffer, processed and
+    /// scattered back: no allocation per fibre.
+    fn for_each_fibre(
+        &self,
+        d: usize,
+        f: &mut [Complex<f64>],
+        op: impl Fn(usize, &mut [Complex<f64>], &mut Work1D) + Sync,
+    ) {
+        let total = self.fft.total;
         let (ndofs, strides) = (&self.fft.ndofs, &self.fft.strides);
         let (m, stride) = (ndofs[d], strides[d]);
         let solver = &self.solvers[d];
         if stride == 1 {
             f.par_chunks_mut(m)
-                .for_each_init(|| solver.work(), |w, fibre| solver.apply_mu_with(fibre, &g, w));
+                .enumerate()
+                .for_each_init(|| solver.work(), |w, (s, fibre)| op(s, fibre, w));
             return;
         }
         // SAFETY: nd_fiber_base yields disjoint index sets for distinct `s`,
@@ -1072,7 +1276,7 @@ impl<const N: usize> PoissonND<N> {
                 for (k, x) in fibre.iter_mut().enumerate() {
                     *x = unsafe { *p.add(base + k * stride) };
                 }
-                solver.apply_mu_with(fibre, &g, w);
+                op(s, fibre, w);
                 for (k, &x) in fibre.iter().enumerate() {
                     unsafe { *p.add(base + k * stride) = x };
                 }
@@ -1569,6 +1773,23 @@ mod tests {
         assert_mode_tuples_own_their_entries(&s1);
         assert_mode_tuples_own_their_entries(&s3);
         assert_mode_tuples_own_their_entries(&s5);
+        let st = solver_3d_trigonometric();
+        assert_fibres_partition(&st);
+        assert_mode_tuples_own_their_entries(&st);
+    }
+
+    /// Mixed layouts: Gauss-Lobatto Dirichlet, equidistant (9 points),
+    /// Gauss-Lobatto Periodic.
+    fn solver_3d_trigonometric() -> PoissonND<3> {
+        use BoundaryCondition::*;
+        PoissonND::<3>::with_layouts(
+            [1.0, 2.0, 0.5],
+            [0.0, -1.0, 0.3],
+            [2, 3, 2],
+            [3, 3, 4],
+            [Dirichlet, Periodic, Periodic],
+            [NodeLayout::GaussLobatto, NodeLayout::Equidistant, NodeLayout::GaussLobatto],
+        )
     }
 
     #[test]
@@ -1582,5 +1803,6 @@ mod tests {
         assert_mode_indices_match_get_set_values(&s3);
         assert_mode_indices_match_get_set_values(&s4);
         assert_mode_indices_match_get_set_values(&s5);
+        assert_mode_indices_match_get_set_values(&solver_3d_trigonometric());
     }
 }

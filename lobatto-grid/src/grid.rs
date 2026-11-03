@@ -1,4 +1,4 @@
-//! Grid geometry: [`Extension`], [`Grid1D`] and [`GridND`].
+//! Grid geometry: [`Extension`], [`NodeLayout`], [`Grid1D`] and [`GridND`].
 //!
 //! A grid describes a multi-element Gauss-Lobatto discretisation of an
 //! arbitrary interval `[x_l, x_l + L]` (1D) or tensor-product domain
@@ -6,10 +6,18 @@
 //! order, domain, and the [`Extension`] that encodes how the discretisation
 //! behaves at the boundary. The `[0, 1]` reference element used for the
 //! Gauss-Lobatto nodes and basis evaluation is an internal detail only.
+//!
+//! A periodic direction may instead carry `n` equidistant points read as a
+//! trigonometric polynomial ([`NodeLayout::Equidistant`], built by
+//! [`Grid1D::trigonometric`]); such directions mix freely with Gauss-Lobatto
+//! ones in a [`GridND`].
 
 use lobatto::collocation::{CollocationBasis, Gauss};
 use lobatto::utilities::barycentric_weights;
 use rayon::prelude::*;
+use realfft::num_complex::Complex;
+use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
+use std::f64::consts::PI;
 
 // ── Extension ────────────────────────────────────────────────────────────────
 
@@ -35,13 +43,35 @@ pub enum Extension {
     Even,
 }
 
+// ── Node layout ─────────────────────────────────────────────────────────────
+
+/// Node layout of a [`Grid1D`]: where the nodes are and which interpolant
+/// they carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NodeLayout {
+    /// `n` elements of order `r` with `r + 1` Gauss-Lobatto nodes each,
+    /// read as a piecewise polynomial (element-local Lagrange interpolant).
+    /// Any [`Extension`]. Built by [`Grid1D::new`].
+    #[default]
+    GaussLobatto,
+    /// `n` equidistant points `x_j = x_l + j·L/n` on the period
+    /// `[x_l, x_l + L)`, read as a trigonometric polynomial. `Periodic` only.
+    /// Built by [`Grid1D::trigonometric`].
+    Equidistant,
+}
+
 // ── 1D grid ─────────────────────────────────────────────────────────────────
 
-/// 1D multi-element Gauss-Lobatto grid on `[x_l, x_l + L]`.
+/// 1D grid on `[x_l, x_l + L]`: multi-element Gauss-Lobatto or equidistant
+/// trigonometric (see [`NodeLayout`]).
 ///
-/// `n` elements of polynomial order `r` (`r + 1` Gauss-Lobatto nodes per
-/// element, endpoints shared between neighbours), with an [`Extension`] that
-/// fixes the boundary behaviour and the DOF layout.
+/// [`Grid1D::new`]: `n` elements of polynomial order `r` (`r + 1`
+/// Gauss-Lobatto nodes per element, endpoints shared between neighbours),
+/// with an [`Extension`] that fixes the boundary behaviour and the DOF
+/// layout.
+///
+/// [`Grid1D::trigonometric`]: `n` equidistant points on a period, see
+/// [that constructor](Grid1D::trigonometric) for what the accessors report.
 ///
 /// ## Data layout
 ///
@@ -66,15 +96,24 @@ pub struct Grid1D {
     pub(crate) n_dof: usize,
     /// Boundary extension.
     pub(crate) extension: Extension,
-    /// Gauss-Lobatto nodes on the `[0, 1]` reference element (length `r + 1`).
+    /// Node layout.
+    pub(crate) layout: NodeLayout,
+    /// Nodes on the `[0, 1]` reference element: Gauss-Lobatto (length
+    /// `r + 1`) or equidistant `j/n` (length `n`).
     pub(crate) gauss_lobatto_points: Vec<f64>,
-    /// Gauss-Lobatto quadrature weights on the `[0, 1]` reference element (length `r + 1`).
+    /// Quadrature weights on the `[0, 1]` reference element, matching
+    /// `gauss_lobatto_points`.
     pub(crate) gauss_lobatto_weights: Vec<f64>,
-    /// Barycentric weights for the `r + 1` Gauss-Lobatto nodes.
+    /// Barycentric weights for the `r + 1` Gauss-Lobatto nodes (empty for
+    /// `Equidistant`).
     pub(crate) bary_weights: Vec<f64>,
-    /// Reference differentiation matrix on `[0, 1]`, `(r + 1) × (r + 1)`
-    /// column-major: entry `j + (r + 1)·i` is `ℓ_i'(ξ_j)`.
+    /// Reference differentiation matrix on `[0, 1]`, column-major over the
+    /// `r + 1` local nodes: entry `j + (r + 1)·i` is the derivative of basis
+    /// function `i` at node `j` (empty for `Equidistant`).
     pub(crate) diff_matrix: Vec<f64>,
+    /// `Equidistant` only: `(cos, sin)(π m / n)` for `m = −(n−1)..=n−1`, at
+    /// index `m + n − 1` (empty for `GaussLobatto`).
+    pub(crate) trig_table: Vec<(f64, f64)>,
 }
 
 impl Grid1D {
@@ -97,19 +136,94 @@ impl Grid1D {
             xl,
             n_dof,
             extension,
+            layout: NodeLayout::GaussLobatto,
             gauss_lobatto_points,
             gauss_lobatto_weights,
             bary_weights,
             diff_matrix,
+            trig_table: Vec::new(),
         }
     }
 
-    /// Number of elements `n`.
+    /// Create a periodic grid of `n` equidistant points on `[x_l, x_l + L)`,
+    /// read as a trigonometric polynomial ([`NodeLayout::Equidistant`]).
+    ///
+    /// With $\theta(x) = 2\pi (x - x_l)/L$ and nodes
+    /// $\theta_j = 2\pi j/n$, the interpolant of the nodal values `u_j` is
+    /// $$p(x) = \sum_{j=0}^{n-1} u_j\, S\big(\theta(x) - \theta_j\big), \qquad
+    /// S(\theta) = \frac{\sin(n\theta/2)}{n \tan(\theta/2)} \ (n \text{ even}), \quad
+    /// S(\theta) = \frac{\sin(n\theta/2)}{n \sin(\theta/2)} \ (n \text{ odd}),$$
+    /// the trigonometric polynomial of the modes `−⌊(n−1)/2⌋..=⌊n/2⌋`, the
+    /// Nyquist mode of an even `n` taken as a cosine (real data have a real
+    /// interpolant). It is evaluated by the barycentric trigonometric
+    /// formula, `O(n)` per point and exact at the nodes.
+    ///
+    /// The grid is one element spanning the period, so that it mixes with
+    /// Gauss-Lobatto directions in a [`GridND`]:
+    ///
+    /// | Accessor | Value |
+    /// |---|---|
+    /// | [`n`](Self::n) | `1` (one element) |
+    /// | [`r`](Self::r), [`n_dof`](Self::n_dof), [`local_count`](Self::local_count) | `n` (points) |
+    /// | [`h`](Self::h) | `L` (the element; the spacing is `L/n`) |
+    /// | [`extension`](Self::extension) | `Periodic` |
+    /// | [`get_x`](Self::get_x) | `x_l + j·L/n`, `j ∈ 0..n` |
+    /// | [`mass_weights`](Self::mass_weights) | `L/n` each (trapezoidal rule) |
+    /// | [`ref_points`](Self::ref_points) / [`ref_weights`](Self::ref_weights) | `j/n` / `1/n` |
+    /// | [`eval_dof_index`](Self::eval_dof_index)`(0, j)` | `j` |
+    ///
+    /// The trapezoidal weights integrate trigonometric polynomials of degree
+    /// `< n` exactly.
+    ///
+    /// # Panics
+    ///
+    /// If `n < 2`.
+    pub fn trigonometric(n: usize, l: f64, xl: f64) -> Self {
+        assert!(n >= 2, "trigonometric grid needs at least 2 points, got {n}");
+        let nf = n as f64;
+        let trig_table = (0..2 * n - 1)
+            .map(|i| {
+                let (s, c) = (PI * (i as f64 - (nf - 1.0)) / nf).sin_cos();
+                (c, s)
+            })
+            .collect();
+        Self {
+            n: 1,
+            r: n,
+            l,
+            xl,
+            n_dof: n,
+            extension: Extension::Periodic,
+            layout: NodeLayout::Equidistant,
+            gauss_lobatto_points: (0..n).map(|j| j as f64 / nf).collect(),
+            gauss_lobatto_weights: vec![1.0 / nf; n],
+            bary_weights: Vec::new(),
+            diff_matrix: Vec::new(),
+            trig_table,
+        }
+    }
+
+    /// Node layout: Gauss-Lobatto elements or equidistant trigonometric.
+    pub fn layout(&self) -> NodeLayout {
+        self.layout
+    }
+
+    /// Number of local basis functions per element: `r + 1` (Gauss-Lobatto),
+    /// `n` (equidistant, one element).
+    pub fn local_count(&self) -> usize {
+        match self.layout {
+            NodeLayout::GaussLobatto => self.r + 1,
+            NodeLayout::Equidistant => self.r,
+        }
+    }
+
+    /// Number of elements `n` (`1` for an equidistant grid).
     pub fn n(&self) -> usize {
         self.n
     }
 
-    /// Polynomial order `r`.
+    /// Polynomial order `r` (the number of points for an equidistant grid,
+    /// so that `N_dof = n·r` holds for every periodic grid).
     pub fn r(&self) -> usize {
         self.r
     }
@@ -124,7 +238,8 @@ impl Grid1D {
         self.xl
     }
 
-    /// Element width `h = L/n`.
+    /// Element width `h = L/n` (`L` for an equidistant grid, whose point
+    /// spacing is `L/n_dof`).
     pub fn h(&self) -> f64 {
         self.l / (self.n as f64)
     }
@@ -139,12 +254,14 @@ impl Grid1D {
         self.extension
     }
 
-    /// Gauss-Lobatto nodes on the `[0, 1]` reference element (length `r + 1`).
+    /// Nodes on the `[0, 1]` reference element: the `r + 1` Gauss-Lobatto
+    /// nodes, or the `n` equidistant points `j/n` of an equidistant grid.
     pub fn ref_points(&self) -> &[f64] {
         &self.gauss_lobatto_points
     }
 
-    /// Gauss-Lobatto quadrature weights on the `[0, 1]` reference element (length `r + 1`).
+    /// Quadrature weights on the `[0, 1]` reference element: the `r + 1`
+    /// Gauss-Lobatto weights, or `1/n` for each point of an equidistant grid.
     pub fn ref_weights(&self) -> &[f64] {
         &self.gauss_lobatto_weights
     }
@@ -162,6 +279,7 @@ impl Grid1D {
     /// | shared by two elements, periodic seam included | sum of the two end weights |
     /// | stored boundary endpoint (`Even`) | its single end weight |
     /// | unstored boundary endpoint (`Odd`) | dropped |
+    /// | equidistant point | `L/n` |
     pub fn mass_weights(&self) -> Vec<f64> {
         let h = self.h();
         let mut w = vec![0.0; self.n_dof];
@@ -269,17 +387,25 @@ impl Grid1D {
         }
     }
 
-    /// ∂u/∂x at the Gauss–Lobatto points; a node shared by
-    /// two elements (the periodic seam included) takes the average of the
-    /// two; an `Even` boundary node its one element's value; the unstored
-    /// `Odd` boundary zeros enter as zeros.
+    /// ∂u/∂x at the grid nodes.
+    ///
+    /// Gauss-Lobatto: a node shared by two elements (the periodic seam
+    /// included) takes the average of the two; an `Even` boundary node its
+    /// one element's value; the unstored `Odd` boundary zeros enter as zeros.
+    /// Non-assembled: no global matrix is formed; each element gathers its
+    /// `r + 1` nodal values, applies the reference differentiation matrix
+    /// scaled by `1/h`, and adds the result into `out`, with weight `1/2` at
+    /// the nodes it shares with a neighbour. Cost `n·(r + 1)²`.
+    ///
+    /// Equidistant: the exact derivative of the trigonometric interpolant at
+    /// the nodes, the Nyquist mode of an even `n` contributing zero: by a
+    /// real FFT pair of length `n`, Fourier mode `m` multiplied by
+    /// $$i k_m, \qquad k_m = \frac{2\pi m}{L}.$$
+    /// Cost `O(n log n)`, plus planning the two FFTs on every call
+    /// ([`GridND::derivative`] plans once for all fibres).
     ///
     /// `u` and `out` are stored DOFs (length `N_dof`, in the order of
-    /// [`get_x`](Self::get_x)). Non-assembled: no global matrix is formed;
-    /// each element gathers its `r + 1` nodal values, applies the reference
-    /// differentiation matrix scaled by `1/h`, and adds the result into
-    /// `out`, with weight `1/2` at the nodes it shares with a neighbour.
-    /// Cost `n·(r + 1)²`.
+    /// [`get_x`](Self::get_x)).
     ///
     /// # Panics
     ///
@@ -288,6 +414,14 @@ impl Grid1D {
         assert_eq!(u.len(), self.n_dof, "u length differs from N_dof");
         assert_eq!(out.len(), self.n_dof, "out length differs from N_dof");
         let (n, r) = (self.n, self.r);
+        if self.layout == NodeLayout::Equidistant {
+            let mut planner = RealFftPlanner::<f64>::new();
+            let (r2c, c2r) = (planner.plan_fft_forward(r), planner.plan_fft_inverse(r));
+            let mut spectrum = r2c.make_output_vec();
+            let mut scratch = vec![Complex::default(); r2c.get_scratch_len().max(c2r.get_scratch_len())];
+            trig_derivative(&*r2c, &*c2r, self.l, &mut u.to_vec(), &mut spectrum, &mut scratch, out);
+            return;
+        }
         let inv_h = 1.0 / self.h();
         // The element's values, on the stack for r < 32 (no allocation; the
         // ND derivative calls this once per fibre), on the heap beyond.
@@ -437,10 +571,40 @@ impl<const N: usize> GridND<N> {
         assert_eq!(out.len(), self.total, "out length differs from total");
         let g = &self.grids[d];
         let (m, s) = (self.ndofs[d], self.strides[d]);
-        if s == 1 {
+        // Equidistant: the FFT pair is planned once for all fibres, and each
+        // task owns its spectrum and FFT scratch (empty for Gauss-Lobatto).
+        let plans = (g.layout == NodeLayout::Equidistant).then(|| {
+            let mut planner = RealFftPlanner::<f64>::new();
+            (planner.plan_fft_forward(m), planner.plan_fft_inverse(m))
+        });
+        let fft_buffers = || match &plans {
+            Some((r2c, c2r)) => {
+                let scratch_len = r2c.get_scratch_len().max(c2r.get_scratch_len());
+                (r2c.make_output_vec(), vec![Complex::default(); scratch_len])
+            }
+            None => (Vec::new(), Vec::new()),
+        };
+        // `fibre` is overwritten (it is the r2c input).
+        let apply = |fibre: &mut [f64], du: &mut [f64], (spectrum, scratch): &mut (Vec<Complex<f64>>, Vec<Complex<f64>>)| {
+            match &plans {
+                Some((r2c, c2r)) => trig_derivative(&**r2c, &**c2r, g.l, fibre, spectrum, scratch, du),
+                None => g.derivative(fibre, du),
+            }
+        };
+        if s == 1 && plans.is_none() {
             out.par_chunks_mut(m)
                 .zip(u.par_chunks(m))
                 .for_each(|(o, f)| g.derivative(f, o));
+            return;
+        }
+        if s == 1 {
+            out.par_chunks_mut(m).zip(u.par_chunks(m)).for_each_init(
+                || (vec![0.0; m], fft_buffers()),
+                |(fibre, buffers), (o, f)| {
+                    fibre.copy_from_slice(f);
+                    apply(fibre, o, buffers);
+                },
+            );
             return;
         }
         // Hot path: per-task buffers only (the gathered fibre and its
@@ -450,13 +614,13 @@ impl<const N: usize> GridND<N> {
         // raw pointer never alias; `u` is only read.
         let ptr = out.as_mut_ptr() as usize;
         (0..self.total / m).into_par_iter().for_each_init(
-            || (vec![0.0; m], vec![0.0; m]),
-            |(fibre, du), f| {
+            || (vec![0.0; m], vec![0.0; m], fft_buffers()),
+            |(fibre, du, buffers), f| {
                 let base = nd_fiber_base(f, d, &self.ndofs, &self.strides);
                 for (j, v) in fibre.iter_mut().enumerate() {
                     *v = u[base + s * j];
                 }
-                g.derivative(fibre, du);
+                apply(fibre, du, buffers);
                 let p = ptr as *mut f64;
                 for (j, &v) in du.iter().enumerate() {
                     unsafe { *p.add(base + s * j) = v };
@@ -464,6 +628,29 @@ impl<const N: usize> GridND<N> {
             },
         );
     }
+}
+
+/// Derivative of the trigonometric interpolant of the `n` nodal values `u`
+/// on a period `l`, into `out`: r2c, mode `m` times `i·2πm/l` (`0` for the
+/// Nyquist mode of an even `n`), c2r. `u` is overwritten.
+fn trig_derivative(
+    r2c: &dyn RealToComplex<f64>,
+    c2r: &dyn ComplexToReal<f64>,
+    l: f64,
+    u: &mut [f64],
+    spectrum: &mut [Complex<f64>],
+    scratch: &mut [Complex<f64>],
+    out: &mut [f64],
+) {
+    let n = u.len();
+    r2c.process_with_scratch(u, spectrum, scratch).expect("r2c buffer lengths");
+    // The c2r is unnormalised: the 1/n goes into the multiplier.
+    let k1 = 2.0 * PI / (l * n as f64);
+    for (m, c) in spectrum.iter_mut().enumerate() {
+        let k = if 2 * m == n { 0.0 } else { k1 * m as f64 };
+        *c = Complex::new(-k * c.im, k * c.re);
+    }
+    c2r.process_with_scratch(spectrum, out, scratch).expect("c2r input is a real spectrum");
 }
 
 // ── ND helpers ───────────────────────────────────────────────────────────────

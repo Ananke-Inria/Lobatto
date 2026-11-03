@@ -7,10 +7,13 @@
 //! flow map `lambda` in [`GridND::convect`]) is used many times with varying
 //! DOF data `u`.
 
-use crate::grid::{nd_col_major_strides, nd_multi_index, nd_multi_indices, Extension, Grid1D, GridND};
+use crate::grid::{
+    nd_col_major_strides, nd_multi_index, nd_multi_indices, Extension, Grid1D, GridND, NodeLayout,
+};
 use lobatto::utilities::{lagrangian_interpolation, lagrangian_interpolation_into};
 use rayon::prelude::*;
 use std::collections::HashMap;
+use std::f64::consts::PI;
 use std::ops::{AddAssign, Mul, MulAssign};
 
 /// Scalar types the interpolation routines operate on.
@@ -32,12 +35,58 @@ impl<T> Scalar for T where
 // ─── 1D interpolation ─────────────────────────────────────────────────────────
 
 impl Grid1D {
+    /// Cardinal functions `C_j(ξ)` of an equidistant grid at the reference
+    /// coordinate `ξ ∈ [0, 1]` (`x = x_l + ξ·L`), written into `out`
+    /// (length `n`): `C_j(x_i) = δ_ij`, and `Σ_j u_j C_j(x)` is the
+    /// trigonometric interpolant.
+    ///
+    /// Barycentric trigonometric formula (Henrici 1979, Berrut 1984): with
+    /// `a_j = (θ − θ_j)/2`, `C_j = (−1)^j κ(a_j) / Σ_i (−1)^i κ(a_i)`,
+    /// `κ = cot` (`n` even) or `csc` (`n` odd).
+    pub(crate) fn trig_cardinals_into(&self, xi: f64, out: &mut [f64]) {
+        let n = self.r;
+        debug_assert_eq!(out.len(), n);
+        // t = ξ·n = j* + δ with j* the nearest node; a_j = π(δ − m)/n with
+        // m = j − j*. Folding j* = n onto node 0 shifts every a_j by π,
+        // which flips every κ by the same sign (or none): the ratio is
+        // unchanged. sin a_j and cos a_j come from (sin, cos)(πδ/n) and the
+        // table of (cos, sin)(πm/n): no cancellation, since |a_j| ≥ π/(2n)
+        // for m ≠ 0 and a_j = πδ/n exactly for m = 0.
+        let t = xi * n as f64;
+        let nearest = t.round();
+        let delta = t - nearest;
+        let jn = nearest as usize % n;
+        let (sb, cb) = (PI * delta / n as f64).sin_cos();
+        out.fill(0.0);
+        if sb.abs() < f64::MIN_POSITIVE {
+            out[jn] = 1.0;
+            return;
+        }
+        let even = n.is_multiple_of(2);
+        let mut sum = 0.0;
+        for (j, o) in out.iter_mut().enumerate() {
+            let m = j as isize - jn as isize;
+            let (cm, sm) = self.trig_table[(m + n as isize - 1) as usize];
+            let sa = sb * cm - cb * sm;
+            let kappa = if even { (cb * cm + sb * sm) / sa } else { 1.0 / sa };
+            *o = if m % 2 == 0 { kappa } else { -kappa };
+            sum += *o;
+        }
+        for o in out.iter_mut() {
+            *o /= sum;
+        }
+    }
+
     /// Evaluate the interpolant of `u` at a single position `x`.
     ///
     /// `u` must be in the x-increasing layout matching [`get_x`](Self::get_x).
     /// `x` must lie in `[xl, xl+l]` for **every** extension; use
     /// [`eval_extended_at`](Self::eval_extended_at) to evaluate the underlying
     /// extension at positions outside the domain.
+    ///
+    /// Gauss-Lobatto grids: the element-local Lagrange interpolant, `r + 1`
+    /// values per point. Equidistant grids: the trigonometric interpolant
+    /// (see [`Grid1D::trigonometric`]), `n` values per point.
     ///
     /// Batch variant with a caller-provided output buffer: [`eval`](Self::eval).
     pub fn eval_at<T: Scalar>(&self, x: f64, u: &[T]) -> T {
@@ -47,6 +96,15 @@ impl Grid1D {
             self.xl,
             self.xl + self.l
         );
+        if self.layout == NodeLayout::Equidistant {
+            let mut phi = vec![0.0; self.r];
+            self.trig_cardinals_into((x - self.xl) / self.l, &mut phi);
+            let mut val = T::default();
+            for (&uj, &p) in u.iter().zip(&phi) {
+                val += uj * p;
+            }
+            return val;
+        }
         let h = self.l / (self.n as f64);
         let k = (((x - self.xl) / h) as usize).min(self.n - 1);
         let xi = (x - self.xl - (k as f64) * h) / h;
@@ -166,11 +224,10 @@ struct EvalGeometry<const N: usize> {
 impl<const N: usize> EvalGeometry<N> {
     fn new(grid: &GridND<N>) -> Self {
         let ns: [usize; N] = std::array::from_fn(|d| grid.grids[d].n);
-        let rs: [usize; N] = std::array::from_fn(|d| grid.grids[d].r);
         let ls: [f64; N] = std::array::from_fn(|d| grid.grids[d].l);
         let xls: [f64; N] = std::array::from_fn(|d| grid.grids[d].xl);
         let hs: [f64; N] = std::array::from_fn(|d| ls[d] / ns[d] as f64);
-        let counts: [usize; N] = std::array::from_fn(|d| rs[d] + 1);
+        let counts: [usize; N] = std::array::from_fn(|d| grid.grids[d].local_count());
         let local_total: usize = counts.iter().product();
 
         // DOF strides in the "periodic-equivalent" layout (n_d * r_d per direction).
@@ -252,13 +309,14 @@ impl<const N: usize> GridND<N> {
 
     /// Fill the flat basis-value buffer `phi` for local coordinates `xi`.
     fn fill_phi(&self, geo: &EvalGeometry<N>, xi: &[f64; N], phi: &mut [f64]) {
-        for d in 0..N {
-            lagrangian_interpolation_into(
-                &self.grids[d].gauss_lobatto_points,
-                &self.grids[d].bary_weights,
-                xi[d],
-                &mut phi[geo.phi_off[d]..geo.phi_off[d] + geo.counts[d]],
-            );
+        for (d, g) in self.grids.iter().enumerate() {
+            let phi_d = &mut phi[geo.phi_off[d]..geo.phi_off[d] + geo.counts[d]];
+            match g.layout {
+                NodeLayout::GaussLobatto => {
+                    lagrangian_interpolation_into(&g.gauss_lobatto_points, &g.bary_weights, xi[d], phi_d)
+                }
+                NodeLayout::Equidistant => g.trig_cardinals_into(xi[d], phi_d),
+            }
         }
     }
 }
@@ -485,8 +543,10 @@ struct ElemGroup {
 /// coordinates — is done at construction; the apply is pure gather + contraction.
 ///
 /// Memory: ~`(8 + 8·N)` bytes per point (grouped order) plus one `u32` gather
-/// table of `∏_d (r_d + 1)` entries per occupied element, plus `8` bytes per
-/// point for reflection signs when some direction is `Odd`.
+/// table of `∏_d c_d` entries per occupied element, plus `8` bytes per
+/// point for reflection signs when some direction is `Odd`; `c_d` is the
+/// local count of direction `d` ([`Grid1D::local_count`]: `r_d + 1`, or the
+/// number of points of an equidistant direction, which is a single element).
 ///
 /// The plan stores only positions and indices, so the same plan can be applied
 /// to real (`f64`) and complex (`Complex<f64>`) fields interchangeably.

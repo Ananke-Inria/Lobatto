@@ -5,13 +5,14 @@ Rust workspace for Gauss–Lobatto spectral-element numerics.
 | Crate | Role |
 |---|---|
 | `lobatto` | Gauss–Lobatto points, quadrature, barycentric/Lagrange basis utilities |
-| `lobatto-grid` | Grid geometry (`Grid1D`/`GridND<N>` on arbitrary domains, `Extension` folding, DOF indexing) and interpolation (`eval`/`eval_extended`/`convect`, `EvalPlan`, `Scalar`) |
-| `lobatto-fft` | HoFFT transforms (`hofft::Engine`/`EngineND`), screened Poisson solvers (`solver::Poisson`/`PoissonND`); engines/solvers expose their grid via `grid()` |
+| `lobatto-grid` | Grid geometry (`Grid1D`/`GridND<N>` on arbitrary domains, `Extension` folding, DOF indexing; `NodeLayout`: Gauss–Lobatto elements or, for periodic directions, `Grid1D::trigonometric` equidistant points with the trigonometric interpolant (one element of `n` cardinal functions, so the ND machinery is shared); the shared ND indexing helpers `nd_col_major_strides`/`nd_fiber_base`/`nd_multi_indices`/`nd_multi_index` live here) and interpolation (`eval`/`eval_extended`/`convect`, `EvalPlan`, `Scalar`) |
+| `lobatto-fft` | HoFFT transforms (`hofft::Engine`/`EngineND`), screened Poisson solvers (`solver::Poisson`/`PoissonND`), equidistant trigonometric directions via `with_layout(s)` (DFT + exact Fourier symbol, as order-1 HoFFT; exact per-fibre translation `shift_in_place(_dir)`); engines/solvers expose their grid via `grid()` |
 | `lobatto-spectral` | Screened Poisson solvers by dense fast diagonalisation (same interface as `lobatto-fft::solver`, real only, small `n·r`); solvers expose their grid via `grid()` |
 | `lobatto-lowrank` | Low-rank sums of products `Σ a_k ρ_k ⊗ μ_k` of fields on two grids (`LowRankSum<P, Q>`), weighted L² algebra (Gram, norm, inner product, marginals, factor maps) and QR → SVD compression (`Truncation`), point evaluation via `lobatto-grid` plans; public building blocks `Leaf<P>` (one side: functions on a grid) and `linalg` (TSQR, thin SVD, row scaling on faer) |
 
 Conventions:
 - Crates are published to crates.io individually with **version-only dependencies** between them (no path deps): publish the upstream crate first, then bump the requirement downstream.
+- Temporary: the root `Cargo.toml` has `[patch.crates-io] lobatto-grid = { path = "lobatto-grid" }` so lobatto-fft 0.5.5 builds against the unpublished lobatto-grid 0.1.8; remove it once 0.1.8 is on crates.io.
 - Zero clippy warnings (`cargo clippy --benches --tests`); tests in release mode (`cargo test --release`).
 - Benches: `cargo bench --bench interp` in lobatto-grid (interpolation/convection), `cargo bench --bench solver` in lobatto-fft (solves). Criterion group names are stable identifiers — renaming them discards baseline history.
 
@@ -52,7 +53,7 @@ Doc-comment math (KaTeX renders on docs.rs via each crate's `katex.html`; hover/
   - Diagonalisation: FFT vs dense eigendecomposition (vs banded/blocked eigensolve if it lands).
   - Interpolation: Lagrange (element-local) vs trigonometric.
   - Selection is per direction, mixing allowed, through the constructor (e.g. an enum next to `BoundaryCondition`); current behaviour is the default so existing code keeps building.
-- **Fourier directions**: when a direction is `Periodic`, replace the Gauss–Lobatto elements by `n·r` equidistant points on `[x_l, x_l + L)` and diagonalise with a plain FFT (`realfft` r2c/c2r, real field) instead of the dense `n·r × n·r` eigendecomposition.
+- **Fourier directions — superseded (2026-11-03)**: implemented in lobatto-grid 0.1.8 (`Grid1D::trigonometric`, `NodeLayout`) and lobatto-fft 0.5.5 (`Poisson::with_layout`, `PoissonND::with_layouts`, `EngineND::with_layouts`), see "Trigonometric directions" below; deliberately **not** in lobatto-spectral. Original text, kept for reference: when a direction is `Periodic`, replace the Gauss–Lobatto elements by `n·r` equidistant points on `[x_l, x_l + L)` and diagonalise with a plain FFT (`realfft` r2c/c2r, real field) instead of the dense `n·r × n·r` eigendecomposition.
   - Mass is uniform (`L/(n·r)`), stiffness eigenvalues are `k²` with `k = 2πm/L`; the pseudo-inverse rule for the constant mode carries over unchanged.
   - Design constraint: `Grid1D` assumes Lobatto nodes per element and owns interpolation (`eval`/`convect`), so a Fourier direction needs either a `Grid1D` node-layout variant or a trigonometric-interpolation path; `grid()` / `get_x()` must keep reporting the true nodes.
   - Mixed directions (Fourier in some, dense diagonalisation in the others) stay under the same `PoissonND` interface.
@@ -70,7 +71,22 @@ Measured on a 5D, 1.1M-DOF mixed-BC solve (14 threads, counting allocator / wall
 - lobatto-fft `apply_in_place_dirs`: 6.5M → 4.7k allocations, ~39–49 ms → 14 ms (sweeps 16.5 → 3.3 ms; per-mode step ~32 → 11 ms). Item 3's read-through was 2 buffers per fibre, not 3: rustfft allocates no scratch at these FFT lengths.
 - lobatto-spectral: 1.37M → 4.1k allocations, 11.5–14 ms → 6.1 ms.
 
-Remaining candidate (not done): the lobatto-fft per-mode step now dominates (~11 of 14 ms): `get_values`/`set_values` gather `∏ r_d` values scattered over the whole array per mode tuple, and the 4 × 4 products go through nalgebra's strided views. Plain loops would change rounding (no longer bit-exact).
+Follow-up, index arithmetic out of the per-mode step (lobatto-fft 0.5.4, lobatto-spectral 0.2.5, on lobatto-grid 0.1.7 helpers `nd_multi_indices` / `nd_multi_index`; bit-identical to 0.5.3 / 0.2.4):
+- lobatto-fft: each mode tuple's compact-buffer offsets, coefficients and canonical entries are built once (`EngineND::mode_indices`, per-direction tables of the independent modes) and shared by the gather and the scatter; mass scaling per fibre along direction 0 (`mass_index` tables); `g` evaluated over `nd_multi_indices`. Gather + scatter alone 2.3 → 0.8 ms; full solve ×1.1–1.24 (5D r=4 mixed 16.9 → 14.9 ms).
+- lobatto-spectral: mass scaling and eigenvalue step per fibre along direction 0, ×1.05–1.15.
+
+What remains in the lobatto-fft per-mode step is mostly the small `r_d × r_d` products (~6 ms of ~14 ms, 5D r=4), close to compute-bound (~130 GFLOP/s with plain loops). Rejected: batching mode tuples along `k_0` (shared `V_{k_d}` for d ≥ 1) — too complex to maintain, bit-exactness would need hand-written products reproducing nalgebra's `dotc`/`gemv` summation order. Plain loops instead of nalgebra change rounding. Fewer-operation routes: realfft (item 2), real eigenvectors in Odd/Even directions (unchecked).
+
+### Trigonometric directions — done (2026-11-03, unpublished: lobatto-grid 0.1.8, lobatto-fft 0.5.5)
+
+Requested by Odeon (grid filter of `ode-observers`): periodic directions as trigonometric polynomials on equidistant points, bounded directions kept as Gauss–Lobatto elements. Design: `n ≥ 2` points `x_j = x_l + j·L/n` on `[x_l, x_l + L)`, modes `−⌊(n−1)/2⌋..=⌊n/2⌋`, Nyquist mode of an even `n` as a cosine (real data → real interpolant).
+- lobatto-grid: `NodeLayout { GaussLobatto (default), Equidistant }`, `Grid1D::trigonometric(n, l, xl)`, `layout()`, `local_count()`. An equidistant grid is **one element spanning the period** (`n() = 1`, `r() = n_dof() = local_count() = n`, `h() = L`, `Periodic`, weights `L/n`), so `EvalGeometry`, gather, `contract`, `EvalPlan` are shared; only `fill_phi`, `eval_at`, `EvalGeometry` counts and `derivative` branch on the layout.
+  - Interpolation: barycentric trigonometric formula (Henrici 1979, Berrut 1984), `κ = cot` (n even) / `csc` (n odd), from the nearest node with a `(cos, sin)(πm/n)` table (no cancellation near nodes); `O(n)` per point per equidistant direction.
+  - Derivative: realfft r2c → `ik_m` (Nyquist 0) → c2r, `O(n log n)`; `GridND::derivative` plans once per call with per-task buffers, `Grid1D::derivative` plans on every call (~0.5 µs, slower than the old dense `D` for `n ≤ 32`; a per-thread planner cache would remove it). Replaced the dense antisymmetric `D` (benchmark in `~/Claude/trig-deriv-realfft`: 1.2–330× on 1M-DOF `GridND`, more accurate at large `n`, 5e-13 vs 4e-11 at `n = 2048`). Same operator as the old `D` in exact arithmetic, so `W D + Dᵀ W = 0` (Odeon's skew-symmetric transport stability proof) is unaffected; only the matrix probed column by column is now antisymmetric to rounding instead of entry-for-entry (the computed `uᵀ W D u` was already rounding-level, not 0, with the dense `D`).
+- lobatto-fft: `Poisson::with_layout`, `PoissonND::with_layouts`, `Engine::trigonometric`, `EngineND::with_layouts` (`new` = all Gauss–Lobatto). An equidistant direction has `n·r` points and is the order-1 periodic HoFFT (plain DFT), mass `L/N`, the **true symbol** `μ_m = (2πm/L)²` with Nyquist included (not the eigenvalues of `D²`, which would leave Nyquist undamped); every solve/operator works unchanged through it, so `apply_mu_in_place_dir` is the Fourier multiplier. `Equidistant` requires `Periodic` (panics otherwise).
+  - Exact translation `u(x) ← u(x − c)`: `Poisson::shift_in_place(f, c)`, `PoissonND::shift_in_place_dir(d, f, c: &[f64])` (one shift per fibre, `nd_fiber_base` order), phase `e^{−ik_m c}`, Nyquist by its real part, equal to `convect` with `x_d ↦ x_d − c`. Shares the private `for_each_fibre` loop with `apply_mu_in_place_dir`.
+- Tests: `lobatto-grid/tests/trigonometric.rs` (cardinal property, exactness, DFT interpolant incl. points at/near nodes, derivative vs DFT, spectral convergence of `e^{sin θ}`, mixed 2D/3D plans and derivatives, constant shift = Fourier translation) and `lobatto-fft/tests/trigonometric.rs` (DFT engine, manufactured Fourier modes incl. Nyquist, mixed 3D vs shifted GL solve, directional multiplier, real data, shifts). Existing Gauss–Lobatto results bit-identical (reference tests).
+- Not done: lobatto-spectral (by decision). Publish lobatto-grid 0.1.8 first, then lobatto-fft 0.5.5, then drop the temporary `[patch.crates-io]`.
 
 ### Deferred / smaller items
 

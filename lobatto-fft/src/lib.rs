@@ -22,6 +22,12 @@
 //! | [`hofft`] | HoFFT transform engine: [`hofft::Engine`] (1D) and [`hofft::EngineND`] (ND).|
 //! | [`solver`] | Screened Poisson solvers: [`solver::Poisson`] (1D) and [`solver::PoissonND`] (ND). Supports `Periodic`, `Dirichlet`, and `Neumann` boundary conditions per direction. |
 //!
+//! A periodic direction may also be `n·r` equidistant points read as a
+//! trigonometric polynomial (`NodeLayout::Equidistant`, through
+//! [`solver::PoissonND::with_layouts`] / [`hofft::EngineND::with_layouts`]):
+//! its transform is a plain DFT and its eigenvalues the exact Fourier symbol
+//! `(2πm/L)²`, Nyquist included, mixed freely with Gauss–Lobatto directions.
+//!
 //! Grid geometry and interpolation (point evaluation, convection, precomputed
 //! evaluation plans) live in the [`lobatto_grid`] crate; engines and solvers
 //! expose the grid they are built on via their `grid()` accessors.
