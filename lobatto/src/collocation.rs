@@ -54,10 +54,8 @@
 //! [`CollocationBasis::weights`] returns the weights as a `Vec<f64>`;
 //! [`CollocationBasis::weights_matrix`] returns the weights as the diagonal of a full dense `N_dof × N_dof` matrix.
 
-use crate::quadrature::*;
-use crate::utilities::{
-    barycentric_weights, lagrangian_derivative_interpolation, lagrangian_interpolation,
-};
+use crate::tables::{derivative_matrix_dyn, interpolation_row, points_weights_dyn};
+use crate::utilities::barycentric_weights;
 use nalgebra::*;
 use rayon::prelude::*;
 
@@ -109,6 +107,10 @@ pub struct CollocationBasis {
 
     /// 1D quadrature nodes on `[0, 1]`, one vector per direction.
     points_1d: Vec<Vec<f64>>,
+
+    /// Barycentric weights of the 1D nodes, one vector per direction
+    /// (used by [`CollocationBasis::eval`]).
+    bary_1d: Vec<Vec<f64>>,
 
     /// Tensor-product quadrature weights (one per flat DOF index).
     weights: Vec<f64>,
@@ -175,31 +177,18 @@ impl CollocationBasis {
 
         let mut weights_1d = vec![vec![1.0]; n];
         let mut points_1d = vec![vec![0.5]; n];
+        let mut bary_1d = vec![vec![1.0]; n];
         let mut diff_matrices = vec![DMatrix::<f64>::zeros(1, 1); n];
         let mut diff_matrices_t = vec![DMatrix::<f64>::zeros(1, 1); n];
 
         for k in 0..n {
-            assert!(
-                (basis[k].0 > 1 && basis[k].1 == Gauss::Lobatto)
-                    || (basis[k].0 > 0 && basis[k].1 == Gauss::Legendre),
-                "not enough points to define the quadrature rule"
-            );
-
-            if basis[k].1 == Gauss::Lobatto {
-                (points_1d[k], weights_1d[k]) = gauss_lobatto_on_unit_interval(basis[k].0);
-            } else {
-                (points_1d[k], weights_1d[k]) = gauss_legendre_on_unit_interval(basis[k].0);
-            }
-
-            diff_matrices[k].resize_mut(basis[k].0, basis[k].0, 0.0);
+            // Panics if there are too few points for the family.
+            (points_1d[k], weights_1d[k]) = points_weights_dyn(basis[k].0, basis[k].1);
+            bary_1d[k] = barycentric_weights(&points_1d[k]);
 
             // D_{ji} = L_i'(ξ_j)
-            for i in 0..basis[k].0 {
-                for j in 0..basis[k].0 {
-                    diff_matrices[k][(j, i)] =
-                        lagrangian_derivative_interpolation(&points_1d[k], points_1d[k][j], i);
-                }
-            }
+            let d = derivative_matrix_dyn(&points_1d[k], &points_1d[k]);
+            diff_matrices[k] = DMatrix::from_fn(basis[k].0, basis[k].0, |j, i| d[j][i]);
 
             diff_matrices_t[k] = diff_matrices[k].transpose();
         }
@@ -248,6 +237,7 @@ impl CollocationBasis {
             basis,
             weights_1d,
             points_1d,
+            bary_1d,
             weights,
             points,
             diff_matrices,
@@ -418,6 +408,9 @@ impl CollocationBasis {
     /// Each query point must have `d` coordinates. Uses sum factorisation:
     /// $$u_h(\xi) = \sum_{j_0,\ldots,j_{d-1}} u_{j_0,\ldots,j_{d-1}}
     ///              \prod_{k=0}^{d-1} L^{(k)}_{j_k}(\xi^{(k)})$$
+    /// A coordinate equal to a node (bit for bit) gives the exact unit basis
+    /// vector in that direction, so the interpolant is exact at the collocation
+    /// points.
     ///
     /// # Panics
     /// Panics if any coordinate lies outside `[0, 1]`.
@@ -444,7 +437,8 @@ impl CollocationBasis {
             .map(|x| {
                 assert_eq!(x.len(), ndim, "point dimension mismatch");
 
-                // Per-direction Lagrange basis values via barycentric interpolation.
+                // Per-direction Lagrange basis values via barycentric interpolation
+                // (exact unit vector when x[d] is a node).
                 let phi: Vec<Vec<f64>> = (0..ndim)
                     .map(|d| {
                         assert!(
@@ -452,8 +446,9 @@ impl CollocationBasis {
                             "x[{d}] = {} is outside [0, 1]",
                             x[d]
                         );
-                        let bary = barycentric_weights(&self.points_1d[d]);
-                        lagrangian_interpolation(&self.points_1d[d], &bary, x[d])
+                        let mut row = vec![0.0; self.points_1d[d].len()];
+                        interpolation_row(&self.points_1d[d], &self.bary_1d[d], x[d], &mut row);
+                        row
                     })
                     .collect();
 

@@ -1,5 +1,7 @@
 use lobatto::collocation::*;
 use lobatto::collocation_hc::*;
+use lobatto::quadrature::gauss_lobatto_on_unit_interval;
+use lobatto::utilities::lagrangian_derivative_interpolation;
 
 /// Xorshift64 with a fixed seed — same sequence as benchmarks.
 fn seeded_vec(n: usize) -> Vec<f64> {
@@ -1107,4 +1109,124 @@ fn test_dz_q666_q666_batch() {
     let v_out_aos = soa_to_aos(&v_out_soa, N, 49, 7);
 
     assert_close(&v_out_aos, &ref_out, 1e-10);
+}
+
+// ── Generic-order kernels (any NP) ─────────────────────────────────────
+//
+// Every generic operator is checked against `CollocationBasis` for
+// NP = 2..9 and batch sizes N = 1, 4, 8, and against the hardcoded kernels
+// for a few Q4/Q6 cases. The tolerance is relative to the largest reference
+// value, since derivative magnitudes grow like NP².
+
+/// D[j][i] = L_i'(ξ_j) on the GLL nodes of [0, 1].
+fn gll_diff_matrix<const NP: usize>() -> [[f64; NP]; NP] {
+    let (x, _) = gauss_lobatto_on_unit_interval(NP);
+    core::array::from_fn(|j| {
+        core::array::from_fn(|i| lagrangian_derivative_interpolation(&x, x[j], i))
+    })
+}
+
+fn assert_close_rel(a: &[f64], b: &[f64], tol: f64, what: &str) {
+    assert_eq!(a.len(), b.len());
+    let scale = b.iter().fold(1.0_f64, |m, v| m.max(v.abs()));
+    for (i, (x, y)) in a.iter().zip(b).enumerate() {
+        assert!(
+            (x - y).abs() <= tol * scale,
+            "{what} index {i}: gen={x:.15e}  ref={y:.15e}  |diff|={:.3e}",
+            (x - y).abs()
+        );
+    }
+}
+
+type GenericOp<const NP: usize> = fn(&[[f64; NP]; NP], &[f64], &mut [f64]);
+
+fn check_generic<const NP: usize, const N: usize>(
+    dim: usize,
+    dir: usize,
+    transpose: bool,
+    op: GenericOp<NP>,
+) {
+    let d = gll_diff_matrix::<NP>();
+    let dofs = NP.pow(dim as u32);
+    let gle = CollocationBasis::new(vec![(NP, Gauss::Lobatto); dim]);
+    let v_in_aos = seeded_vec(N * dofs);
+    let ref_aos = if transpose {
+        gll_t_batch_ref(&v_in_aos, N, dofs, dir, &gle)
+    } else {
+        gll_batch_ref(&v_in_aos, N, dofs, dir, &gle)
+    };
+
+    let mut v_out_soa = vec![f64::NAN; N * dofs];
+    op(&d, &aos_to_soa(&v_in_aos, N, dofs, 1), &mut v_out_soa);
+    assert_close_rel(
+        &soa_to_aos(&v_out_soa, N, dofs, 1),
+        &ref_aos,
+        1e-12,
+        &format!("NP={NP} N={N} dim={dim} dir={dir} transpose={transpose}"),
+    );
+}
+
+fn check_all_generic<const NP: usize, const N: usize>() {
+    check_generic::<NP, N>(1, 0, false, dx_qn_qn::<NP, N>);
+    check_generic::<NP, N>(2, 0, false, dx_qnn_qnn::<NP, N>);
+    check_generic::<NP, N>(2, 1, false, dy_qnn_qnn::<NP, N>);
+    check_generic::<NP, N>(3, 0, false, dx_qnnn_qnnn::<NP, N>);
+    check_generic::<NP, N>(3, 1, false, dy_qnnn_qnnn::<NP, N>);
+    check_generic::<NP, N>(3, 2, false, dz_qnnn_qnnn::<NP, N>);
+    check_generic::<NP, N>(1, 0, true, dx_t_qn_qn::<NP, N>);
+    check_generic::<NP, N>(2, 0, true, dx_t_qnn_qnn::<NP, N>);
+    check_generic::<NP, N>(2, 1, true, dy_t_qnn_qnn::<NP, N>);
+    check_generic::<NP, N>(3, 0, true, dx_t_qnnn_qnnn::<NP, N>);
+    check_generic::<NP, N>(3, 1, true, dy_t_qnnn_qnnn::<NP, N>);
+    check_generic::<NP, N>(3, 2, true, dz_t_qnnn_qnnn::<NP, N>);
+}
+
+macro_rules! generic_order_tests {
+    ($($np:literal => $name:ident),* $(,)?) => {$(
+        #[test]
+        fn $name() {
+            check_all_generic::<$np, 1>();
+            check_all_generic::<$np, 4>();
+            check_all_generic::<$np, 8>();
+        }
+    )*};
+}
+
+generic_order_tests!(
+    2 => test_generic_np2,
+    3 => test_generic_np3,
+    4 => test_generic_np4,
+    5 => test_generic_np5,
+    6 => test_generic_np6,
+    7 => test_generic_np7,
+    8 => test_generic_np8,
+    9 => test_generic_np9,
+);
+
+#[test]
+fn test_generic_vs_hardcoded_q444() {
+    const N: usize = 8;
+    let d = gll_diff_matrix::<5>();
+    let v = seeded_vec(125 * N);
+    let (mut a, mut b) = (vec![0.0; 125 * N], vec![0.0; 125 * N]);
+    dz_qnnn_qnnn::<5, N>(&d, &v, &mut a);
+    dz_q444_q444::<N>(&v, &mut b);
+    assert_close_rel(&a, &b, 1e-13, "dz q444");
+    dy_t_qnnn_qnnn::<5, N>(&d, &v, &mut a);
+    dy_t_q444_q444::<N>(&v, &mut b);
+    assert_close_rel(&a, &b, 1e-13, "dy_t q444");
+}
+
+#[test]
+fn test_generic_vs_hardcoded_q666() {
+    const N: usize = 4;
+    let d = gll_diff_matrix::<7>();
+    let v = seeded_vec(343 * N);
+    let (mut a, mut b) = (vec![0.0; 343 * N], vec![0.0; 343 * N]);
+    dx_qnnn_qnnn::<7, N>(&d, &v, &mut a);
+    dx_q666_q666::<N>(&v, &mut b);
+    assert_close_rel(&a, &b, 1e-13, "dx q666");
+    dz_t_qnnn_qnnn::<7, N>(&d, &v, &mut a);
+    dz_t_q666_q666::<N>(&v, &mut b);
+    assert_close_rel(&a, &b, 1e-13, "dz_t q666");
 }

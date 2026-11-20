@@ -1,4 +1,5 @@
-//! Hardcoded SIMD-friendly operations for Q3–Q6 elements in dimension up to 3.
+//! Hardcoded SIMD-friendly operations for Q3–Q6 elements in dimension up to 3,
+//! plus a generic-order fallback.
 //!
 //! Each operator applies the 1D spectral differentiation matrix **D** to a
 //! batch of `N` elements simultaneously, exploiting the antisymmetry of the
@@ -9,6 +10,18 @@
 //! For a batch of `N` elements, node `g` of element `e` is stored at index
 //! `g*M*N + e`, where `M` is the stride between consecutive nodes in the
 //! chosen direction.
+//!
+//! The generic operators (`dx_qn_qn`, `dx_qnn_qnn`, …, `dz_t_qnnn_qnnn`) use
+//! the same layout for any number of nodes `NP` and take the matrix
+//! `d[j][i] = L_i'(ξ_j)` (GLL nodes on `[0, 1]`) as an argument. They do not
+//! exploit antisymmetry and are roughly 1.3–1.5× slower than the hardcoded
+//! Q3–Q6 kernels, which should be preferred when available.
+//!
+//! The generic rectangular operators (`dx_qn_qm`, `dx_qnn_qmn`, …,
+//! `dz_t_qnnm_qnnn`) map `NI` points to `NO` points along one direction with
+//! any matrix `m[j][i]` (interpolation or differentiation between two point
+//! sets, see [`crate::tables`]), on possibly anisotropic shapes. The square
+//! generic kernels are their case `NI = NO`, `m = d`; both share one core.
 
 #![allow(clippy::excessive_precision)]
 
@@ -979,4 +992,263 @@ pub fn dz_t_q666_q666<const N: usize>(input: &[f64], output: &mut [f64]) {
             );
         }
     }
+}
+
+// ============================================================================
+// Generic order  (NP nodes, degree NP-1)
+// ============================================================================
+
+// Shared core of the generic kernels, square and rectangular: `m` (or `mᵀ`)
+// applied along one direction, on the batched layout of the hardcoded kernels
+// (node `g` of element `e` at `g*M*N + e`). The square kernels below are the
+// case `NI = NO = NP`, `m = d` (`d[j][i] = L_i'(ξ_j)` on the GLL nodes of
+// `[0, 1]`).
+
+/// Applies `m` (or `mᵀ` when `T = true`) to one fibre of a batch of `N` elements.
+///
+/// Forward: reads `NI` points at stride `s` (in `f64`), writes `NO` points,
+/// $\text{out}_j = \sum_i m_{ji}\,\text{in}_i$. Transpose: reads `NO` points,
+/// writes `NI` points, $\text{out}_i = \sum_j m_{ji}\,\text{in}_j$. The sum
+/// runs over the input index in increasing order, starting from `0.0`.
+#[inline(always)]
+fn _fibre<const NI: usize, const NO: usize, const N: usize, const T: bool>(
+    m: &[[f64; NI]; NO],
+    s: usize,
+    input: &[f64],
+    output: &mut [f64],
+) {
+    if !T {
+        let x: [&[f64; N]; NI] = core::array::from_fn(|i| input[i * s..i * s + N].try_into().unwrap());
+        for j in 0..NO {
+            let mut acc = [0.0_f64; N];
+            for i in 0..NI {
+                let c = m[j][i];
+                for e in 0..N {
+                    acc[e] += c * x[i][e];
+                }
+            }
+            output[j * s..j * s + N].copy_from_slice(&acc);
+        }
+    } else {
+        let x: [&[f64; N]; NO] = core::array::from_fn(|j| input[j * s..j * s + N].try_into().unwrap());
+        for i in 0..NI {
+            let mut acc = [0.0_f64; N];
+            for j in 0..NO {
+                let c = m[j][i];
+                for e in 0..N {
+                    acc[e] += c * x[j][e];
+                }
+            }
+            output[i * s..i * s + N].copy_from_slice(&acc);
+        }
+    }
+}
+
+/// Sweeps every fibre of one direction.
+///
+/// The swept direction has `n_in` points in the faster directions (product of
+/// their counts) and `n_out` in the slower ones. Point `(a, g, b)`, with `g`
+/// the index along the swept direction, is at `(a + n_in·(g + n_g·b))·N + lane`.
+/// The public wrappers pass `n_in`, `n_out` computed from const parameters;
+/// once inlined, every loop bound is a compile-time constant, which matters
+/// for small elements (up to 2× against runtime bounds, `NP ≤ 5`, `N = 4`).
+#[inline(always)]
+fn _sweep<const NI: usize, const NO: usize, const N: usize, const T: bool>(
+    m: &[[f64; NI]; NO],
+    n_in: usize,
+    n_out: usize,
+    input: &[f64],
+    output: &mut [f64],
+) {
+    let (g_in, g_out) = if T { (NO, NI) } else { (NI, NO) };
+    let s = n_in * N;
+    for b in 0..n_out {
+        for a in 0..n_in {
+            let ib = (a + n_in * g_in * b) * N;
+            let ob = (a + n_in * g_out * b) * N;
+            _fibre::<NI, NO, N, T>(m, s, &input[ib..], &mut output[ob..]);
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Generic  —  public (1D / 2D / 3D)
+// ----------------------------------------------------------------------------
+
+/// x-derivative on a batch of N generic 1D elements (NP*N dofs).
+pub fn dx_qn_qn<const NP: usize, const N: usize>(d: &[[f64; NP]; NP], input: &[f64], output: &mut [f64]) {
+    _sweep::<NP, NP, N, false>(d, 1, 1, input, output);
+}
+
+/// x-derivative on a batch of N generic 2D elements (NP²*N dofs).
+pub fn dx_qnn_qnn<const NP: usize, const N: usize>(d: &[[f64; NP]; NP], input: &[f64], output: &mut [f64]) {
+    _sweep::<NP, NP, N, false>(d, 1, NP, input, output);
+}
+
+/// y-derivative on a batch of N generic 2D elements (NP²*N dofs).
+pub fn dy_qnn_qnn<const NP: usize, const N: usize>(d: &[[f64; NP]; NP], input: &[f64], output: &mut [f64]) {
+    _sweep::<NP, NP, N, false>(d, NP, 1, input, output);
+}
+
+/// x-derivative on a batch of N generic 3D elements (NP³*N dofs).
+pub fn dx_qnnn_qnnn<const NP: usize, const N: usize>(d: &[[f64; NP]; NP], input: &[f64], output: &mut [f64]) {
+    _sweep::<NP, NP, N, false>(d, 1, NP * NP, input, output);
+}
+
+/// y-derivative on a batch of N generic 3D elements (NP³*N dofs).
+pub fn dy_qnnn_qnnn<const NP: usize, const N: usize>(d: &[[f64; NP]; NP], input: &[f64], output: &mut [f64]) {
+    _sweep::<NP, NP, N, false>(d, NP, NP, input, output);
+}
+
+/// z-derivative on a batch of N generic 3D elements (NP³*N dofs).
+pub fn dz_qnnn_qnnn<const NP: usize, const N: usize>(d: &[[f64; NP]; NP], input: &[f64], output: &mut [f64]) {
+    _sweep::<NP, NP, N, false>(d, NP * NP, 1, input, output);
+}
+
+// ----------------------------------------------------------------------------
+// Generic  —  public transpose (1D / 2D / 3D)
+// ----------------------------------------------------------------------------
+
+/// x-transpose-derivative on a batch of N generic 1D elements (NP*N dofs).
+pub fn dx_t_qn_qn<const NP: usize, const N: usize>(d: &[[f64; NP]; NP], input: &[f64], output: &mut [f64]) {
+    _sweep::<NP, NP, N, true>(d, 1, 1, input, output);
+}
+
+/// x-transpose-derivative on a batch of N generic 2D elements (NP²*N dofs).
+pub fn dx_t_qnn_qnn<const NP: usize, const N: usize>(d: &[[f64; NP]; NP], input: &[f64], output: &mut [f64]) {
+    _sweep::<NP, NP, N, true>(d, 1, NP, input, output);
+}
+
+/// y-transpose-derivative on a batch of N generic 2D elements (NP²*N dofs).
+pub fn dy_t_qnn_qnn<const NP: usize, const N: usize>(d: &[[f64; NP]; NP], input: &[f64], output: &mut [f64]) {
+    _sweep::<NP, NP, N, true>(d, NP, 1, input, output);
+}
+
+/// x-transpose-derivative on a batch of N generic 3D elements (NP³*N dofs).
+pub fn dx_t_qnnn_qnnn<const NP: usize, const N: usize>(d: &[[f64; NP]; NP], input: &[f64], output: &mut [f64]) {
+    _sweep::<NP, NP, N, true>(d, 1, NP * NP, input, output);
+}
+
+/// y-transpose-derivative on a batch of N generic 3D elements (NP³*N dofs).
+pub fn dy_t_qnnn_qnnn<const NP: usize, const N: usize>(d: &[[f64; NP]; NP], input: &[f64], output: &mut [f64]) {
+    _sweep::<NP, NP, N, true>(d, NP, NP, input, output);
+}
+
+/// z-transpose-derivative on a batch of N generic 3D elements (NP³*N dofs).
+pub fn dz_t_qnnn_qnnn<const NP: usize, const N: usize>(d: &[[f64; NP]; NP], input: &[f64], output: &mut [f64]) {
+    _sweep::<NP, NP, N, true>(d, NP * NP, 1, input, output);
+}
+
+// ----------------------------------------------------------------------------
+// Generic rectangular  —  public (1D / 2D / 3D), NI points -> NO points
+// ----------------------------------------------------------------------------
+//
+// `m: &[[f64; NI]; NO]`, `m[j][i]`, maps `NI` points to `NO` points along the
+// direction named by the prefix (`dx`, `dy`, `dz`); the counts of the other
+// directions are const parameters (`NX`, `NY`, `NZ`), so shapes may be
+// anisotropic. The suffix reads input shape, output shape: the letter that
+// changes (`n` → `m`) is the swept direction. The operator is whatever `m` is:
+// an interpolation matrix or a differentiation matrix (see [`crate::tables`]).
+// Same batched layout as the kernels above (node `g` of lane `e` at
+// `g·N + e`, `g` lexicographic, x fastest); the output is overwritten.
+// The `_t_` variants apply `mᵀ`: input `NO` points, output `NI` points.
+
+/// 1D: `NI` → `NO` points (`m` applied on a batch of `N` elements).
+pub fn dx_qn_qm<const NI: usize, const NO: usize, const N: usize>(m: &[[f64; NI]; NO], input: &[f64], output: &mut [f64]) {
+    _sweep::<NI, NO, N, false>(m, 1, 1, input, output);
+}
+
+/// 1D transpose: `NO` → `NI` points (`mᵀ`).
+pub fn dx_t_qm_qn<const NI: usize, const NO: usize, const N: usize>(m: &[[f64; NI]; NO], input: &[f64], output: &mut [f64]) {
+    _sweep::<NI, NO, N, true>(m, 1, 1, input, output);
+}
+
+/// 2D along x: `(NI, NY)` → `(NO, NY)`.
+pub fn dx_qnn_qmn<const NI: usize, const NO: usize, const NY: usize, const N: usize>(
+    m: &[[f64; NI]; NO],
+    input: &[f64],
+    output: &mut [f64],
+) {
+    _sweep::<NI, NO, N, false>(m, 1, NY, input, output);
+}
+
+/// 2D along y: `(NX, NI)` → `(NX, NO)`.
+pub fn dy_qnn_qnm<const NI: usize, const NO: usize, const NX: usize, const N: usize>(
+    m: &[[f64; NI]; NO],
+    input: &[f64],
+    output: &mut [f64],
+) {
+    _sweep::<NI, NO, N, false>(m, NX, 1, input, output);
+}
+
+/// 2D transpose along x: `(NO, NY)` → `(NI, NY)`.
+pub fn dx_t_qmn_qnn<const NI: usize, const NO: usize, const NY: usize, const N: usize>(
+    m: &[[f64; NI]; NO],
+    input: &[f64],
+    output: &mut [f64],
+) {
+    _sweep::<NI, NO, N, true>(m, 1, NY, input, output);
+}
+
+/// 2D transpose along y: `(NX, NO)` → `(NX, NI)`.
+pub fn dy_t_qnm_qnn<const NI: usize, const NO: usize, const NX: usize, const N: usize>(
+    m: &[[f64; NI]; NO],
+    input: &[f64],
+    output: &mut [f64],
+) {
+    _sweep::<NI, NO, N, true>(m, NX, 1, input, output);
+}
+
+/// 3D along x: `(NI, NY, NZ)` → `(NO, NY, NZ)`.
+pub fn dx_qnnn_qmnn<const NI: usize, const NO: usize, const NY: usize, const NZ: usize, const N: usize>(
+    m: &[[f64; NI]; NO],
+    input: &[f64],
+    output: &mut [f64],
+) {
+    _sweep::<NI, NO, N, false>(m, 1, NY * NZ, input, output);
+}
+
+/// 3D along y: `(NX, NI, NZ)` → `(NX, NO, NZ)`.
+pub fn dy_qnnn_qnmn<const NI: usize, const NO: usize, const NX: usize, const NZ: usize, const N: usize>(
+    m: &[[f64; NI]; NO],
+    input: &[f64],
+    output: &mut [f64],
+) {
+    _sweep::<NI, NO, N, false>(m, NX, NZ, input, output);
+}
+
+/// 3D along z: `(NX, NY, NI)` → `(NX, NY, NO)`.
+pub fn dz_qnnn_qnnm<const NI: usize, const NO: usize, const NX: usize, const NY: usize, const N: usize>(
+    m: &[[f64; NI]; NO],
+    input: &[f64],
+    output: &mut [f64],
+) {
+    _sweep::<NI, NO, N, false>(m, NX * NY, 1, input, output);
+}
+
+/// 3D transpose along x: `(NO, NY, NZ)` → `(NI, NY, NZ)`.
+pub fn dx_t_qmnn_qnnn<const NI: usize, const NO: usize, const NY: usize, const NZ: usize, const N: usize>(
+    m: &[[f64; NI]; NO],
+    input: &[f64],
+    output: &mut [f64],
+) {
+    _sweep::<NI, NO, N, true>(m, 1, NY * NZ, input, output);
+}
+
+/// 3D transpose along y: `(NX, NO, NZ)` → `(NX, NI, NZ)`.
+pub fn dy_t_qnmn_qnnn<const NI: usize, const NO: usize, const NX: usize, const NZ: usize, const N: usize>(
+    m: &[[f64; NI]; NO],
+    input: &[f64],
+    output: &mut [f64],
+) {
+    _sweep::<NI, NO, N, true>(m, NX, NZ, input, output);
+}
+
+/// 3D transpose along z: `(NX, NY, NO)` → `(NX, NY, NI)`.
+pub fn dz_t_qnnm_qnnn<const NI: usize, const NO: usize, const NX: usize, const NY: usize, const N: usize>(
+    m: &[[f64; NI]; NO],
+    input: &[f64],
+    output: &mut [f64],
+) {
+    _sweep::<NI, NO, N, true>(m, NX * NY, 1, input, output);
 }

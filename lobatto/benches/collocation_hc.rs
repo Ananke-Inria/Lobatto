@@ -3,6 +3,9 @@ use std::hint::black_box;
 
 use lobatto::collocation::*;
 use lobatto::collocation_hc::*;
+use lobatto::quadrature::gauss_lobatto_on_unit_interval;
+use lobatto::utilities::lagrangian_derivative_interpolation;
+use std::time::Duration;
 
 /// Xorshift64 with a fixed seed — produces the same sequence every run,
 /// no external crate required.
@@ -665,6 +668,100 @@ fn bench_eval(c: &mut Criterion) {
     group.finish();
 }
 
+// ── Generic-order kernels ──────────────────────────────────────────────
+
+/// D[j][i] = L_i'(ξ_j) on the GLL nodes of [0, 1].
+fn gll_diff_matrix<const NP: usize>() -> [[f64; NP]; NP] {
+    let (x, _) = gauss_lobatto_on_unit_interval(NP);
+    core::array::from_fn(|j| {
+        core::array::from_fn(|i| lagrangian_derivative_interpolation(&x, x[j], i))
+    })
+}
+
+// Generic vs hardcoded 3D kernels, NP = 4..7 nodes, batch N = 4, 8.
+// dx (stride 1), dz (stride NP², runtime in the generic kernel) and dz_t.
+fn bench_generic_vs_hc_3d(c: &mut Criterion) {
+    let mut group = c.benchmark_group("generic_vs_hc_3d");
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
+
+    macro_rules! bench_np_n {
+        ($np:literal, $n:literal, $dx:ident, $dz:ident, $dz_t:ident) => {{
+            let dofs = $np * $np * $np * $n;
+            group.throughput(Throughput::Elements(dofs as u64));
+            let d = gll_diff_matrix::<$np>();
+            let v_in = seeded_vec(dofs);
+            let mut v_out = vec![0.0_f64; dofs];
+            let p = format!("np{}_n{}", $np, $n);
+            group.bench_function(BenchmarkId::new("hc_dx", &p), |b| {
+                b.iter(|| $dx::<$n>(black_box(&v_in), &mut v_out))
+            });
+            group.bench_function(BenchmarkId::new("generic_dx", &p), |b| {
+                b.iter(|| dx_qnnn_qnnn::<$np, $n>(black_box(&d), black_box(&v_in), &mut v_out))
+            });
+            group.bench_function(BenchmarkId::new("hc_dz", &p), |b| {
+                b.iter(|| $dz::<$n>(black_box(&v_in), &mut v_out))
+            });
+            group.bench_function(BenchmarkId::new("generic_dz", &p), |b| {
+                b.iter(|| dz_qnnn_qnnn::<$np, $n>(black_box(&d), black_box(&v_in), &mut v_out))
+            });
+            group.bench_function(BenchmarkId::new("hc_dz_t", &p), |b| {
+                b.iter(|| $dz_t::<$n>(black_box(&v_in), &mut v_out))
+            });
+            group.bench_function(BenchmarkId::new("generic_dz_t", &p), |b| {
+                b.iter(|| dz_t_qnnn_qnnn::<$np, $n>(black_box(&d), black_box(&v_in), &mut v_out))
+            });
+        }};
+    }
+
+    bench_np_n!(4, 4, dx_q333_q333, dz_q333_q333, dz_t_q333_q333);
+    bench_np_n!(4, 8, dx_q333_q333, dz_q333_q333, dz_t_q333_q333);
+    bench_np_n!(5, 4, dx_q444_q444, dz_q444_q444, dz_t_q444_q444);
+    bench_np_n!(5, 8, dx_q444_q444, dz_q444_q444, dz_t_q444_q444);
+    bench_np_n!(6, 4, dx_q555_q555, dz_q555_q555, dz_t_q555_q555);
+    bench_np_n!(6, 8, dx_q555_q555, dz_q555_q555, dz_t_q555_q555);
+    bench_np_n!(7, 4, dx_q666_q666, dz_q666_q666, dz_t_q666_q666);
+    bench_np_n!(7, 8, dx_q666_q666, dz_q666_q666, dz_t_q666_q666);
+
+    group.finish();
+}
+
+// Generic 3D kernels for the orders without a hardcoded version
+// (NP = 2, 3, 8, 9 nodes), batch N = 4, 8.
+fn bench_generic_3d(c: &mut Criterion) {
+    let mut group = c.benchmark_group("generic_3d");
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
+
+    macro_rules! bench_np_n {
+        ($np:literal, $n:literal) => {{
+            let dofs = $np * $np * $np * $n;
+            group.throughput(Throughput::Elements(dofs as u64));
+            let d = gll_diff_matrix::<$np>();
+            let v_in = seeded_vec(dofs);
+            let mut v_out = vec![0.0_f64; dofs];
+            let p = format!("np{}_n{}", $np, $n);
+            group.bench_function(BenchmarkId::new("dx", &p), |b| {
+                b.iter(|| dx_qnnn_qnnn::<$np, $n>(black_box(&d), black_box(&v_in), &mut v_out))
+            });
+            group.bench_function(BenchmarkId::new("dz_t", &p), |b| {
+                b.iter(|| dz_t_qnnn_qnnn::<$np, $n>(black_box(&d), black_box(&v_in), &mut v_out))
+            });
+        }};
+    }
+
+    bench_np_n!(2, 4);
+    bench_np_n!(2, 8);
+    bench_np_n!(3, 4);
+    bench_np_n!(3, 8);
+    bench_np_n!(8, 4);
+    bench_np_n!(8, 8);
+    bench_np_n!(9, 4);
+    bench_np_n!(9, 8);
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_dx_q3,
@@ -684,5 +781,7 @@ criterion_group!(
     bench_dx_t_q6,
     bench_dx_t_q66,
     bench_eval,
+    bench_generic_vs_hc_3d,
+    bench_generic_3d,
 );
 criterion_main!(benches);

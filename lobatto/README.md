@@ -9,7 +9,8 @@ Gauss–Lobatto and Gauss–Legendre quadrature, tensor-product Lagrangian collo
 | `quadrature` | GL and GLL nodes and weights on `[-1, 1]` and `[0, 1]` |
 | `quadrature_hc` | Hard-coded GLL nodes and weights for n = 2..14, certified to 1e-15 |
 | `collocation` | Multi-dimensional tensor-product collocation basis (quadrature, differentiation, interpolation) |
-| `collocation_hc` | Hard-coded SIMD-friendly differentiation kernels for Q3–Q6 elements in up to 3D |
+| `collocation_hc` | Hard-coded SIMD-friendly differentiation kernels for Q3–Q6 elements in up to 3D, plus generic-order square and rectangular (`NI → NO` points, anisotropic shapes) fallbacks with the same batched layout |
+| `tables` | 1D points, weights, interpolation and differentiation matrices between GL/GLL point sets, as fixed-size arrays |
 | `utilities` | Lagrange interpolation in barycentric form |
 
 ## Usage
