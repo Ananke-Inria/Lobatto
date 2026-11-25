@@ -14,7 +14,6 @@ Rust workspace for Gauss–Lobatto spectral-element numerics.
 
 Conventions:
 - Crates are published to crates.io individually with **version-only dependencies** between them (no path deps): publish the upstream crate first, then bump the requirement downstream.
-- Temporary: the root `Cargo.toml` has `[patch.crates-io] lobatto-grid = { path = "lobatto-grid" }` so lobatto-lowrank builds against the unpublished lobatto-grid 0.1.9; remove it once 0.1.9 is on crates.io.
 - Zero clippy warnings (`cargo clippy --benches --tests`); tests in release mode (`cargo test --release`).
 - Benches (all in lobatto-grid): `cargo bench --bench interp` (interpolation/convection), `--bench fft_solver` and `--bench spectral_solver` (solves; the files were `solver.rs` in the two former crates, group names unchanged). Criterion group names are stable identifiers — renaming them discards baseline history. The saved baselines of the former `lobatto-fft/target/criterion` were deleted during the merge (2026-11-25).
 
@@ -25,12 +24,12 @@ Doc-comment math (KaTeX renders on docs.rs via each crate's `katex.html`; hover/
 - Preview locally with `RUSTDOCFLAGS="--html-in-header $(pwd)/katex.html" cargo doc --no-deps` from the workspace root (plain `cargo doc` shows raw LaTeX — the docs.rs header flag is not applied locally).
 - The `katex.html` copies (workspace root, `doc/`, one per crate for packaging) must stay identical — a KaTeX version bump touches all of them.
 
-### Merge of lobatto-fft and lobatto-spectral into lobatto-grid — done (2026-11-25, unpublished: lobatto-grid 0.1.9)
+### Merge of lobatto-fft and lobatto-spectral into lobatto-grid — done (2026-11-25, published: lobatto-grid 0.1.9)
 
 - Modules `lobatto_grid::fft` and `lobatto_grid::spectral` behind the features `fft` (`dep:rustfft`, `dep:nalgebra`) and `spectral` (`dep:nalgebra`), both in `default`; with `default-features = false` only grid + interpolation compile. The grid API is unchanged, hence 0.1.9.
 - Files moved with `git mv` (history kept): sources to `src/fft/`, `src/spectral/`; tests, benches, examples and `tests/data` prefixed `fft_` / `spectral_`; test files gated with `#![cfg(feature = …)]`, benches and examples with `required-features`; the spectral test `agrees_with_lobatto_fft` needs both features.
 - Inside the modules `lobatto_grid::` became `crate::`; in tests, benches, examples and doctests `lobatto_fft::` / `lobatto_spectral::` became `lobatto_grid::fft::` / `lobatto_grid::spectral::`. No formatting change (this workspace is not rustfmt-formatted).
-- The crates `lobatto-fft` and `lobatto-spectral` were deleted from crates.io (2026-11-25).
+- The crates `lobatto-fft` and `lobatto-spectral` were deleted from crates.io (2026-11-25). The repository was made public the same day; the temporary `[patch.crates-io]` was removed after publishing.
 - Checks: 305 tests (all features), 107 (`fft` only), 73 (`spectral` only), clippy and `cargo doc -D warnings` clean.
 
 ## TODO

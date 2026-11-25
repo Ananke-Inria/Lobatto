@@ -706,12 +706,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "lobatto-grid"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f65d7fbef7bf387b1978e7514fe92966bdedf394e13d94dcf886ac72bb22dcb4"
+dependencies = [
+ "lobatto 0.1.3",
+ "nalgebra",
+ "rayon",
+ "realfft",
+ "rustfft",
+]
+
+[[package]]
 name = "lobatto-lowrank"
 version = "0.3.3"
 dependencies = [
  "criterion",
  "faer",
- "lobatto-grid",
+ "lobatto-grid 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "nalgebra",
  "rayon",
 ]
