@@ -4,7 +4,7 @@ version = "0.3.3"
 edition = "2021"
 description = "Low-rank sums of products of fields on two Gauss-Lobatto grids, with weighted QR/SVD compression."
 license = "LGPL-3.0-only"
-repository = "https://github.com/OndoMathX/QuadratiX/tree/main/lobatto-lowrank"
+repository = "https://github.com/Ananke-Inria/Lobatto/tree/main/lobatto-lowrank"
 keywords = ["gauss-lobatto", "low-rank", "svd", "tensor-product"]
 categories = ["mathematics", "science"]
 

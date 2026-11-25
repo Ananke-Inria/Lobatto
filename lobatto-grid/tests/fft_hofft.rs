@@ -1,4 +1,5 @@
-use lobatto_fft::hofft::*;
+#![cfg(feature = "fft")]
+use lobatto_grid::fft::hofft::*;
 use nalgebra::Complex;
 use std::f64::consts::PI;
 

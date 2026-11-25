@@ -2,7 +2,7 @@
 //!
 //! Provides [`Poisson`] and [`PoissonND`], which solve
 //! $(\alpha M + \beta K)\, u = f$ on tensor-product Gauss-Lobatto grids using
-//! the HoFFT transform machinery from [`crate::hofft`].
+//! the HoFFT transform machinery from [`crate::fft::hofft`].
 //!
 //! The coefficients $\alpha$ and $\beta$ are **per-call parameters** of the
 //! solves, not of the solver: nothing precomputed depends on them, so one
@@ -27,7 +27,7 @@
 //! Non-periodic BCs are handled by extending the `n`-element physical domain to a
 //! `2n`-element periodic domain with odd (Dirichlet) or even (Neumann) symmetry,
 //! applying a standard FFT of length `2n`, then retaining only the
-//! `N_dof` independent Fourier coefficients; see [`crate::hofft::Extension`]
+//! `N_dof` independent Fourier coefficients; see [`crate::fft::hofft::Extension`]
 //! and Caforio & Imperiale (2019), SIAM JSC 41(5):
 //!
 //! | BC          | Extension | `n_fft` | `N_dof` |
@@ -52,7 +52,7 @@
 //! A `Periodic` direction may instead be discretised by `N = n·r`
 //! equidistant points read as a trigonometric polynomial
 //! ([`NodeLayout::Equidistant`], the grid of
-//! [`lobatto_grid::Grid1D::trigonometric`]), chosen per direction in
+//! [`crate::Grid1D::trigonometric`]), chosen per direction in
 //! [`Poisson::with_layout`] / [`PoissonND::with_layouts`]; [`Poisson::new`] /
 //! [`PoissonND::new`] keep the Gauss-Lobatto elements everywhere. Such a
 //! direction has the uniform mass `L/N`, a plain DFT of length `N` as its
@@ -66,9 +66,9 @@
 //! [`PoissonND::shift_in_place_dir`] translate the trigonometric interpolant
 //! exactly, by a constant per fibre.
 
-use crate::hofft::{Engine, EngineND, Extension};
-pub use crate::hofft::NodeLayout;
-use lobatto_grid::grid::{nd_fiber_base, nd_multi_index, nd_multi_indices};
+use crate::fft::hofft::{Engine, EngineND, Extension};
+pub use crate::fft::hofft::NodeLayout;
+use crate::grid::{nd_fiber_base, nd_multi_index, nd_multi_indices};
 use lobatto::collocation::{CollocationBasis, Gauss};
 use nalgebra::*;
 use rayon::prelude::*;
@@ -79,7 +79,7 @@ use std::f64::consts::PI;
 ///
 /// Controls how the physical domain `[x_l, x_l + L]` is extended before the FFT
 /// and determines the number of physical DOFs `N_dof`
-/// (see [`crate::hofft::Extension`]).
+/// (see [`crate::fft::hofft::Extension`]).
 /// Each direction may carry an independent BC, enabling mixed configurations in ND.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BoundaryCondition {
@@ -409,12 +409,12 @@ impl Poisson {
     ///
     /// Arguments as in [`new`](Self::new). With `GaussLobatto` this is
     /// [`new`](Self::new). With `Equidistant` the grid is the `n·r`
-    /// equidistant points of [`lobatto_grid::Grid1D::trigonometric`] on
+    /// equidistant points of [`crate::Grid1D::trigonometric`] on
     /// `[x_l, x_l + L)`, with the trigonometric interpolant, and the
     /// eigenvalues are the Fourier symbol of the module documentation.
     ///
     /// ```
-    /// # use lobatto_fft::solver::*;
+    /// # use lobatto_grid::fft::solver::*;
     /// # use rustfft::num_complex::Complex;
     /// use std::f64::consts::PI;
     /// // 16 equidistant points on [0, 1): sin(2πx) is an eigenvector.
@@ -557,11 +557,11 @@ impl Poisson {
         self.planner.get_x()
     }
 
-    /// The [`lobatto_grid::Grid1D`] the solver is built on.
+    /// The [`crate::Grid1D`] the solver is built on.
     ///
-    /// Interpolation of the solution (e.g. [`lobatto_grid::Grid1D::eval`],
-    /// [`lobatto_grid::Grid1D::convect`]) is provided by the grid directly.
-    pub fn grid(&self) -> &lobatto_grid::Grid1D {
+    /// Interpolation of the solution (e.g. [`crate::Grid1D::eval`],
+    /// [`crate::Grid1D::convect`]) is provided by the grid directly.
+    pub fn grid(&self) -> &crate::Grid1D {
         self.planner.grid()
     }
 
@@ -687,7 +687,7 @@ impl Poisson {
     /// $$e^{-i k c}, \qquad k = \frac{2\pi m}{L},$$
     /// and the Nyquist mode of an even `N` by the real part `cos(πNc/L)`
     /// (the interpolant carries it as a cosine), so real data stay real and
-    /// the result equals [`lobatto_grid::GridND::convect`] with the flow map
+    /// the result equals [`crate::GridND::convect`] with the flow map
     /// `x ↦ x − c`. `c` is in units of `x` and may be any real number (the
     /// shift is `L`-periodic). Costs two DFTs of length `N`.
     ///
@@ -867,7 +867,7 @@ impl<const N: usize> PoissonND<N> {
     /// reports the true nodes of each direction.
     ///
     /// ```
-    /// # use lobatto_fft::solver::*;
+    /// # use lobatto_grid::fft::solver::*;
     /// # use rustfft::num_complex::Complex;
     /// // Trigonometric in x (32 points), Gauss-Lobatto Dirichlet in y.
     /// let s = PoissonND::<2>::with_layouts([1.0; 2], [0.0; 2], [32, 4], [1, 4],
@@ -948,12 +948,12 @@ impl<const N: usize> PoissonND<N> {
         self.fft.get_x()
     }
 
-    /// The [`lobatto_grid::GridND`] the solver is built on.
+    /// The [`crate::GridND`] the solver is built on.
     ///
-    /// Interpolation of the solution (e.g. [`lobatto_grid::GridND::eval`],
-    /// [`lobatto_grid::GridND::convect`], the [`lobatto_grid::EvalPlan`] API)
+    /// Interpolation of the solution (e.g. [`crate::GridND::eval`],
+    /// [`crate::GridND::convect`], the [`crate::EvalPlan`] API)
     /// is provided by the grid directly.
-    pub fn grid(&self) -> &lobatto_grid::GridND<N> {
+    pub fn grid(&self) -> &crate::GridND<N> {
         self.fft.grid()
     }
 
@@ -988,7 +988,7 @@ impl<const N: usize> PoissonND<N> {
     /// `g` must be `Sync`: it is called from the Rayon mode loop.
     ///
     /// ```
-    /// # use lobatto_fft::solver::*;
+    /// # use lobatto_grid::fft::solver::*;
     /// # use rustfft::num_complex::Complex;
     /// let solver = PoissonND::<2>::new([1.0; 2], [0.0; 2], [4; 2], [3; 2],
     ///     [BoundaryCondition::Periodic; 2]);
@@ -1022,7 +1022,7 @@ impl<const N: usize> PoissonND<N> {
     /// the even split `α/N`).
     ///
     /// ```
-    /// # use lobatto_fft::solver::*;
+    /// # use lobatto_grid::fft::solver::*;
     /// # use rustfft::num_complex::Complex;
     /// let solver = PoissonND::<2>::new([1.0; 2], [0.0; 2], [4; 2], [3; 2],
     ///     [BoundaryCondition::Periodic; 2]);
@@ -1221,9 +1221,9 @@ impl<const N: usize> PoissonND<N> {
     /// `u(x) ← u(x − c)`.
     ///
     /// `c` has one shift per fibre, `total / ndofs[d]` entries, in the fibre
-    /// order of [`lobatto_grid::grid::nd_fiber_base`] (the index combinations
+    /// order of [`crate::grid::nd_fiber_base`] (the index combinations
     /// of the other directions, column-major, `d` skipped). The result equals
-    /// [`lobatto_grid::GridND::convect`] with the flow map `x_d ↦ x_d − c`
+    /// [`crate::GridND::convect`] with the flow map `x_d ↦ x_d − c`
     /// (Nyquist mode by its real part, see [`Poisson::shift_in_place`]), the
     /// exact translation at a speed constant along each fibre. Costs two DFTs
     /// per fibre.

@@ -91,7 +91,7 @@ cargo run --release --example gaussian_coupling
 
 ## Related crates
 
-Part of the [QuadratiX](https://github.com/OndoMathX/QuadratiX) workspace:
+Part of the [Lobatto](https://github.com/Ananke-Inria/Lobatto) workspace:
 
 - [`lobatto`](https://crates.io/crates/lobatto): Gauss–Lobatto points, quadrature and Lagrange bases;
 - [`lobatto-grid`](https://crates.io/crates/lobatto-grid): the grids, interpolation and mass weights used here;

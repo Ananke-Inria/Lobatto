@@ -12,7 +12,7 @@
 //! modes.  After the transform each mode `k` is independent and corresponds to
 //! an `r × r` linear system — the **local symbol** $S(k)$.  The full ND
 //! solve applies this direction by direction via sum factorisation; see
-//! [`crate::solver`].
+//! [`crate::fft::solver`].
 //!
 //! ## Key types
 //!
@@ -20,11 +20,11 @@
 //! |------|-------------|
 //! | [`Engine`] | 1D HoFFT engine: forward/inverse transform, DOF layout. |
 //! | [`EngineND`] | ND HoFFT engine: applies [`Engine`] direction by direction. |
-//! | [`Extension`] | Boundary extension (re-exported from [`lobatto_grid`]); selects the FFT extension strategy. |
+//! | [`Extension`] | Boundary extension (re-exported from [`crate`]); selects the FFT extension strategy. |
 //!
-//! Each engine holds the [`lobatto_grid`] grid it is built on, exposed via
+//! Each engine holds the [`crate`] grid it is built on, exposed via
 //! [`Engine::grid`] / [`EngineND::grid`]; interpolation and convection of DOF
-//! vectors are provided by [`lobatto_grid::Grid1D`] / [`lobatto_grid::GridND`]
+//! vectors are provided by [`crate::Grid1D`] / [`crate::GridND`]
 //! directly.
 //!
 //! ## Reference
@@ -62,14 +62,14 @@
 //! independent coefficients by discarding modes determined by the spectral symmetry.
 
 use lobatto::collocation::{CollocationBasis, Gauss};
-use lobatto_grid::grid::{nd_col_major_strides, nd_fiber_base, nd_multi_index, nd_multi_indices};
-use lobatto_grid::{Grid1D, GridND};
+use crate::grid::{nd_col_major_strides, nd_fiber_base, nd_multi_index, nd_multi_indices};
+use crate::{Grid1D, GridND};
 use rayon::prelude::*;
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use std::f64::consts::PI;
 use std::sync::Arc;
 
-/// Boundary extension (re-exported from [`lobatto_grid`]).
+/// Boundary extension (re-exported from [`crate`]).
 ///
 /// Selects the FFT extension strategy of an [`Engine`]: non-periodic boundary
 /// conditions are handled by extending the `n`-element physical domain to a
@@ -82,12 +82,12 @@ use std::sync::Arc;
 /// | `Periodic` | Periodic    | `n`              | `n·r`            |
 /// | `Odd`      | Dirichlet   | `2n`             | `n·r - 1`        |
 /// | `Even`     | Neumann     | `2n`             | `n·r + 1`        |
-pub use lobatto_grid::Extension;
+pub use crate::Extension;
 
-/// Node layout of one direction (re-exported from [`lobatto_grid`]):
+/// Node layout of one direction (re-exported from [`crate`]):
 /// Gauss-Lobatto elements, or equidistant points read as a trigonometric
 /// polynomial ([`Engine::trigonometric`], [`EngineND::with_layouts`]).
-pub use lobatto_grid::NodeLayout;
+pub use crate::NodeLayout;
 
 // ── 1D ──────────────────────────────────────────────────────────────────────
 
@@ -97,7 +97,7 @@ pub use lobatto_grid::NodeLayout;
 /// layout $[r \text{ rows} \times n \text{ columns}]$, where entry `g[j * n + k]`
 /// corresponds to local node `j` of element `k`.
 ///
-/// This is used internally by [`crate::solver::Poisson`] for the periodic case and
+/// This is used internally by [`crate::fft::solver::Poisson`] for the periodic case and
 /// can be reused for advection or other operations that require direct access to
 /// the per-mode data without the extension/packing overhead of [`Engine`].
 pub struct RawEngine {
@@ -542,7 +542,7 @@ impl Engine {
     }
 
     /// Gauss-Lobatto nodes in x-increasing order on `[xl, xl+l]`, matching
-    /// [`crate::solver::Poisson::get_x`].
+    /// [`crate::fft::solver::Poisson::get_x`].
     ///
     /// - `Periodic`: `n * r` nodes — left endpoint included, right excluded.
     /// - `Odd`:      `n * r − 1` nodes — both boundary endpoints excluded.
@@ -923,7 +923,7 @@ impl<const N: usize> EngineND<N> {
     ///
     /// Interpolation and convection of DOF vectors ([`GridND::eval`],
     /// [`GridND::eval_extended`], [`GridND::convect`], the
-    /// [`lobatto_grid::EvalPlan`] API, …) are provided by the grid directly.
+    /// [`crate::EvalPlan`] API, …) are provided by the grid directly.
     pub fn grid(&self) -> &GridND<N> {
         &self.grid
     }

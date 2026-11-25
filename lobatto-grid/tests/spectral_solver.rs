@@ -1,4 +1,5 @@
-use lobatto_spectral::solver::*;
+#![cfg(feature = "spectral")]
+use lobatto_grid::spectral::solver::*;
 use std::f64::consts::PI;
 
 /// A 1D test case: (label, exact solution u, rhs f, starting order, maximal
@@ -619,8 +620,9 @@ fn h_convergence_2d() {
 /// same discrete solution, in 1D for every boundary condition and in 2D with
 /// mixed conditions. Pins the assembly, the DOF layout and the sign conventions.
 #[test]
+#[cfg(feature = "fft")]
 fn agrees_with_lobatto_fft() {
-    use lobatto_fft::solver as fft;
+    use lobatto_grid::fft::solver as fft;
 
     let to_fft = |bc: BoundaryCondition| match bc {
         BoundaryCondition::Periodic => fft::BoundaryCondition::Periodic,

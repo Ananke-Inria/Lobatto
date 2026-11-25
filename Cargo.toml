@@ -1,8 +1,8 @@
 [workspace]
-members = ["lobatto", "lobatto-grid", "lobatto-fft", "lobatto-spectral", "lobatto-lowrank"]
+members = ["lobatto", "lobatto-grid", "lobatto-lowrank"]
 resolver = "3"
 
-# Temporary, until lobatto-grid 0.1.8 is published: downstream crates build
+# Temporary, until lobatto-grid 0.1.9 is published: lobatto-lowrank builds
 # against this checkout. Remove after `cargo publish -p lobatto-grid`.
 [patch.crates-io]
 lobatto-grid = { path = "lobatto-grid" }

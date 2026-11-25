@@ -1,9 +1,10 @@
+#![cfg(feature = "fft")]
 //! Tests for equidistant trigonometric directions (`NodeLayout::Equidistant`):
 //! the DFT engine, manufactured Fourier solutions, mixed ND solves against
 //! Gauss–Lobatto reference solves, and the per-direction Fourier multiplier.
 
-use lobatto_fft::hofft::{Engine, EngineND};
-use lobatto_fft::solver::{BoundaryCondition, NodeLayout, Poisson, PoissonND};
+use lobatto_grid::fft::hofft::{Engine, EngineND};
+use lobatto_grid::fft::solver::{BoundaryCondition, NodeLayout, Poisson, PoissonND};
 use lobatto_grid::grid::nd_fiber_base;
 use lobatto_grid::{Extension, Grid1D};
 use rustfft::num_complex::Complex;

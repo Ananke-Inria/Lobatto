@@ -1,5 +1,3 @@
-//! # lobatto-fft
-//!
 //! High-order FFT (**HoFFT**) on Gauss–Lobatto grids and corresponding high-order solver for Poisson problems.
 //!
 //! The solver solves $(\alpha I - \beta \Delta)~u = f$ for complex-valued right-hand side on a tensor-product domain
@@ -29,13 +27,16 @@
 //! `(2πm/L)²`, Nyquist included, mixed freely with Gauss–Lobatto directions.
 //!
 //! Grid geometry and interpolation (point evaluation, convection, precomputed
-//! evaluation plans) live in the [`lobatto_grid`] crate; engines and solvers
-//! expose the grid they are built on via their `grid()` accessors.
+//! evaluation plans) live in [`crate::grid`] and [`crate::interp`]; engines and
+//! solvers expose the grid they are built on via their `grid()` accessors.
+//!
+//! This module is compiled with the `fft` feature (on by default). Until
+//! lobatto-grid 0.1.9 it was the separate crate `lobatto-fft`.
 //!
 //! ## Quick start
 //!
 //! ```rust
-//! use lobatto_fft::solver::*;
+//! use lobatto_grid::fft::solver::*;
 //! use rustfft::num_complex::Complex;
 //! use std::f64::consts::PI;
 //!
@@ -68,7 +69,7 @@
 //! `(-ω² + iωc) M + K` — by passing `Complex<f64>` values:
 //!
 //! ```rust
-//! # use lobatto_fft::solver::*;
+//! # use lobatto_grid::fft::solver::*;
 //! # use rustfft::num_complex::Complex;
 //! let solver = PoissonND::<2>::new([1.0; 2], [0.0; 2], [8; 2], [4; 2],
 //!     [BoundaryCondition::Dirichlet; 2]);
@@ -95,7 +96,7 @@
 //! discrete maximum principle — and the exact semigroup $\exp(-tL)$.
 //!
 //! ```rust
-//! # use lobatto_fft::solver::*;
+//! # use lobatto_grid::fft::solver::*;
 //! # use rustfft::num_complex::Complex;
 //! # let solver_nd = PoissonND::<2>::new([1.0; 2], [0.0; 2], [4; 2], [3; 2],
 //! #     [BoundaryCondition::Periodic; 2]);

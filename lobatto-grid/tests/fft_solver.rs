@@ -1,4 +1,5 @@
-use lobatto_fft::solver::*;
+#![cfg(feature = "fft")]
+use lobatto_grid::fft::solver::*;
 use nalgebra::Complex;
 use std::cell::RefCell;
 use std::f64::consts::PI;

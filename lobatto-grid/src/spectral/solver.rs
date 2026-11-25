@@ -2,9 +2,9 @@
 //!
 //! Provides [`Poisson`] and [`PoissonND`], which solve
 //! $(\alpha M + \beta K)\, u = f$ on Gauss-Lobatto grids of `n` spectral
-//! elements of order `r` per direction ([`lobatto_grid::Grid1D`],
-//! [`lobatto_grid::GridND`]). The discretisation, the DOF layout and the
-//! public interface are those of the `lobatto-fft` solvers, restricted to
+//! elements of order `r` per direction ([`crate::Grid1D`],
+//! [`crate::GridND`]). The discretisation, the DOF layout and the
+//! public interface are those of the `fft` solvers, restricted to
 //! real data and real coefficients.
 //!
 //! The coefficients $\alpha$ and $\beta$ are **per-call parameters** of the
@@ -33,7 +33,7 @@
 //!
 //! Setup costs `O(Σ_d (n_d r_d)³)`, one solve `O(Σ_d n_d r_d · N_dof)`.
 //! This is the right tool for small problems; for larger ones,
-//! `lobatto-fft` diagonalises the same operator through the FFT at
+//! `fft` diagonalises the same operator through the FFT at
 //! `O(log n)` per DOF per direction.
 //!
 //! ## Boundary conditions and data layout
@@ -45,12 +45,12 @@
 //! | `Neumann`   | even      | `n·r + 1`             |
 //!
 //! The DOF vector is in `x`-increasing order (direction 0 fastest in ND),
-//! exactly the layout of [`lobatto_grid::Grid1D::get_x`] and
-//! [`lobatto_grid::GridND::get_x`].
+//! exactly the layout of [`crate::Grid1D::get_x`] and
+//! [`crate::GridND::get_x`].
 
 use lobatto::collocation::{CollocationBasis, Gauss};
-use lobatto_grid::grid::{nd_fiber_base, nd_multi_index};
-use lobatto_grid::{Extension, Grid1D, GridND};
+use crate::grid::{nd_fiber_base, nd_multi_index};
+use crate::{Extension, Grid1D, GridND};
 use nalgebra::{DMatrix, DVector, SymmetricEigen};
 use rayon::prelude::*;
 
@@ -204,10 +204,10 @@ impl Poisson {
         self.grid.get_x()
     }
 
-    /// The [`lobatto_grid::Grid1D`] the solver is built on.
+    /// The [`crate::Grid1D`] the solver is built on.
     ///
-    /// Interpolation of the solution (e.g. [`lobatto_grid::Grid1D::eval`],
-    /// [`lobatto_grid::Grid1D::convect`]) is provided by the grid directly.
+    /// Interpolation of the solution (e.g. [`crate::Grid1D::eval`],
+    /// [`crate::Grid1D::convect`]) is provided by the grid directly.
     pub fn grid(&self) -> &Grid1D {
         &self.grid
     }
@@ -396,10 +396,10 @@ impl<const N: usize> PoissonND<N> {
         self.grid.get_x()
     }
 
-    /// The [`lobatto_grid::GridND`] the solver is built on.
+    /// The [`crate::GridND`] the solver is built on.
     ///
-    /// Interpolation of the solution (e.g. [`lobatto_grid::GridND::eval`],
-    /// [`lobatto_grid::GridND::convect`], the [`lobatto_grid::EvalPlan`] API)
+    /// Interpolation of the solution (e.g. [`crate::GridND::eval`],
+    /// [`crate::GridND::convect`], the [`crate::EvalPlan`] API)
     /// is provided by the grid directly.
     pub fn grid(&self) -> &GridND<N> {
         &self.grid
@@ -429,7 +429,7 @@ impl<const N: usize> PoissonND<N> {
     /// `g` must be `Sync`: it is called from the Rayon mode loop.
     ///
     /// ```
-    /// # use lobatto_spectral::solver::*;
+    /// # use lobatto_grid::spectral::solver::*;
     /// let solver = PoissonND::<2>::new([1.0; 2], [0.0; 2], [4; 2], [3; 2],
     ///     [BoundaryCondition::Periodic; 2]);
     /// let mut u = vec![1.0; solver.get_x().len()];
@@ -461,7 +461,7 @@ impl<const N: usize> PoissonND<N> {
     /// the even split `α/N`).
     ///
     /// ```
-    /// # use lobatto_spectral::solver::*;
+    /// # use lobatto_grid::spectral::solver::*;
     /// let solver = PoissonND::<2>::new([1.0; 2], [0.0; 2], [4; 2], [3; 2],
     ///     [BoundaryCondition::Periodic; 2]);
     /// let mut u = vec![1.0; solver.get_x().len()];

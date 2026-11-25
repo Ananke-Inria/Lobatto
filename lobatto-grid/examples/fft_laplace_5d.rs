@@ -11,8 +11,8 @@
 //! Run with:
 //!   cargo run --example laplace_5d --release
 
-use lobatto_fft::solver::BoundaryCondition;
-use lobatto_fft::solver::PoissonND;
+use lobatto_grid::fft::solver::BoundaryCondition;
+use lobatto_grid::fft::solver::PoissonND;
 use rayon::prelude::*;
 use std::f64::consts::PI;
 use std::time::Instant;

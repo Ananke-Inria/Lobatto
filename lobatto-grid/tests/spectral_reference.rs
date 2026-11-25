@@ -1,15 +1,16 @@
+#![cfg(feature = "spectral")]
 //! Regression against a stored solution: the allocation-free hot paths
 //! (TODO item 5) must reproduce the pre-optimisation output bit for bit.
 //!
-//! `tests/data/reference_3d.txt` was written by `write_reference` (ignored)
+//! `tests/data/spectral_reference_3d.txt` was written by `write_reference` (ignored)
 //! before the optimisation; rerun it with
 //! `cargo test --release --test reference -- --ignored` only when the
 //! numerics change on purpose. Format: one value per line, `{:e}`, which
 //! round-trips `f64` exactly.
 
-use lobatto_spectral::solver::{BoundaryCondition, PoissonND};
+use lobatto_grid::spectral::solver::{BoundaryCondition, PoissonND};
 
-const FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/reference_3d.txt");
+const FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/spectral_reference_3d.txt");
 
 /// Mixed 3D problem, several elements per direction; the result of
 /// `solve_in_place` followed by `exp_in_place`, which exercises every sweep

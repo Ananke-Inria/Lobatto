@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use lobatto_fft::solver::*;
+use lobatto_grid::fft::solver::*;
 use rustfft::num_complex::Complex;
 use std::f64::consts::PI;
 use std::hint::black_box;

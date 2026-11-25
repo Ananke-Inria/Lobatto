@@ -10,7 +10,7 @@
 //! Run with:
 //!   cargo run --example laplace_5d --release
 
-use lobatto_spectral::solver::{BoundaryCondition, PoissonND};
+use lobatto_grid::spectral::solver::{BoundaryCondition, PoissonND};
 use rayon::prelude::*;
 use std::f64::consts::PI;
 use std::time::Instant;

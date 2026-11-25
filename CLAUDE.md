@@ -1,4 +1,6 @@
-# QuadratiX workspace
+# Lobatto workspace
+
+Repository `Ananke-Inria/Lobatto` (formerly `OndoMathX/QuadratiX`, renamed 2026-11-25). The OndoMathX crates (mesh, SEM, TetriX, toolbox) depend on these, never the reverse.
 
 Rust workspace for Gauss–Lobatto spectral-element numerics.
 
@@ -6,15 +8,15 @@ Rust workspace for Gauss–Lobatto spectral-element numerics.
 |---|---|
 | `lobatto` | Gauss–Lobatto points, quadrature, barycentric/Lagrange basis utilities |
 | `lobatto-grid` | Grid geometry (`Grid1D`/`GridND<N>` on arbitrary domains, `Extension` folding, DOF indexing; `NodeLayout`: Gauss–Lobatto elements or, for periodic directions, `Grid1D::trigonometric` equidistant points with the trigonometric interpolant (one element of `n` cardinal functions, so the ND machinery is shared); the shared ND indexing helpers `nd_col_major_strides`/`nd_fiber_base`/`nd_multi_indices`/`nd_multi_index` live here) and interpolation (`eval`/`eval_extended`/`convect`, `EvalPlan`, `Scalar`) |
-| `lobatto-fft` | HoFFT transforms (`hofft::Engine`/`EngineND`), screened Poisson solvers (`solver::Poisson`/`PoissonND`), equidistant trigonometric directions via `with_layout(s)` (DFT + exact Fourier symbol, as order-1 HoFFT; exact per-fibre translation `shift_in_place(_dir)`); engines/solvers expose their grid via `grid()` |
-| `lobatto-spectral` | Screened Poisson solvers by dense fast diagonalisation (same interface as `lobatto-fft::solver`, real only, small `n·r`); solvers expose their grid via `grid()` |
+| `lobatto-grid::fft` (feature `fft`; was the crate `lobatto-fft` until lobatto-grid 0.1.9) | HoFFT transforms (`hofft::Engine`/`EngineND`), screened Poisson solvers (`solver::Poisson`/`PoissonND`), equidistant trigonometric directions via `with_layout(s)` (DFT + exact Fourier symbol, as order-1 HoFFT; exact per-fibre translation `shift_in_place(_dir)`); engines/solvers expose their grid via `grid()` |
+| `lobatto-grid::spectral` (feature `spectral`; was the crate `lobatto-spectral`) | Screened Poisson solvers by dense fast diagonalisation (same interface as `fft::solver`, real only, small `n·r`); solvers expose their grid via `grid()` |
 | `lobatto-lowrank` | Low-rank sums of products `Σ a_k ρ_k ⊗ μ_k` of fields on two grids (`LowRankSum<P, Q>`), weighted L² algebra (Gram, norm, inner product, marginals, factor maps) and QR → SVD compression (`Truncation`), point evaluation via `lobatto-grid` plans; public building blocks `Leaf<P>` (one side: functions on a grid) and `linalg` (TSQR, thin SVD, row scaling on faer) |
 
 Conventions:
 - Crates are published to crates.io individually with **version-only dependencies** between them (no path deps): publish the upstream crate first, then bump the requirement downstream.
-- Temporary: the root `Cargo.toml` has `[patch.crates-io] lobatto-grid = { path = "lobatto-grid" }` so lobatto-fft 0.5.5 builds against the unpublished lobatto-grid 0.1.8; remove it once 0.1.8 is on crates.io.
+- Temporary: the root `Cargo.toml` has `[patch.crates-io] lobatto-grid = { path = "lobatto-grid" }` so lobatto-lowrank builds against the unpublished lobatto-grid 0.1.9; remove it once 0.1.9 is on crates.io.
 - Zero clippy warnings (`cargo clippy --benches --tests`); tests in release mode (`cargo test --release`).
-- Benches: `cargo bench --bench interp` in lobatto-grid (interpolation/convection), `cargo bench --bench solver` in lobatto-fft (solves). Criterion group names are stable identifiers — renaming them discards baseline history.
+- Benches (all in lobatto-grid): `cargo bench --bench interp` (interpolation/convection), `--bench fft_solver` and `--bench spectral_solver` (solves; the files were `solver.rs` in the two former crates, group names unchanged). Criterion group names are stable identifiers — renaming them discards baseline history. The saved baselines of the former `lobatto-fft/target/criterion` were deleted during the merge (2026-11-25).
 
 Doc-comment math (KaTeX renders on docs.rs via each crate's `katex.html`; hover/GitHub show raw source):
 - LaTeX (`$…$`/`$$…$$`) only for real formulas (eigendecompositions, quadrature weights, operators). Trivia — intervals, identifiers, index arithmetic, `O(…)` — goes in code spans: `` `[0, 1]` ``, `` `n·r` ``, `` `N_dof` ``, `` `0..=r` ``.
@@ -22,6 +24,14 @@ Doc-comment math (KaTeX renders on docs.rs via each crate's `katex.html`; hover/
 - Inside `$$` blocks, never start a continuation line with `+`, `-`, `*`, or `1.` (markdown parses it as a list → `clippy::doc_lazy_continuation`).
 - Preview locally with `RUSTDOCFLAGS="--html-in-header $(pwd)/katex.html" cargo doc --no-deps` from the workspace root (plain `cargo doc` shows raw LaTeX — the docs.rs header flag is not applied locally).
 - The `katex.html` copies (workspace root, `doc/`, one per crate for packaging) must stay identical — a KaTeX version bump touches all of them.
+
+### Merge of lobatto-fft and lobatto-spectral into lobatto-grid — done (2026-11-25, unpublished: lobatto-grid 0.1.9)
+
+- Modules `lobatto_grid::fft` and `lobatto_grid::spectral` behind the features `fft` (`dep:rustfft`, `dep:nalgebra`) and `spectral` (`dep:nalgebra`), both in `default`; with `default-features = false` only grid + interpolation compile. The grid API is unchanged, hence 0.1.9.
+- Files moved with `git mv` (history kept): sources to `src/fft/`, `src/spectral/`; tests, benches, examples and `tests/data` prefixed `fft_` / `spectral_`; test files gated with `#![cfg(feature = …)]`, benches and examples with `required-features`; the spectral test `agrees_with_lobatto_fft` needs both features.
+- Inside the modules `lobatto_grid::` became `crate::`; in tests, benches, examples and doctests `lobatto_fft::` / `lobatto_spectral::` became `lobatto_grid::fft::` / `lobatto_grid::spectral::`. No formatting change (this workspace is not rustfmt-formatted).
+- The crates `lobatto-fft` and `lobatto-spectral` were deleted from crates.io (2026-11-25).
+- Checks: 305 tests (all features), 107 (`fft` only), 73 (`spectral` only), clippy and `cargo doc -D warnings` clean.
 
 ## TODO
 

@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use lobatto_spectral::solver::*;
+use lobatto_grid::spectral::solver::*;
 use std::f64::consts::PI;
 use std::hint::black_box;
 

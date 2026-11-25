@@ -88,12 +88,28 @@
 //! grid.eval(&pts, &u, &mut vals);
 //! ```
 //!
-//! This crate underpins the HoFFT transforms and screened Poisson solvers of
-//! the `lobatto-fft` crate, which hold a grid internally and expose it via
-//! `grid()` accessors.
+//! ## Solvers (features)
+//!
+//! Two optional modules solve screened Poisson problems on these grids; both
+//! hold a grid internally and expose it via `grid()` accessors.
+//!
+//! | Module | Feature | Method | Sweet spot |
+//! |--------|---------|--------|------------|
+//! | `fft` | `fft` | High-order FFT (HoFFT): FFT across elements, `r × r` symbols per mode | larger problems |
+//! | `spectral` | `spectral` | dense fast diagonalisation per direction | small problems |
+//!
+//! Both features are on by default. With `default-features = false` only the
+//! grid and interpolation are compiled (no `rustfft`, no `nalgebra`). Until
+//! version 0.1.9 the two modules were the separate crates `lobatto-fft` and
+//! `lobatto-spectral`.
 
 pub mod grid;
 pub mod interp;
+
+#[cfg(feature = "fft")]
+pub mod fft;
+#[cfg(feature = "spectral")]
+pub mod spectral;
 
 pub use grid::{Extension, Grid1D, GridND, NodeLayout};
 pub use interp::{EvalPlan, Scalar};
